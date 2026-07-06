@@ -1,1012 +1,198 @@
 ---
 title: Google Workspace
-description: Browse, read, create, and modify Drive files, Docs, and Sheets, gated by Drive labels.
+description: Draft and edit Docs, read and build Sheets, and organize Drive — with label-based access controls and approval-gated writes.
 ---
 
-Browse, read, create, and modify Drive files, Docs, and Sheets, gated by Drive labels. This page covers how Valet decides what it can touch in Drive, Docs, and Sheets, how ownership works, a few behaviors that catch people off guard, and the full action reference.
+Google Workspace is where a lot of real work lives, and this integration gives Valet hands there: it can draft and revise Google Docs, read and build spreadsheets, and find, copy, and organize Drive files. Read this page to learn what Valet can do in each app, how access is controlled, and the habits that get you good results.
 
-## Connection summary
+Typical asks look like:
 
-| Field | Value |
-| --- | --- |
-| Service slug | `google_workspace` |
-| Display name | Google Workspace |
-| Auth type | `oauth2` |
-| Supported entities | `files`, `folders`, `permissions`, `documents`, `spreadsheets` |
+- "Turn my meeting notes doc into a client-ready proposal."
+- "Append this week's numbers to the tracking sheet and update the chart."
+- "Find last quarter's planning docs and summarize the open decisions."
+- "Create the onboarding checklist from our template, filled in for the new hire."
+
+## What Valet can do
+
+**Docs.** Valet reads documents as text, markdown, or a structured form with character indices, so it can make surgical edits — insert or replace a specific passage — as well as append whole formatted sections written in markdown. It handles structure (tables, images, page and section breaks, tabs), formatting (character and paragraph styles, page orientation), and the full comment lifecycle: list, add, reply, resolve, delete.
+
+**Sheets.** Valet reads and writes ranges, appends rows, and batches writes across ranges. Beyond data, it does real spreadsheet construction: cell and border formatting, conditional formatting, frozen headers, column sizing, dropdown validation, protected ranges, named tables, and charts. "Build me a tracker with a summary tab and a chart" is one ask, not ten.
+
+**Drive.** Valet lists, searches, and downloads files; creates documents and folders; copies, moves, and renames; and creates documents from a template with placeholder substitution — the workhorse for "generate one of these per customer" workflows.
 
 ## Setup
 
-OAuth 2.0 — the user connects this integration through Valet's connection screen, which redirects to the provider's OAuth consent flow and stores the resulting access token in the per-user credential store.
+Valet uses standard Google OAuth. You connect your own Google account from Valet's connection screen, and Valet acts as that account when it makes API calls — it does not impersonate other users or share one account across the team. See [OAuth setup](/oauth-setup) for the environment variables and connection flow.
 
-See [OAuth setup](/oauth-setup) for environment variables and connection flow.
-
-Valet uses standard Google OAuth. Each user connects their own Google account, and Valet acts as that user when it makes API calls. Valet does not impersonate other users or share a single account across the team. This means:
+Three consequences worth internalizing:
 
 - Valet only sees what your own Google account can see.
 - Permissions are governed by Google's normal sharing model.
 - Revoking access at `myaccount.google.com` revokes it for Valet immediately.
 
-## Access to Drive, Docs, and Sheets
+| Field | Value |
+| --- | --- |
+| Service slug | `google_workspace` |
+| Auth type | `oauth2` |
+| Action namespaces | `docs.`, `drive.`, `sheets.` |
 
-For Drive, Docs, and Sheets, Valet uses a **labels-based access guard** when your admin has enabled it. The guard works on top of normal Google sharing:
+## What Valet can reach
 
-1. Your admin defines one or more Google Drive labels that mark files as available to Valet.
-2. When Valet tries to read, list, modify, or copy a file, it first checks whether the file has one of those labels.
-3. Files without a required label behave as if they do not exist — Valet cannot list them, search for them, or open them.
-4. When Valet creates a new file, the same label is applied automatically so subsequent access works.
+Your account's permissions are the outer boundary. Inside that boundary, your admin can enable a **labels-based access guard** that narrows what Valet may touch:
 
-If the guard is not enabled, Valet falls back to standard Google permissions: anything your account can see, Valet can see.
+1. The admin defines one or more Google Drive labels that mark files as available to Valet.
+2. Before Valet reads, lists, modifies, or copies a file, it checks for one of those labels.
+3. Files without a required label behave as if they do not exist — Valet cannot list, search, or open them.
+4. Files Valet creates get the label automatically, so follow-up access works.
 
-In either case, link sharing matters. If you share a file with Valet's user (your account) through normal Drive sharing, that file becomes reachable through the OAuth token. Combined with the labels guard, the rule of thumb is: a file is touchable when your account can see it **and** (if the guard is on) it has the required label.
+If the guard is not enabled, Valet falls back to standard Google permissions: anything your account can see, Valet can see. Either way the rule of thumb is: a file is touchable when your account can see it **and** (if the guard is on) it has the required label.
 
-Search and listing follow the same access rules. When Valet searches Drive or lists files, it only sees files your account can see, and (if the labels guard is on) only files with the required label. A doc you expect to be there may not appear in a list because it is not labeled, even though Valet could open it directly if you pasted its URL.
+<Note>
+  Search and listing follow the same rules. A doc you expect in the results may be missing because it isn't labeled — even though Valet could open it directly if you pasted its URL and it carried the label. If Valet says it can't find a file you know exists, check the label before anything else.
+</Note>
 
-## Files Valet creates vs. files you own
-
-Some operations create a new file (a new doc, a new sheet, a copy of an existing file). Some operations modify a file you already own. The distinction matters:
-
-| Operation | Who owns the result | What happens to the original |
-| --- | --- | --- |
-| Create new doc/sheet | Valet's account (your connected Google account) | No original — this is a fresh file. |
-| Copy a file | The user the copy is made for | Original is untouched. |
-| Edit, append, or replace content in your file | You (unchanged) | Original is modified in place. |
-| Apply formatting, rename, or restructure | You (unchanged) | Original is modified in place. |
-
-When Valet creates a file, it lives in the Drive of the account Valet is connected to. If you want it in a specific shared drive or folder, tell Valet where to put it, or move it after the fact.
-
-## How to point Valet at a specific file
+## Getting good results
 
 <Tip>
-The single most reliable way to get good results is to paste the Google Docs, Sheets, or Drive URL directly into the task. Valet treats that as the target and works from there.
+  The single most reliable way to point Valet at a file is to paste its Docs, Sheets, or Drive URL into the task. Valet pulls the file ID from the URL and works from there — no ambiguous searches, no listing surprises.
 </Tip>
 
-- **Docs and Sheets** — paste the full URL from your browser.
-- **Drive files and folders** — paste the URL from the Drive UI.
-- **Multiple files** — paste each URL, or describe them by name in the same folder.
+A few behaviors catch people off guard. Knowing them up front is most of the battle:
 
-Valet pulls the file ID from the URL and works from there. This avoids ambiguous searches and bypasses the cases where listing would not surface the file.
+**"Copy and reformat" can become a rewrite.** When you ask Valet to produce a reformatted version of a doc, the most reliable path is often generating a new document with the desired structure — less like Google's "Make a copy," more like a regenerated document. If preserving the original's revision history, comments, or sharing matters, say so: "make a Drive copy first, then edit the copy."
 
-## Common surprises
+**Formatting fidelity is not perfect.** Valet reads and writes a lot of rich formatting, but exotic layouts, embedded charts, and complex tables may not round-trip exactly. For high-stakes documents, have Valet do the content work and do the final polish yourself.
 
-These are behaviors users hit often. Setting expectations up front avoids most of the frustration.
+**Comment cleanup is real cleanup.** Valet can resolve and delete comments, and the result looks exactly like a manual resolve — the thread leaves the doc's main view. Be deliberate when asking it to tidy comment threads.
 
-### "Copy and reformat this doc" can become a rewrite
+## Who owns what
 
-When you ask Valet to take an existing doc and produce a reformatted version, the most reliable path is usually to generate a new doc with the desired structure and content rather than mutating the original in place. That means the "copy" may end up looking less like a Google Docs "Make a copy" and more like a regenerated document.
+Some operations create files; others modify files you already own. The distinction matters when you go looking for the result:
 
-If preserving the exact original (revision history, comments, sharing) matters, say so explicitly — for example, "make a Google Drive copy of this doc first, then edit the copy." Otherwise, expect Valet to interpret "copy and edit" as "produce an edited version."
+| Operation | Who owns the result | The original |
+| --- | --- | --- |
+| Create a new doc or sheet | Your connected Google account | No original — fresh file |
+| Copy a file | The account the copy is made for | Untouched |
+| Edit, append, format, or rename your file | You (unchanged) | Modified in place |
 
-### Formatting fidelity is not perfect
+Files Valet creates land in the Drive of the connected account. If you want them in a specific folder or shared drive, say where — or ask Valet to move them after.
 
-Docs and Sheets have rich formatting (styles, layouts, embedded charts, complex tables). Valet can read and write a lot of it, but exotic formatting may not round-trip exactly. For high-stakes documents, ask Valet to do the content work and do the final polish yourself.
+## Approvals
 
-### Comments and resolved discussions
+Reads are low risk and run freely. Edits — inserting text, writing ranges, formatting, creating files — are medium risk and follow your [approval settings](/product/approvals). Destructive operations are high risk and prompt by default: deleting files or content ranges, replacing an entire document body, deleting sheets, tables, or comment threads. The [action reference](#action-reference) below lists the risk level per action.
 
-Valet can add, reply to, resolve, and delete comments. Resolved or deleted comments are gone from the doc's main view just like a manual resolve, so be deliberate when asking Valet to clean up comment threads.
+## Gmail and Google Calendar
 
-## Gmail and Calendar
-
-[Gmail](/product/integrations/gmail) and [Google Calendar](/product/integrations/google-calendar) are separate integrations, but they use the same per-user OAuth model. Valet acts as your account, so it sees your inbox and your calendar — not the team's. Like Drive, the rule is that Valet's reach is your reach: if you want Valet to look at a specific thread or event, paste the link or describe it precisely.
+[Gmail](/product/integrations/gmail) and [Google Calendar](/product/integrations/google-calendar) are separate integrations that use the same per-user OAuth model: Valet acts as your account and sees your inbox and calendar, not the team's. The same habit applies — paste the thread or event link when you mean a specific one.
 
 ## Disconnecting
 
-You can disconnect Google Workspace at any time:
+Disconnect at any time, from either side:
 
-- From inside Valet by removing the Google integration.
-- From Google by revoking Valet's access at `myaccount.google.com` under "Third-party apps with account access."
+- Inside Valet, remove the Google integration.
+- At Google, revoke Valet's access at `myaccount.google.com` under "Third-party apps with account access."
 
-Either action immediately stops Valet from making new calls on your behalf. Past activity (files created, messages sent) is not undone.
+Either action immediately stops new calls on your behalf. Past activity — files created, edits made — is not undone.
 
-## Actions
+## Action reference
 
-Actions for this integration are namespaced under multiple prefixes: `docs.`, `drive.`, `sheets.`.
+78 actions across the `docs.`, `drive.`, and `sheets.` namespaces. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time. Exact parameter schemas are visible in the product when an action runs, and over the [MCP endpoint](/product/mcp-endpoint).
 
-78 actions are defined for Google Workspace. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
+<AccordionGroup>
+<Accordion title="Docs — reading, editing, structure, and comments (26 actions)">
 
 | Action ID | What it does | Key params | Risk |
 | --- | --- | --- | --- |
 | `docs.read_document` | Read document content as text, markdown, or JSON (JSON includes character indices for surgical editing) | `documentId`, `format`?, `maxLength`?, `tabId`? | low |
+| `docs.find_text_index` | Find the character index of a text string, for use with index-based editing tools | `documentId`, `textToFind`, `matchInstance`?, `tabId`? | low |
 | `docs.insert_text` | Insert text at a specific 1-based character index | `documentId`, `text`, `index`, `tabId`? | medium |
 | `docs.append_text` | Append plain text to the end of a document | `documentId`, `text`, `addNewlineIfNeeded`?, `tabId`? | medium |
-| `docs.modify_text` | Replace, insert, or format text in one atomic operation. Target by character range, text search, or insertion index. | `documentId`, `target`, `text`?, `style`?, `tabId`? | medium |
-| `docs.delete_range` | Delete content within a character range [startIndex, endIndex) | `documentId`, `startIndex`, `endIndex`, `tabId`? | high |
+| `docs.modify_text` | Replace, insert, or format text in one atomic operation, targeted by range, text search, or index | `documentId`, `target`, `text`?, `style`?, `tabId`? | medium |
 | `docs.find_and_replace` | Replace all occurrences of a text string throughout the document | `documentId`, `findText`, `replaceText`, `matchCase`?, `tabId`? | medium |
 | `docs.append_markdown` | Append formatted markdown content to the end of a document | `documentId`, `markdown`, `addNewlineIfNeeded`?, `tabId`?, `firstHeadingAsTitle`? | medium |
 | `docs.replace_document_with_markdown` | Replace the entire document body with formatted markdown content | `documentId`, `markdown`, `preserveTitle`?, `tabId`?, `firstHeadingAsTitle`? | high |
-| `docs.insert_table` | Insert an empty table with the specified number of rows and columns at a character index | `documentId`, `rows`, `columns`, `index`, `tabId`? | medium |
-| `docs.insert_table_with_data` | Insert a table pre-populated with data. Optionally bolds the first row as a header. Ragged rows are padded with empty cells. | `documentId`, `data`, `index`, `hasHeaderRow`?, `tabId`? | medium |
-| `docs.insert_image` | Insert an inline image from a publicly accessible URL at a character index | `documentId`, `imageUrl`, `index`, `width`?, `height`?, `tabId`? | medium |
+| `docs.delete_range` | Delete content within a character range | `documentId`, `startIndex`, `endIndex`, `tabId`? | high |
+| `docs.insert_table` | Insert an empty table at a character index | `documentId`, `rows`, `columns`, `index`, `tabId`? | medium |
+| `docs.insert_table_with_data` | Insert a table pre-populated with data, optionally with a bolded header row | `documentId`, `data`, `index`, `hasHeaderRow`?, `tabId`? | medium |
+| `docs.insert_image` | Insert an inline image from a publicly accessible URL | `documentId`, `imageUrl`, `index`, `width`?, `height`?, `tabId`? | medium |
 | `docs.insert_page_break` | Insert a page break at a character index | `documentId`, `index`, `tabId`? | medium |
-| `docs.insert_section_break` | Insert a section break. Use NEXT_PAGE when you need a fresh page (e.g. mixing portrait/landscape). Use CONTINUOUS for inline section changes. | `documentId`, `index`, `sectionType`?, `tabId`? | medium |
-| `docs.add_tab` | Add a new tab to a document. Optionally set title, position, and parent tab for nesting. | `documentId`, `title`?, `parentTabId`?, `index`? | medium |
-| `docs.list_tabs` | List all tabs in a document with IDs, titles, and hierarchy. Use tab IDs with other tools. | `documentId`, `includeContent`? | low |
+| `docs.insert_section_break` | Insert a section break (NEXT_PAGE or CONTINUOUS) | `documentId`, `index`, `sectionType`?, `tabId`? | medium |
+| `docs.add_tab` | Add a new tab to a document, optionally nested | `documentId`, `title`?, `parentTabId`?, `index`? | medium |
+| `docs.list_tabs` | List all tabs with IDs, titles, and hierarchy | `documentId`, `includeContent`? | low |
 | `docs.rename_tab` | Rename a tab in a document | `documentId`, `tabId`, `newTitle` | medium |
-| `docs.apply_text_style` | Apply character-level formatting (bold, italic, color, font, etc.) to text identified by range or text search | `documentId`, `target`, `style`, `tabId`? | medium |
-| `docs.apply_paragraph_style` | Apply paragraph-level formatting (alignment, spacing, heading styles) to paragraphs identified by range, text search, or index | `documentId`, `target`, `style`, `tabId`? | medium |
-| `docs.update_section_style` | Update the style of a section identified by range — supports page orientation, margins, and section type | `documentId`, `startIndex`, `endIndex`, `flipPageOrientation`?, `sectionType`?, `marginTop`?, `marginBottom`?, `marginLeft`?, `marginRight`?, `pageNumberStart`?, `tabId`? | medium |
-| `docs.list_comments` | List all comments in a document with IDs, authors, status, and quoted text | `documentId` | low |
+| `docs.apply_text_style` | Apply character-level formatting (bold, italic, color, font) by range or text search | `documentId`, `target`, `style`, `tabId`? | medium |
+| `docs.apply_paragraph_style` | Apply paragraph-level formatting (alignment, spacing, heading styles) | `documentId`, `target`, `style`, `tabId`? | medium |
+| `docs.update_section_style` | Update a section's style — page orientation, margins, section type | `documentId`, `startIndex`, `endIndex`, `flipPageOrientation`?, `sectionType`?, margins? | medium |
+| `docs.list_comments` | List all comments with IDs, authors, status, and quoted text | `documentId` | low |
 | `docs.get_comment` | Get a specific comment and its full reply thread | `documentId`, `commentId` | low |
-| `docs.add_comment` | Add a comment anchored to a text range in the document | `documentId`, `startIndex`, `endIndex`, `content` | medium |
+| `docs.add_comment` | Add a comment anchored to a text range | `documentId`, `startIndex`, `endIndex`, `content` | medium |
 | `docs.reply_to_comment` | Add a reply to an existing comment thread | `documentId`, `commentId`, `content` | medium |
-| `docs.delete_comment` | Permanently delete a comment and all its replies | `documentId`, `commentId` | high |
 | `docs.resolve_comment` | Mark a comment as resolved | `documentId`, `commentId` | medium |
-| `docs.find_text_index` | Find the character index of a text string in a document. Returns { startIndex, endIndex } for use with insert_text, modify_text, delete_range, and other index-based tools. Much lighter than reading the full document with format=json. | `documentId`, `textToFind`, `matchInstance`?, `tabId`? | low |
-| `drive.list_files` | Lists files in Google Drive with optional filtering by type, folder, and ownership. | `query`?, `folderId`?, `mimeType`?, `maxResults`?, `pageToken`?, `orderBy`?, `sortDirection`?, `ownedByMe`?, `sharedWithMe`?, `modifiedAfter`?, `corpora`? | low |
-| `drive.search_files` | Searches across all file types in Google Drive by name or content. | `query`, `searchIn`?, `mimeType`?, `folderId`?, `orderBy`?, `sortDirection`?, `maxResults`?, `modifiedAfter`?, `pageToken`?, `corpora`? | low |
-| `drive.list_documents` | Lists Google Documents, optionally filtered by name or content. | `query`?, `maxResults`?, `pageToken`?, `orderBy`?, `modifiedAfter`?, `corpora`? | low |
-| `drive.search_documents` | Searches for Google Documents by name, content, or both. | `query`, `searchIn`?, `maxResults`?, `pageToken`?, `modifiedAfter`?, `corpora`? | low |
-| `drive.list_folder_contents` | Lists files and subfolders within a Drive folder. Use folderId="root" for the top-level. | `folderId`, `maxResults`?, `pageToken`?, `corpora`? | low |
-| `drive.get_document_info` | Gets metadata about a document including name, owner, sharing status, and modification history. | `fileId` | low |
-| `drive.get_folder_info` | Gets metadata about a Drive folder including name, owner, sharing status, and child count. | `folderId` | low |
-| `drive.create_document` | Creates a new Google Document. Optionally places it in a folder and adds initial | `title`, `markdown`?, `folderId`? | medium |
-| `drive.create_folder` | Creates a new folder in Google Drive. | `name`, `parentFolderId`?, `description`? | medium |
-| `drive.copy_file` | Creates a copy of a file in Google Drive. | `fileId`, `name`?, `folderId`? | medium |
-| `drive.move_file` | Moves a file or folder to a different Drive folder. | `fileId`, `folderId` | medium |
-| `drive.rename_file` | Renames a file or folder in Google Drive. | `fileId`, `name` | medium |
-| `drive.delete_file` | Moves a file or folder to trash by default. Set permanent=true for irreversible deletion. | `fileId`, `permanent`? | high |
-| `drive.download_file` | Downloads text content of a file. Exports Google Workspace files to text format. | `fileId`, `maxSizeBytes`? | low |
-| `drive.create_from_template` | Creates a new document by copying a template and optionally replacing placeholder text. | `templateId`, `title`, `folderId`?, `replacements`? | medium |
-| `sheets.read_spreadsheet` | Read data from a range in a spreadsheet. Returns rows as arrays. | `spreadsheetId`, `range`, `valueRenderOption`? | low |
-| `sheets.write_spreadsheet` | Write data to a range, overwriting existing values. Use append_rows to add without overwriting. | `spreadsheetId`, `range`, `data`, `valueInputOption`? | medium |
-| `sheets.append_rows` | Append rows after the last row with data in a range. | `spreadsheetId`, `range`, `data`, `valueInputOption`? | medium |
-| `sheets.create_spreadsheet` | Create a new spreadsheet with a title and optional sheet names. | `title`, `sheetTitles`? | medium |
-| `sheets.get_spreadsheet_info` | Get spreadsheet metadata including title, URL, and a list of all sheets with dimensions. | `spreadsheetId` | low |
-| `sheets.list_spreadsheets` | List spreadsheets in your Drive, optionally filtered by name. | `query`?, `maxResults`? | low |
-| `sheets.batch_write` | Write data to multiple ranges in a single API call. | `spreadsheetId`, `data`, `valueInputOption`? | medium |
-| `sheets.clear_range` | Clear all values from a range (formatting is preserved). | `spreadsheetId`, `range` | medium |
-| `sheets.add_sheet` | Add a new sheet/tab to an existing spreadsheet. | `spreadsheetId`, `title` | medium |
-| `sheets.delete_sheet` | Delete a sheet/tab from a spreadsheet by its numeric sheet ID. | `spreadsheetId`, `sheetId` | high |
-| `sheets.rename_sheet` | Rename a sheet/tab in a spreadsheet. | `spreadsheetId`, `sheetId`, `title` | medium |
-| `sheets.duplicate_sheet` | Duplicate a sheet/tab within a spreadsheet, copying all values, formulas, formatting, and validations. | `spreadsheetId`, `sheetId`, `title`? | medium |
-| `sheets.copy_sheet_to` | Copy a sheet/tab from one spreadsheet to another. | `sourceSpreadsheetId`, `sheetId`, `destinationSpreadsheetId` | medium |
-| `sheets.format_cells` | Apply formatting to a range. Supports bold, italic, font size, colors, alignment, number format, and wrap strategy. Text properties (bold, italic, fontSize, foregroundColor) can be passed at the top level or nested under textFormat. | `spreadsheetId`, `range`, `format` | medium |
-| `sheets.read_cell_format` | Read formatting/style of cells in a range (bold, colors, borders, alignment, number format). | `spreadsheetId`, `range` | low |
-| `sheets.copy_formatting` | Copy formatting (not values) from a source range to a destination range within the same spreadsheet. | `spreadsheetId`, `sourceRange`, `destinationRange` | medium |
-| `sheets.set_column_widths` | Set the width (in pixels) of one or more columns. | `spreadsheetId`, `sheetName`?, `columnWidths` | medium |
-| `sheets.set_row_heights` | Set a fixed pixel height for a range of rows. | `spreadsheetId`, `sheetName`?, `rowHeights` | medium |
-| `sheets.auto_resize_columns` | Auto-resize columns to fit their content. | `spreadsheetId`, `sheetName`?, `startColumn`, `endColumn` | medium |
-| `sheets.auto_resize_rows` | Auto-resize rows to fit their content. | `spreadsheetId`, `sheetName`?, `startRow`, `endRow` | medium |
-| `sheets.set_cell_borders` | Set borders on a range of cells. Each side can be configured independently. | `spreadsheetId`, `range`, `borders` | medium |
-| `sheets.freeze_rows_and_columns` | Pin rows and/or columns so they stay visible when scrolling. | `spreadsheetId`, `sheetName`?, `frozenRowCount`?, `frozenColumnCount`? | medium |
-| `sheets.create_table` | Create a new named table with structured columns and optional column types. | `spreadsheetId`, `sheetName`?, `name`, `range`, `columns`? | medium |
-| `sheets.get_table` | Get detailed information about a specific table including its columns, range, and properties. | `spreadsheetId`, `tableIdentifier` | low |
-| `sheets.list_tables` | List all tables in a spreadsheet, optionally filtered by sheet. | `spreadsheetId`, `sheetName`? | low |
-| `sheets.delete_table` | Delete a table from a spreadsheet (table object removed; data preserved unless deleteData is true). | `spreadsheetId`, `tableId`, `deleteData`? | high |
-| `sheets.update_table_range` | Modify a table's dimensions by updating its range. | `spreadsheetId`, `tableId`, `range` | medium |
-| `sheets.append_table_rows` | Append rows to the end of a table using table-aware insertion. | `spreadsheetId`, `tableId`, `values` | medium |
-| `sheets.group_rows` | Create collapsible row groups. | `spreadsheetId`, `sheetName`?, `startRow`, `endRow` | medium |
-| `sheets.ungroup_all_rows` | Remove all row groupings from a sheet. | `spreadsheetId`, `sheetName`? | medium |
-| `sheets.insert_chart` | Insert a chart into a Google Sheet. Supports bar, column, line, area, scatter, combo, and pie chart types. | `spreadsheetId`, `sheetName`?, `chartType`, `sourceRange`, `title`?, `position`? | medium |
-| `sheets.delete_chart` | Delete a chart from a spreadsheet by its chart ID. | `spreadsheetId`, `chartId` | medium |
-| `sheets.add_conditional_formatting` | Add a conditional formatting rule to one or more ranges. Use CUSTOM_FORMULA for complex conditions. | `spreadsheetId`, `range`, `conditionType`, `conditionValues`, `format` | medium |
-| `sheets.delete_conditional_formatting` | Delete a conditional formatting rule by its index. | `spreadsheetId`, `sheetId`, `index` | medium |
-| `sheets.get_conditional_formatting` | List all conditional formatting rules for a sheet. | `spreadsheetId`, `sheetName`? | low |
-| `sheets.set_dropdown_validation` | Add or remove a dropdown list on a range of cells. | `spreadsheetId`, `range`, `values`?, `strict`?, `inputMessage`? | medium |
-| `sheets.protect_range` | Lock a range or entire sheet to prevent accidental edits. | `spreadsheetId`, `range`, `description`?, `warningOnly`? | medium |
-
-## Action parameters
-
-### `docs.read_document`
-
-Read document content as text, markdown, or JSON (JSON includes character indices for surgical editing)
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `format` | enum(text,json,markdown) | No | — |
-| `maxLength` | number | No | Maximum character limit for output |
-| `tabId` | string | No | — |
-
-### `docs.insert_text`
-
-Insert text at a specific 1-based character index
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | — |
-| `text` | string | Yes | — |
-| `index` | number | Yes | — |
-| `tabId` | string | No | — |
-
-### `docs.append_text`
-
-Append plain text to the end of a document
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | — |
-| `text` | string | Yes | — |
-| `addNewlineIfNeeded` | boolean | No | — |
-| `tabId` | string | No | — |
-
-### `docs.modify_text`
-
-Replace, insert, or format text in one atomic operation. Target by character range, text search, or insertion index.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | — |
-| `target` | union | Yes | — |
-| `text` | string | No | — |
-| `style` | object | No | — |
-| `tabId` | string | No | — |
-
-### `docs.delete_range`
-
-Delete content within a character range [startIndex, endIndex)
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | — |
-| `startIndex` | number | Yes | — |
-| `endIndex` | number | Yes | — |
-| `tabId` | string | No | — |
-
-### `docs.find_and_replace`
-
-Replace all occurrences of a text string throughout the document
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | — |
-| `findText` | string | Yes | — |
-| `replaceText` | string | Yes | — |
-| `matchCase` | boolean | No | — |
-| `tabId` | string | No | — |
-
-### `docs.append_markdown`
-
-Append formatted markdown content to the end of a document
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | — |
-| `markdown` | string | Yes | — |
-| `addNewlineIfNeeded` | boolean | No | — |
-| `tabId` | string | No | — |
-| `firstHeadingAsTitle` | boolean | No | — |
-
-### `docs.replace_document_with_markdown`
-
-Replace the entire document body with formatted markdown content
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | — |
-| `markdown` | string | Yes | — |
-| `preserveTitle` | boolean | No | — |
-| `tabId` | string | No | — |
-| `firstHeadingAsTitle` | boolean | No | — |
-
-### `docs.insert_table`
-
-Insert an empty table with the specified number of rows and columns at a character index
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `rows` | number | Yes | Number of rows |
-| `columns` | number | Yes | Number of columns |
-| `index` | number | Yes | 1-based character index |
-| `tabId` | string | No | — |
-
-### `docs.insert_table_with_data`
-
-Insert a table pre-populated with data. Optionally bolds the first row as a header. Ragged rows are padded with empty cells.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `data` | array | Yes | 2D array of strings — each inner array is one row |
-| `index` | number | Yes | 1-based character index |
-| `hasHeaderRow` | boolean | No | If true, bold the first row as a header |
-| `tabId` | string | No | — |
-
-### `docs.insert_image`
-
-Insert an inline image from a publicly accessible URL at a character index
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `imageUrl` | string | Yes | Publicly accessible image URL |
-| `index` | number | Yes | 1-based character index |
-| `width` | number | No | Width in points |
-| `height` | number | No | Height in points |
-| `tabId` | string | No | — |
-
-### `docs.insert_page_break`
-
-Insert a page break at a character index
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `index` | number | Yes | 1-based character index |
-| `tabId` | string | No | — |
-
-### `docs.insert_section_break`
-
-Insert a section break. Use NEXT_PAGE when you need a fresh page (e.g. mixing portrait/landscape). Use CONTINUOUS for inline section changes.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `index` | number | Yes | 1-based character index |
-| `sectionType` | enum(NEXT_PAGE,CONTINUOUS) | No | Section break type |
-| `tabId` | string | No | — |
-
-### `docs.add_tab`
-
-Add a new tab to a document. Optionally set title, position, and parent tab for nesting.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `title` | string | No | Title for the new tab |
-| `parentTabId` | string | No | ID of existing tab to nest under as a child |
-| `index` | number | No | Zero-based position among sibling tabs |
-
-### `docs.list_tabs`
-
-List all tabs in a document with IDs, titles, and hierarchy. Use tab IDs with other tools.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `includeContent` | boolean | No | Include character count per tab |
-
-### `docs.rename_tab`
-
-Rename a tab in a document
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `tabId` | string | Yes | ID of the tab to rename |
-| `newTitle` | string | Yes | New title for the tab |
-
-### `docs.apply_text_style`
-
-Apply character-level formatting (bold, italic, color, font, etc.) to text identified by range or text search
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `target` | union | Yes | — |
-| `style` | object | Yes | — |
-| `tabId` | string | No | — |
-
-### `docs.apply_paragraph_style`
-
-Apply paragraph-level formatting (alignment, spacing, heading styles) to paragraphs identified by range, text search, or index
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `target` | union | Yes | — |
-| `style` | object | Yes | — |
-| `tabId` | string | No | — |
-
-### `docs.update_section_style`
-
-Update the style of a section identified by range — supports page orientation, margins, and section type
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `startIndex` | number | Yes | — |
-| `endIndex` | number | Yes | — |
-| `flipPageOrientation` | boolean | No | — |
-| `sectionType` | enum(SECTION_TYPE_UNSPECIFIED,CONTINUOUS,NEXT_PAGE) | No | — |
-| `marginTop` | number | No | Points |
-| `marginBottom` | number | No | Points |
-| `marginLeft` | number | No | Points |
-| `marginRight` | number | No | Points |
-| `pageNumberStart` | number | No | — |
-| `tabId` | string | No | — |
-
-### `docs.list_comments`
-
-List all comments in a document with IDs, authors, status, and quoted text
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-
-### `docs.get_comment`
-
-Get a specific comment and its full reply thread
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `commentId` | string | Yes | Comment ID |
-
-### `docs.add_comment`
-
-Add a comment anchored to a text range in the document
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `startIndex` | number | Yes | Start of text range (inclusive, 1-based) |
-| `endIndex` | number | Yes | End of text range (exclusive) |
-| `content` | string | Yes | Comment text |
-
-### `docs.reply_to_comment`
-
-Add a reply to an existing comment thread
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `commentId` | string | Yes | Comment ID to reply to |
-| `content` | string | Yes | Reply text |
-
-### `docs.delete_comment`
-
-Permanently delete a comment and all its replies
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `commentId` | string | Yes | Comment ID to delete |
-
-### `docs.resolve_comment`
-
-Mark a comment as resolved
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `commentId` | string | Yes | Comment ID to resolve |
-
-### `docs.find_text_index`
-
-Find the character index of a text string in a document. Returns { startIndex, endIndex } for use with insert_text, modify_text, delete_range, and other index-based tools. Much lighter than reading the full document with format=json.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `documentId` | string | Yes | Document ID or full Google Docs URL |
-| `textToFind` | string | Yes | The text to search for in the document |
-| `matchInstance` | number | No | Which occurrence to match (default: 1, i.e. first match) |
-| `tabId` | string | No | — |
-
-### `drive.list_files`
-
-Lists files in Google Drive with optional filtering by type, folder, and ownership.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `query` | string | No | Additional Drive query filter |
-| `folderId` | string | No | Folder ID to list contents of (use "root" for top-level) |
-| `mimeType` | string | No | Filter by MIME type. Shortcuts: "document", "spreadsheet", "folder", etc. |
-| `maxResults` | number | No | — |
-| `pageToken` | string | No | — |
-| `orderBy` | enum(name,modifiedTime,createdTime,quotaBytesUsed) | No | — |
-| `sortDirection` | enum(asc,desc) | No | — |
-| `ownedByMe` | boolean | No | Only return files owned by the authenticated user |
-| `sharedWithMe` | boolean | No | Only return files shared with the authenticated user |
-| `modifiedAfter` | string | No | Only return files modified after this date (ISO 8601) |
-| `corpora` | enum(user,domain,drive,allDrives) | No | Which Drive corpus to search. "user" (default): files in My Drive (owned + shared with me). "domain": files shared to the Google Workspace org. "drive": a specific shared drive (requires driveId). "allDrives": My Drive + all shared drives (may return incomplete results on large workspaces). |
-
-### `drive.search_files`
-
-Searches across all file types in Google Drive by name or content.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `query` | string | Yes | Search text (matches file names and content) |
-| `searchIn` | enum(name,content,both) | No | Where to search: "name", "content", or "both" (default) |
-| `mimeType` | string | No | Restrict to a specific file type (shortcuts or full MIME type) |
-| `folderId` | string | No | Restrict to files inside this folder |
-| `orderBy` | enum(name,modifiedTime,createdTime) | No | — |
-| `sortDirection` | enum(asc,desc) | No | — |
-| `maxResults` | number | No | — |
-| `modifiedAfter` | string | No | Only return files modified after this date (ISO 8601) |
-| `pageToken` | string | No | — |
-| `corpora` | enum(user,domain,drive,allDrives) | No | Which Drive corpus to search. "user" (default): files in My Drive (owned + shared with me). "domain": files shared to the Google Workspace org. "drive": a specific shared drive (requires driveId). "allDrives": My Drive + all shared drives (may return incomplete results on large workspaces). |
-
-### `drive.list_documents`
-
-Lists Google Documents, optionally filtered by name or content.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `query` | string | No | Search query to filter documents by name or content |
-| `maxResults` | number | No | — |
-| `pageToken` | string | No | — |
-| `orderBy` | enum(name,modifiedTime,createdTime) | No | — |
-| `modifiedAfter` | string | No | Only return documents modified after this date (ISO 8601) |
-| `corpora` | enum(user,domain,drive,allDrives) | No | Which Drive corpus to search. "user" (default): files in My Drive (owned + shared with me). "domain": files shared to the Google Workspace org. "drive": a specific shared drive (requires driveId). "allDrives": My Drive + all shared drives (may return incomplete results on large workspaces). |
-
-### `drive.search_documents`
-
-Searches for Google Documents by name, content, or both.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `query` | string | Yes | Search term to find in document names or content |
-| `searchIn` | enum(name,content,both) | No | Where to search (default: "both") |
-| `maxResults` | number | No | — |
-| `pageToken` | string | No | — |
-| `modifiedAfter` | string | No | Only return documents modified after this date (ISO 8601) |
-| `corpora` | enum(user,domain,drive,allDrives) | No | Which Drive corpus to search. "user" (default): files in My Drive (owned + shared with me). "domain": files shared to the Google Workspace org. "drive": a specific shared drive (requires driveId). "allDrives": My Drive + all shared drives (may return incomplete results on large workspaces). |
-
-### `drive.list_folder_contents`
-
-Lists files and subfolders within a Drive folder. Use folderId="root" for the top-level.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `folderId` | string | Yes | Folder ID (use "root" for the root Drive folder) |
-| `maxResults` | number | No | — |
-| `pageToken` | string | No | — |
-| `corpora` | enum(user,domain,drive,allDrives) | No | Which Drive corpus to search. "user" (default): files in My Drive (owned + shared with me). "domain": files shared to the Google Workspace org. "drive": a specific shared drive (requires driveId). "allDrives": My Drive + all shared drives (may return incomplete results on large workspaces). |
-
-### `drive.get_document_info`
-
-Gets metadata about a document including name, owner, sharing status, and modification history.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `fileId` | string | Yes | File ID |
-
-### `drive.get_folder_info`
-
-Gets metadata about a Drive folder including name, owner, sharing status, and child count.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `folderId` | string | Yes | Folder ID |
-
-### `drive.create_document`
-
-Creates a new Google Document. Optionally places it in a folder and adds initial
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `title` | string | Yes | Document title |
-| `markdown` | string | No | Initial content as markdown (converted to formatted Docs content) |
-| `folderId` | string | No | Parent folder ID |
-
-### `drive.create_folder`
-
-Creates a new folder in Google Drive.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `name` | string | Yes | Folder name |
-| `parentFolderId` | string | No | Parent folder ID |
-| `description` | string | No | — |
-
-### `drive.copy_file`
-
-Creates a copy of a file in Google Drive.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `fileId` | string | Yes | Source file ID |
-| `name` | string | No | Name for the copy |
-| `folderId` | string | No | Destination folder ID |
-
-### `drive.move_file`
-
-Moves a file or folder to a different Drive folder.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `fileId` | string | Yes | File ID |
-| `folderId` | string | Yes | Destination folder ID |
-
-### `drive.rename_file`
-
-Renames a file or folder in Google Drive.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `fileId` | string | Yes | File ID |
-| `name` | string | Yes | New file name |
-
-### `drive.delete_file`
-
-Moves a file or folder to trash by default. Set permanent=true for irreversible deletion.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `fileId` | string | Yes | File ID |
-| `permanent` | boolean | No | If true, permanently delete (cannot be undone). Default: false (trash). |
-
-### `drive.download_file`
-
-Downloads text content of a file. Exports Google Workspace files to text format.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `fileId` | string | Yes | File ID |
-| `maxSizeBytes` | number | No | Max bytes to download (default: 1MB) |
-
-### `drive.create_from_template`
-
-Creates a new document by copying a template and optionally replacing placeholder text.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `templateId` | string | Yes | Template document ID to copy |
-| `title` | string | Yes | Title for the new document |
-| `folderId` | string | No | Destination folder ID |
-| `replacements` | record | No | Key-value pairs for placeholder substitution (e.g. {"{{name}}": "Alice"}) |
-
-### `sheets.read_spreadsheet`
-
-Read data from a range in a spreadsheet. Returns rows as arrays.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `range` | string | Yes | A1 notation range (e.g. "Sheet1!A1:D10") |
-| `valueRenderOption` | enum(FORMATTED_VALUE,UNFORMATTED_VALUE,FORMULA) | No | How values should be rendered (default: FORMATTED_VALUE) |
-
-### `sheets.write_spreadsheet`
-
-Write data to a range, overwriting existing values. Use append_rows to add without overwriting.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `range` | string | Yes | A1 notation range |
-| `data` | array | Yes | 2D array of values |
-| `valueInputOption` | enum(RAW,USER_ENTERED) | No | How input should be interpreted (default: USER_ENTERED) |
-
-### `sheets.append_rows`
-
-Append rows after the last row with data in a range.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `range` | string | Yes | A1 notation range to search for data |
-| `data` | array | Yes | 2D array of rows |
-| `valueInputOption` | enum(RAW,USER_ENTERED) | No | How input should be interpreted (default: USER_ENTERED) |
-
-### `sheets.create_spreadsheet`
-
-Create a new spreadsheet with a title and optional sheet names.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `title` | string | Yes | Spreadsheet title |
-| `sheetTitles` | array | No | Initial sheet names |
-
-### `sheets.get_spreadsheet_info`
-
-Get spreadsheet metadata including title, URL, and a list of all sheets with dimensions.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-
-### `sheets.list_spreadsheets`
-
-List spreadsheets in your Drive, optionally filtered by name.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `query` | string | No | Search text |
-| `maxResults` | number | No | Max results (default: 20) |
-
-### `sheets.batch_write`
-
-Write data to multiple ranges in a single API call.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `data` | array | Yes | Array of range+values pairs |
-| `valueInputOption` | enum(RAW,USER_ENTERED) | No | How input should be interpreted (default: USER_ENTERED) |
-
-### `sheets.clear_range`
-
-Clear all values from a range (formatting is preserved).
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `range` | string | Yes | A1 notation range to clear |
-
-### `sheets.add_sheet`
-
-Add a new sheet/tab to an existing spreadsheet.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `title` | string | Yes | Sheet/tab title |
-
-### `sheets.delete_sheet`
-
-Delete a sheet/tab from a spreadsheet by its numeric sheet ID.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetId` | number | Yes | Numeric sheet ID (from get_spreadsheet_info) |
-
-### `sheets.rename_sheet`
-
-Rename a sheet/tab in a spreadsheet.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetId` | number | Yes | Numeric sheet ID |
-| `title` | string | Yes | New sheet title |
-
-### `sheets.duplicate_sheet`
-
-Duplicate a sheet/tab within a spreadsheet, copying all values, formulas, formatting, and validations.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetId` | number | Yes | Sheet ID to duplicate |
-| `title` | string | No | Title for the copy |
-
-### `sheets.copy_sheet_to`
-
-Copy a sheet/tab from one spreadsheet to another.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `sourceSpreadsheetId` | string | Yes | Source spreadsheet ID |
-| `sheetId` | number | Yes | Sheet ID to copy |
-| `destinationSpreadsheetId` | string | Yes | Target spreadsheet ID |
-
-### `sheets.format_cells`
-
-Apply formatting to a range. Supports bold, italic, font size, colors, alignment, number format, and wrap strategy. Text properties (bold, italic, fontSize, foregroundColor) can be passed at the top level or nested under textFormat.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `range` | string | Yes | A1 notation range |
-| `format` | object | Yes | Cell formatting properties |
-
-### `sheets.read_cell_format`
-
-Read formatting/style of cells in a range (bold, colors, borders, alignment, number format).
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `range` | string | Yes | A1 notation range |
-
-### `sheets.copy_formatting`
-
-Copy formatting (not values) from a source range to a destination range within the same spreadsheet.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sourceRange` | string | Yes | A1 notation source range (including sheet name) |
-| `destinationRange` | string | Yes | A1 notation destination range (including sheet name) |
-
-### `sheets.set_column_widths`
-
-Set the width (in pixels) of one or more columns.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Sheet name (default: first sheet) |
-| `columnWidths` | array | Yes | — |
-
-### `sheets.set_row_heights`
-
-Set a fixed pixel height for a range of rows.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Sheet name (default: first sheet) |
-| `rowHeights` | array | Yes | — |
-
-### `sheets.auto_resize_columns`
-
-Auto-resize columns to fit their content.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Sheet name |
-| `startColumn` | string | Yes | Start column letter, e.g. "A" |
-| `endColumn` | string | Yes | End column letter, e.g. "D" |
-
-### `sheets.auto_resize_rows`
-
-Auto-resize rows to fit their content.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Sheet name |
-| `startRow` | number | Yes | Start row (1-based) |
-| `endRow` | number | Yes | End row (1-based, inclusive) |
-
-### `sheets.set_cell_borders`
-
-Set borders on a range of cells. Each side can be configured independently.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `range` | string | Yes | A1 notation range |
-| `borders` | object | Yes | Border styles (style: DOTTED, DASHED, SOLID, SOLID_MEDIUM, SOLID_THICK, DOUBLE, NONE) |
-
-### `sheets.freeze_rows_and_columns`
-
-Pin rows and/or columns so they stay visible when scrolling.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Sheet name |
-| `frozenRowCount` | number | No | Number of rows to freeze |
-| `frozenColumnCount` | number | No | Number of columns to freeze |
-
-### `sheets.create_table`
-
-Create a new named table with structured columns and optional column types.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Sheet name (default: first sheet) |
-| `name` | string | Yes | Table name |
-| `range` | string | Yes | A1 notation range for the table |
-| `columns` | array | No | Column header names |
-
-### `sheets.get_table`
-
-Get detailed information about a specific table including its columns, range, and properties.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `tableIdentifier` | string | Yes | Table ID or name |
-
-### `sheets.list_tables`
-
-List all tables in a spreadsheet, optionally filtered by sheet.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Filter by sheet name |
-
-### `sheets.delete_table`
-
-Delete a table from a spreadsheet (table object removed; data preserved unless deleteData is true).
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `tableId` | string | Yes | Table ID |
-| `deleteData` | boolean | No | Also clear cell data in the table range (default: false) |
-
-### `sheets.update_table_range`
-
-Modify a table's dimensions by updating its range.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `tableId` | string | Yes | Table ID |
-| `range` | string | Yes | New A1 notation range for the table |
-
-### `sheets.append_table_rows`
-
-Append rows to the end of a table using table-aware insertion.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `tableId` | string | Yes | Table ID |
-| `values` | array | Yes | 2D array of row values |
-
-### `sheets.group_rows`
-
-Create collapsible row groups.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Sheet name |
-| `startRow` | number | Yes | Start row (1-based) |
-| `endRow` | number | Yes | End row (1-based, inclusive) |
-
-### `sheets.ungroup_all_rows`
-
-Remove all row groupings from a sheet.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Sheet name |
-
-### `sheets.insert_chart`
-
-Insert a chart into a Google Sheet. Supports bar, column, line, area, scatter, combo, and pie chart types.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Sheet name |
-| `chartType` | enum(BAR,LINE,AREA,COLUMN,SCATTER,COMBO,PIE) | Yes | Chart type |
-| `sourceRange` | string | Yes | A1 notation data range |
-| `title` | string | No | Chart title |
-| `position` | object | No | — |
-
-### `sheets.delete_chart`
-
-Delete a chart from a spreadsheet by its chart ID.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `chartId` | number | Yes | Chart ID (from get_spreadsheet_info) |
-
-### `sheets.add_conditional_formatting`
-
-Add a conditional formatting rule to one or more ranges. Use CUSTOM_FORMULA for complex conditions.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `range` | string | Yes | A1 notation range |
-| `conditionType` | string | Yes | Condition type (e.g. NUMBER_GREATER, TEXT_CONTAINS, CUSTOM_FORMULA, BLANK, NOT_BLANK) |
-| `conditionValues` | array | Yes | Condition values |
-| `format` | object | Yes | Format to apply when condition is met |
-
-### `sheets.delete_conditional_formatting`
-
-Delete a conditional formatting rule by its index.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetId` | number | Yes | Sheet ID |
-| `index` | number | Yes | Rule index (0-based, from get_conditional_formatting) |
-
-### `sheets.get_conditional_formatting`
-
-List all conditional formatting rules for a sheet.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `sheetName` | string | No | Sheet name |
-
-### `sheets.set_dropdown_validation`
-
-Add or remove a dropdown list on a range of cells.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `range` | string | Yes | A1 notation range |
-| `values` | array | No | Dropdown values (omit to clear) |
-| `strict` | boolean | No | Reject invalid input (default: true) |
-| `inputMessage` | string | No | Help text shown on cell selection |
-
-### `sheets.protect_range`
-
-Lock a range or entire sheet to prevent accidental edits.
-
-| Param | Type | Required | Description |
-| --- | --- | --- | --- |
-| `spreadsheetId` | string | Yes | Spreadsheet ID |
-| `range` | string | Yes | A1 notation range to protect |
-| `description` | string | No | Protection description |
-| `warningOnly` | boolean | No | Show warning instead of blocking (default: false) |
+| `docs.delete_comment` | Permanently delete a comment and all its replies | `documentId`, `commentId` | high |
+
+</Accordion>
+<Accordion title="Drive — finding, organizing, and creating files (15 actions)">
+
+| Action ID | What it does | Key params | Risk |
+| --- | --- | --- | --- |
+| `drive.list_files` | List Drive files with filtering by type, folder, and ownership | `query`?, `folderId`?, `mimeType`?, `corpora`?, … | low |
+| `drive.search_files` | Search all file types by name or content | `query`, `searchIn`?, `mimeType`?, `folderId`?, … | low |
+| `drive.list_documents` | List Google Documents, optionally filtered by name or content | `query`?, `maxResults`?, `modifiedAfter`?, … | low |
+| `drive.search_documents` | Search Google Documents by name, content, or both | `query`, `searchIn`?, `maxResults`?, … | low |
+| `drive.list_folder_contents` | List files and subfolders within a folder (`folderId="root"` for top level) | `folderId`, `maxResults`?, `pageToken`?, `corpora`? | low |
+| `drive.get_document_info` | Get file metadata: name, owner, sharing status, modification history | `fileId` | low |
+| `drive.get_folder_info` | Get folder metadata including child count | `folderId` | low |
+| `drive.download_file` | Download text content of a file (exports Workspace files to text) | `fileId`, `maxSizeBytes`? | low |
+| `drive.create_document` | Create a new Google Document, optionally with initial markdown content | `title`, `markdown`?, `folderId`? | medium |
+| `drive.create_folder` | Create a new folder | `name`, `parentFolderId`?, `description`? | medium |
+| `drive.create_from_template` | Copy a template and substitute placeholder text | `templateId`, `title`, `folderId`?, `replacements`? | medium |
+| `drive.copy_file` | Create a copy of a file | `fileId`, `name`?, `folderId`? | medium |
+| `drive.move_file` | Move a file or folder to a different folder | `fileId`, `folderId` | medium |
+| `drive.rename_file` | Rename a file or folder | `fileId`, `name` | medium |
+| `drive.delete_file` | Move a file to trash, or permanently delete with `permanent=true` | `fileId`, `permanent`? | high |
+
+</Accordion>
+<Accordion title="Sheets — data, formatting, tables, and charts (37 actions)">
+
+| Action ID | What it does | Key params | Risk |
+| --- | --- | --- | --- |
+| `sheets.read_spreadsheet` | Read data from a range; returns rows as arrays | `spreadsheetId`, `range`, `valueRenderOption`? | low |
+| `sheets.get_spreadsheet_info` | Get spreadsheet metadata and a list of all sheets with dimensions | `spreadsheetId` | low |
+| `sheets.list_spreadsheets` | List spreadsheets in your Drive, optionally filtered by name | `query`?, `maxResults`? | low |
+| `sheets.read_cell_format` | Read formatting of cells in a range | `spreadsheetId`, `range` | low |
+| `sheets.write_spreadsheet` | Write data to a range, overwriting existing values | `spreadsheetId`, `range`, `data`, `valueInputOption`? | medium |
+| `sheets.append_rows` | Append rows after the last row with data | `spreadsheetId`, `range`, `data`, `valueInputOption`? | medium |
+| `sheets.batch_write` | Write data to multiple ranges in a single call | `spreadsheetId`, `data`, `valueInputOption`? | medium |
+| `sheets.clear_range` | Clear all values from a range (formatting preserved) | `spreadsheetId`, `range` | medium |
+| `sheets.create_spreadsheet` | Create a new spreadsheet with optional sheet names | `title`, `sheetTitles`? | medium |
+| `sheets.add_sheet` | Add a new sheet/tab | `spreadsheetId`, `title` | medium |
+| `sheets.rename_sheet` | Rename a sheet/tab | `spreadsheetId`, `sheetId`, `title` | medium |
+| `sheets.duplicate_sheet` | Duplicate a sheet/tab with values, formulas, formatting, and validations | `spreadsheetId`, `sheetId`, `title`? | medium |
+| `sheets.copy_sheet_to` | Copy a sheet/tab to another spreadsheet | `sourceSpreadsheetId`, `sheetId`, `destinationSpreadsheetId` | medium |
+| `sheets.delete_sheet` | Delete a sheet/tab by its numeric sheet ID | `spreadsheetId`, `sheetId` | high |
+| `sheets.format_cells` | Apply formatting: bold, italic, size, colors, alignment, number format, wrap | `spreadsheetId`, `range`, `format` | medium |
+| `sheets.copy_formatting` | Copy formatting (not values) between ranges | `spreadsheetId`, `sourceRange`, `destinationRange` | medium |
+| `sheets.set_cell_borders` | Set borders on a range, each side configurable | `spreadsheetId`, `range`, `borders` | medium |
+| `sheets.set_column_widths` | Set pixel widths of one or more columns | `spreadsheetId`, `sheetName`?, `columnWidths` | medium |
+| `sheets.set_row_heights` | Set a fixed pixel height for a range of rows | `spreadsheetId`, `sheetName`?, `rowHeights` | medium |
+| `sheets.auto_resize_columns` | Auto-resize columns to fit content | `spreadsheetId`, `sheetName`?, `startColumn`, `endColumn` | medium |
+| `sheets.auto_resize_rows` | Auto-resize rows to fit content | `spreadsheetId`, `sheetName`?, `startRow`, `endRow` | medium |
+| `sheets.freeze_rows_and_columns` | Pin rows/columns so they stay visible when scrolling | `spreadsheetId`, `sheetName`?, `frozenRowCount`?, `frozenColumnCount`? | medium |
+| `sheets.add_conditional_formatting` | Add a conditional formatting rule (CUSTOM_FORMULA for complex conditions) | `spreadsheetId`, `range`, `conditionType`, `conditionValues`, `format` | medium |
+| `sheets.get_conditional_formatting` | List all conditional formatting rules for a sheet | `spreadsheetId`, `sheetName`? | low |
+| `sheets.delete_conditional_formatting` | Delete a conditional formatting rule by index | `spreadsheetId`, `sheetId`, `index` | medium |
+| `sheets.set_dropdown_validation` | Add or remove a dropdown list on a range | `spreadsheetId`, `range`, `values`?, `strict`?, `inputMessage`? | medium |
+| `sheets.protect_range` | Lock a range or sheet to prevent accidental edits | `spreadsheetId`, `range`, `description`?, `warningOnly`? | medium |
+| `sheets.create_table` | Create a named table with structured columns | `spreadsheetId`, `sheetName`?, `name`, `range`, `columns`? | medium |
+| `sheets.get_table` | Get a table's columns, range, and properties | `spreadsheetId`, `tableIdentifier` | low |
+| `sheets.list_tables` | List all tables in a spreadsheet | `spreadsheetId`, `sheetName`? | low |
+| `sheets.update_table_range` | Modify a table's dimensions | `spreadsheetId`, `tableId`, `range` | medium |
+| `sheets.append_table_rows` | Append rows to a table with table-aware insertion | `spreadsheetId`, `tableId`, `values` | medium |
+| `sheets.delete_table` | Delete a table (data preserved unless `deleteData=true`) | `spreadsheetId`, `tableId`, `deleteData`? | high |
+| `sheets.group_rows` | Create collapsible row groups | `spreadsheetId`, `sheetName`?, `startRow`, `endRow` | medium |
+| `sheets.ungroup_all_rows` | Remove all row groupings from a sheet | `spreadsheetId`, `sheetName`? | medium |
+| `sheets.insert_chart` | Insert a chart: bar, column, line, area, scatter, combo, or pie | `spreadsheetId`, `sheetName`?, `chartType`, `sourceRange`, `title`?, `position`? | medium |
+| `sheets.delete_chart` | Delete a chart by its chart ID | `spreadsheetId`, `chartId` | medium |
+
+</Accordion>
+</AccordionGroup>
