@@ -127,7 +127,7 @@ function rowToShareLink(row: typeof sessionShareLinks.$inferSelect): SessionShar
 
 export async function createSession(
   db: AppDb,
-  data: { id: string; userId: string; workspace: string; title?: string; parentSessionId?: string; parentThreadId?: string; containerId?: string; metadata?: Record<string, unknown>; personaId?: string; isOrchestrator?: boolean; purpose?: SessionPurpose }
+  data: { id: string; userId: string; workspace: string; title?: string; parentSessionId?: string; parentThreadId?: string; containerId?: string; metadata?: Record<string, unknown>; personaId?: string; isOrchestrator?: boolean; purpose?: SessionPurpose; workflowExecutionId?: string }
 ): Promise<AgentSession> {
   const purpose = data.purpose || (data.isOrchestrator ? 'orchestrator' : 'interactive');
 
@@ -150,6 +150,7 @@ export async function createSession(
     personaId: data.personaId || null,
     isOrchestrator: data.isOrchestrator ?? false,
     purpose,
+    workflowExecutionId: data.workflowExecutionId || null,
   }).onConflictDoNothing();
 
   return {

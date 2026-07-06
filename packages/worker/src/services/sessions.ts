@@ -1,4 +1,5 @@
 import { ForbiddenError, NotFoundError, ValidationError, webManualScopeKey } from '@valet/shared';
+import type { SessionPurpose } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
 import type { AppDb } from '../lib/drizzle.js';
@@ -204,6 +205,21 @@ export interface CreateSessionParams {
    * generating a fresh UUID and spawning a second sandbox.
    */
   presetSessionId?: string;
+  /**
+   * Durable link back to the workflow_executions row that spawned this
+   * session. Set only for workflow-spawned sessions; powers per-workflow
+   * usage attribution independent of workflow_spawned_sessions (which is
+   * pruned on successful terminal cleanup).
+   */
+  workflowExecutionId?: string;
+  /**
+   * Session origin bucket used by usage analytics. Workflow spawns must
+   * pass 'workflow' so per-origin (interactive vs automated vs
+   * orchestrator) attribution is correct — without this, workflow
+   * sessions get the default 'interactive' bucket and disappear from the
+   * automated panel.
+   */
+  purpose?: SessionPurpose;
 }
 
 export interface CreateSessionRequestContext {
@@ -274,6 +290,8 @@ export async function createSession(
     parentSessionId: params.parentSessionId,
     metadata: params.config,
     personaId: params.personaId,
+    ...(params.workflowExecutionId ? { workflowExecutionId: params.workflowExecutionId } : {}),
+    ...(params.purpose ? { purpose: params.purpose } : {}),
   });
 
   // Create git state record

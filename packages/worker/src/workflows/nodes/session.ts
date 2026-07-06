@@ -252,6 +252,8 @@ async function executeStart(args: NodeExecutorArgs<StartSessionNode>): Promise<S
       userEmail: user.email,
       workspace,
       presetSessionId: sessionId,
+      workflowExecutionId: args.params.executionId,
+      purpose: 'workflow',
       ...(title !== undefined ? { title } : {}),
       ...(args.node.personaId !== undefined ? { personaId: args.node.personaId } : {}),
       ...(args.node.model !== undefined ? { initialModel: args.node.model } : {}),
