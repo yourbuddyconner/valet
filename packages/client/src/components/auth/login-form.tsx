@@ -6,6 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { authKeys, fetchAuthProviders, type AuthProviderInfo } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
+import { buildAuthRedirectUrl } from '@/lib/auth-redirect';
+import { applyAuthMeResponse, type AuthMeResponse } from './login-form-utils';
 
 function getWorkerBaseUrl(): string {
   const apiUrl = import.meta.env.VITE_API_URL;
@@ -94,8 +96,8 @@ function CredentialsForm({ workerUrl }: { workerUrl: string }) {
           headers: { Authorization: `Bearer ${data.sessionToken}` },
         });
         if (meRes.ok) {
-          const meData = await meRes.json() as { user: import('@valet/shared').User };
-          setAuth(data.sessionToken, meData.user);
+          const meData = await meRes.json() as AuthMeResponse;
+          applyAuthMeResponse({ token: data.sessionToken, response: meData, setAuth });
         }
         window.location.href = '/';
       }
@@ -232,7 +234,13 @@ export function LoginForm() {
                 variant={idx === 0 ? 'primary' : 'outline'}
                 className="w-full"
                 style={provider.brandColor ? { '--brand-color': provider.brandColor } as React.CSSProperties : undefined}
-                onClick={() => { window.location.href = `${workerUrl}/auth/${provider.id}`; }}
+                onClick={() => {
+                  window.location.href = buildAuthRedirectUrl({
+                    workerUrl,
+                    providerId: provider.id,
+                    origin: window.location.origin,
+                  });
+                }}
               >
                 {getProviderIcon(provider)}
                 Sign in with {provider.displayName}

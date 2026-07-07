@@ -96,6 +96,61 @@ describe('integrationsRouter custom MCP OAuth', () => {
     expect(body.code_verifier).toBeTruthy();
   });
 
+  it('lists user-scoped API-key custom MCP connectors as connectable integrations', async () => {
+    await createCustomMcpConnector(env, db, {
+      displayName: 'Excalibur MCP',
+      serverUrl: 'https://mcp.excalibur.example.com/mcp',
+      authType: 'api_key',
+      credentialScope: 'user',
+      apiKeyHeaderName: 'X-API-Key',
+      apiKeyPrefix: null,
+    }, { orgId: 'default', createdBy: null });
+    await createCustomMcpConnector(env, db, {
+      displayName: 'Bearer MCP',
+      serverUrl: 'https://mcp.bearer.example.com/mcp',
+      authType: 'bearer',
+      credentialScope: 'user',
+    }, { orgId: 'default', createdBy: null });
+
+    const res = await app.fetch(new Request('http://localhost/available'), env);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { services: Array<{ service: string; displayName: string; authType: string; isCustomConnector?: boolean }> };
+    expect(body.services).toContainEqual(expect.objectContaining({
+      service: 'excalibur-mcp',
+      displayName: 'Excalibur MCP',
+      authType: 'api_key',
+      isCustomConnector: true,
+    }));
+    expect(body.services).toContainEqual(expect.objectContaining({
+      service: 'bearer-mcp',
+      displayName: 'Bearer MCP',
+      authType: 'bearer',
+      isCustomConnector: true,
+    }));
+  });
+
+  it('includes custom connector auth type when listing connected integrations', async () => {
+    db.insert(integrations).values({
+      id: 'integration-salesforce',
+      userId: USER_ID,
+      service: 'salesforce-mcp',
+      config: { entities: [] },
+      status: 'active',
+    }).run();
+
+    const res = await app.fetch(new Request('http://localhost/'), env);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { integrations: Array<{ service: string; displayName?: string; authType?: string; isCustomConnector?: boolean }> };
+    expect(body.integrations).toContainEqual(expect.objectContaining({
+      service: 'salesforce-mcp',
+      displayName: 'Salesforce MCP',
+      authType: 'oauth2',
+      isCustomConnector: true,
+    }));
+  });
+
   it('starts custom MCP OAuth with dynamic client registration when no client ID is configured', async () => {
     db.insert(customMcpConnectors).values({
       id: 'ramp-connector',
@@ -259,6 +314,51 @@ describe('integrationsRouter custom MCP OAuth', () => {
           service: 'salesforce-mcp',
           serviceDisplayName: 'Salesforce MCP',
           actionId: 'salesforce.query',
+        }),
+      ]),
+    });
+  });
+
+  it('includes authored output schemas in the action catalog', async () => {
+    const actionsRes = await app.fetch(new Request('http://localhost/actions?service=github'), env);
+
+    expect(actionsRes.status).toBe(200);
+    await expect(actionsRes.json()).resolves.toMatchObject({
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          service: 'github',
+          actionId: 'github.list_issues',
+          outputSchema: expect.objectContaining({
+            type: 'array',
+            items: expect.objectContaining({
+              type: 'object',
+              properties: expect.objectContaining({
+                number: expect.objectContaining({ type: 'number' }),
+                title: expect.objectContaining({ type: 'string' }),
+              }),
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          service: 'github',
+          actionId: 'github.list_workflows',
+          outputSchema: expect.objectContaining({
+            type: 'object',
+            properties: expect.objectContaining({
+              workflows: expect.objectContaining({
+                type: 'array',
+                items: expect.objectContaining({
+                  type: 'object',
+                  properties: expect.objectContaining({
+                    id: expect.objectContaining({ type: 'number' }),
+                    name: expect.objectContaining({ type: 'string' }),
+                    path: expect.objectContaining({ type: 'string' }),
+                    state: expect.objectContaining({ type: 'string' }),
+                  }),
+                }),
+              }),
+            }),
+          }),
         }),
       ]),
     });

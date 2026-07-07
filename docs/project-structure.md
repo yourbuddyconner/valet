@@ -34,8 +34,7 @@ valet/
 │   └── start.sh
 ├── docs/                      # Documentation
 ├── V1.md                      # Full architecture spec
-├── Makefile                   # Dev, test, deploy commands
-└── .beans/                    # Task tracking
+└── Makefile                   # Dev, test, deploy commands
 ```
 
 ## Tech Stack

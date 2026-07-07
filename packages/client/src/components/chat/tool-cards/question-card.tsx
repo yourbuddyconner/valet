@@ -20,6 +20,7 @@ export function QuestionCard({ tool }: { tool: ToolCallData }) {
       icon={<QuestionIcon className="h-3.5 w-3.5" />}
       label="question"
       status={tool.status}
+      tool={tool}
       defaultExpanded
       summary={
         summaryText ? (

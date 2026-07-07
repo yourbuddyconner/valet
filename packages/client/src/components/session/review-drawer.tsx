@@ -115,9 +115,9 @@ export function ReviewDrawer({ sessionId }: ReviewDrawerProps) {
       )}
 
       {state === 'complete' && review && (
-        <div className="flex min-h-0 flex-1">
-          {/* File list sidebar */}
-          <div className="w-56 shrink-0 border-r border-neutral-200 dark:border-neutral-800">
+        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+          {/* File list sidebar — capped top strip on mobile, side column on md+ */}
+          <div className="max-h-40 w-full shrink-0 overflow-y-auto border-b border-neutral-200 md:max-h-none md:w-56 md:overflow-visible md:border-b-0 md:border-r dark:border-neutral-800">
             <ReviewFileList
               files={review.files}
               selectedFile={selectedFile}

@@ -1,74 +1,80 @@
 ---
-title: Workspaces
-description: Understand the hosted place where Valet keeps task details, connected tools, files, drafts, and progress.
+title: The workspace sandbox
+description: Every session runs in an isolated Linux sandbox with a real file system, editor, terminal, and desktop — and a place files move in and out.
 ---
 
-import { FeatureCard } from '/snippets/feature-card.mdx';
 import { MascotNote } from '/snippets/mascot-note.mdx';
 
-Valet has a workspace for the work it does. The workspace is where Valet keeps task details, uses connected tools, prepares drafts, and continues from previous progress.
+When Valet needs to do more than talk — run code, edit files, open a browser, produce a document — it works inside a **sandbox**: an isolated Linux environment with its own file system, dedicated to one [session](/product/sessions). This page explains what the sandbox is, how you look inside it, and how files move in and out.
 
 <MascotNote
-  title="Workspace"
-  heading="Valet keeps the work together"
+  title="Sandbox"
+  heading="A real computer, scoped to one session"
   image="/images/characters/laptop.png"
   alt="Valet working at a laptop"
 >
-  You do not need to manage the workspace yourself. Give Valet a clear task, connect the tools it needs, and review the work from the task thread.
+  You don't manage the sandbox yourself. It's created when a session needs one, keeps its files while the session is alive, and is thrown away when the session ends.
 </MascotNote>
 
-## What the workspace is for
+## What the sandbox is
 
-<div className="valet-doc-grid">
-  <FeatureCard
-    eyebrow="Context"
-    title="Keep the task together"
-    description="The request, follow-ups, files, drafts, tool notes, and final result stay attached to the work."
-    href="/product/tasks"
-  />
-  <FeatureCard
-    eyebrow="Tools"
-    title="Use connected systems"
-    description="Valet can work across integrations such as GitHub, Linear, Slack, Gmail, Google Workspace, Notion, and more."
-    href="/product/tools"
-  />
-  <FeatureCard
-    eyebrow="Review"
-    title="Show progress"
-    description="You can see what Valet is doing, what it found, and whether anything needs approval."
-    href="/product/approvals"
-  />
-  <FeatureCard
-    eyebrow="Continue"
-    title="Pick work back up"
-    description="A task can pause and continue later without losing the conversation."
-    href="/product/tasks"
-  />
-</div>
+Each session that needs to do real work gets its own sandbox — a container running a full dev environment. Inside it, Valet has a working directory at `/workspace` that persists for the life of the session: when a repository is involved, it's cloned into `/workspace`, and any files Valet creates or downloads live there too.
 
-## What users may see
+The sandbox is **isolated per session**. One session's sandbox can't see another's, and when a session is deleted the sandbox and its files go with it. Sessions that go idle hibernate to save resources and restore transparently when you return — the workspace files come back with them.
 
-Depending on the task, a workspace can show:
+Not every session surfaces a sandbox. A quick "summarize these issues" request answers in the thread. But engineering work, [child sessions](/product/child-sessions), and your always-on [orchestrator](/product/what-is-valet) all run on top of one.
 
-- The conversation with Valet.
-- Progress updates and questions.
-- Approval prompts.
-- Drafts, summaries, files, or notes.
-- Links to records Valet read or changed.
-- Software tools when the task is engineering work.
+## Looking inside
 
-## How to get better results
+When a session has a sandbox, its view exposes several live surfaces:
 
-- Tell Valet what outcome you want.
-- Mention the systems or documents it should use.
-- Connect missing tools before asking for multi-system work.
-- Keep sensitive work private unless collaboration is needed.
-- Use approvals for anything that writes, sends, deletes, merges, or changes customer-facing information.
-
-## Workspace examples
-
-| Work | What Valet keeps together |
+| Surface | What it is |
 | --- | --- |
-| Weekly operations summary | Source messages, notes, draft summary, approvals, and final Slack update. |
-| Customer follow-up | Account notes, open issues, draft response, and created tasks. |
-| Pull request review | Repository notes, risks, suggested changes, and final summary. |
+| **VS Code** | The full web editor (code-server), open on the workspace directory. |
+| **Terminal** | A real shell in the workspace — run commands, inspect output. |
+| **Files** | A browser for the workspace file tree: open, preview, and download individual files. |
+| **Desktop** | A virtual desktop (VNC) where Valet can drive a browser or GUI apps. |
+| **Logs** | The session's runtime logs, for when something misbehaves. |
+| **Review** | Changes Valet has prepared, gathered for you to look over. |
+
+These are windows into the same sandbox — the file you see in the Files browser is the file VS Code edits and the terminal operates on.
+
+## Getting files in
+
+You can hand Valet a file two ways, and both land in the same place:
+
+- **Attach it in a message.** Drag a file into the chat input, or attach it in a channel.
+- **Send it through a channel.** Files and images you send Valet in Slack or Telegram come across with the message.
+
+What happens next depends on the file type:
+
+- **Text files** (code, `.md`, `.csv`, `.json`, …) are read directly into the conversation, so Valet works from their contents.
+- **Images** are passed to the model as vision — Valet sees the picture, so "what's wrong in this screenshot?" works.
+- **PDFs and documents** are saved into the workspace under `.valet/attachments/` and, where possible, given an extracted-text companion, so Valet can open the real file instead of guessing from a summary.
+- **Audio / voice notes** are transcribed to text.
+
+<Note>
+  Channel uploads have size limits — for Slack, images up to 10 MB and other files up to 25 MB. Larger files won't come through; share them another way (for example, a link Valet can fetch, or a connected Drive).
+</Note>
+
+So when you drop a screenshot into a Slack thread the orchestrator is in, it reaches the agent — as vision for images, or as a saved file in the workspace for documents.
+
+## Getting files out
+
+Anything in the workspace can come back to you:
+
+- **Download from the Files browser.** Open the **Files** surface, find the file, and download it to your machine — text files, generated reports, exported data, whatever Valet produced.
+- **Ask Valet to deliver it.** For most work the cleaner path is to have Valet put the result where it belongs — commit it to a pull request, attach it to a Gmail draft, write it to a Google Doc, post it in Slack — using its [connected tools](/product/tools). The sandbox is where the work happens; the connected systems are where the results live.
+
+Sessions also keep durable artifacts, so a file Valet produced is retrievable after the fact rather than trapped in a sandbox that's since hibernated.
+
+## Good habits
+
+- Point Valet at specific files by pasting a path or a link rather than describing them.
+- For anything that should outlive the session, ask Valet to deliver it to a connected system — don't leave the only copy in the sandbox.
+- Keep sensitive files in [private sessions](/product/access); anyone who can view a session can inspect its workspace.
+- Use [approvals](/product/approvals) to gate actions that push workspace files outward — commits, sends, uploads.
+
+## Under the hood
+
+The sandbox boot sequence, the `/workspace` volume, the auth gateway that fronts VS Code and the terminal, and hibernation/restore are covered in the engineering reference: [sandbox lifecycle](/engineering/sandbox-lifecycle) and [session lifecycle](/engineering/session-lifecycle).

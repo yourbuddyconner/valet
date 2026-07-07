@@ -21,6 +21,9 @@ import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
 import { filterChildSessionEventsForThread, getEffectiveActiveThreadId } from './thread-selection';
 import { getPendingResponseRequiredThreadIds, selectVisibleInteractivePrompts } from '@/lib/approval-prompts';
+import { getBuildChrome } from '@/lib/build-info';
+import { cn } from '@/lib/cn';
+import { BuildBadge } from '@/components/layout/build-badge';
 
 const InteractivePromptCard = lazy(async () => {
   const mod = await import('@/components/session/interactive-prompt-card');
@@ -77,6 +80,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   const router = useRouter();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  const buildChrome = getBuildChrome();
   // Use the route-level param for navigations so the URL stays stable
   // (e.g. "/sessions/orchestrator" instead of "/sessions/orchestrator:user-1:abc").
   const navSessionId = routeSessionId ?? sessionId;
@@ -87,6 +91,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   const wakeMutation = useWakeSession();
   const drawer = useDrawer();
   const authUser = useAuthStore((s) => s.user);
+  const orgModelPreferences = useAuthStore((s) => s.orgModelPreferences);
   const {
     messages,
     historyReady,
@@ -119,14 +124,18 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
 	    integrationAuthErrors,
     dismissIntegrationAuth,
     loadThreadMessages,
-    pendingFollowup,
+    pendingFollowup: pendingFollowupGlobal,
+    threadPendingFollowups,
     agentStatusThreadId,
+    threadStatuses,
     queueWithdraw,
     queuePromote,
     queueReplace,
   } = useChat(sessionId);
   const queueModePreference = (authUser?.uiQueueMode ?? 'followup') as QueueMode;
-  const isDispatchBusy = isAgentThinking
+  // Session-wide busy fallback; the per-thread version is computed lower
+  // after activeThreadStatus is known and used for dispatch decisions.
+  const isSessionBusy = isAgentThinking
     || agentStatus === 'thinking'
     || agentStatus === 'tool_calling'
     || agentStatus === 'streaming'
@@ -172,10 +181,34 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     ? (localThreadId ?? serverActiveThread?.id ?? null)
     : getEffectiveActiveThreadId(initialThreadId, serverActiveThread?.id);
 
+  // Per-thread followup tracking (TKAI-65): use the active thread's entry,
+  // falling back to the legacy global slot when the session has no thread
+  // scoping yet. Concurrent threads each show their own queued followup.
+  const pendingFollowup = activeThreadId
+    ? (threadPendingFollowups[activeThreadId] ?? null)
+    : pendingFollowupGlobal;
+
   // Scope pending followup & thinking indicator to the active thread
   const pendingIsForOtherThread = !!pendingFollowup?.threadId && pendingFollowup.threadId !== activeThreadId;
   const pendingIsForThisThread = !!pendingFollowup && !pendingIsForOtherThread;
-  const isAgentThinkingInThread = isAgentThinking && (!agentStatusThreadId || agentStatusThreadId === activeThreadId);
+  // Prefer per-thread status (tracks every in-flight thread independently);
+  // fall back to the legacy global status when no thread-scoped entry exists
+  // yet (e.g. very first agent event of the session, or non-thread channels).
+  const activeThreadStatusEntry = activeThreadId ? threadStatuses[activeThreadId] : undefined;
+  const activeThreadStatus = activeThreadStatusEntry?.status
+    ?? (!agentStatusThreadId || agentStatusThreadId === activeThreadId ? agentStatus : 'idle');
+  const activeThreadStatusDetail = activeThreadStatusEntry?.detail
+    ?? (!agentStatusThreadId || agentStatusThreadId === activeThreadId ? agentStatusDetail : undefined);
+  const isAgentThinkingInThread =
+    activeThreadStatus === 'thinking'
+    || activeThreadStatus === 'tool_calling'
+    || activeThreadStatus === 'streaming'
+    || activeThreadStatus === 'queued';
+
+  // Per-thread dispatch busy — gates whether handleSendMessage should
+  // queueReplace / queuePromote (which target the ACTIVE thread's pending
+  // followup, not whichever thread happens to be busy session-wide).
+  const isDispatchBusy = activeThreadId ? isAgentThinkingInThread : isSessionBusy;
 
   const selectThread = useCallback(
     (threadId: string) => {
@@ -260,14 +293,23 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   );
 
   const handleAbort = useCallback(() => {
-    abort();
-  }, [abort]);
+    // Scope the abort to the active thread so concurrent cross-thread turns
+    // on the same session aren't all killed by a single Stop click.
+    if (activeThreadId) {
+      abort('thread', activeThreadId);
+    } else {
+      abort();
+    }
+  }, [abort, activeThreadId]);
 
   const handleCommand = useCallback(
     (command: string, args?: string) => {
-      executeCommand(command, args);
+      // Forward the active thread so /stop and other channel-scoped slash
+      // commands target the user's current thread instead of going session-
+      // wide and killing concurrent thread turns.
+      executeCommand(command, args, undefined, undefined, activeThreadId ?? undefined);
     },
-    [executeCommand]
+    [executeCommand, activeThreadId]
   );
 
   // Promote pending followup (dispatch immediately as steer)
@@ -329,7 +371,15 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   });
   const isTerminated = isFinalSessionStatus(sessionStatus);
   const isDisabled = !isConnected || isTerminated;
-  const isAgentActive = (isAgentThinking && agentStatus !== 'queued') || agentStatus === 'thinking' || agentStatus === 'tool_calling' || agentStatus === 'streaming';
+  // Stop button + Escape handler key off the ACTIVE thread's status — not
+  // the session-wide latest — so concurrent cross-thread turns each render
+  // their own stop control independently. Include 'queued' so the user can
+  // withdraw an optimistically-queued prompt before the runner picks it up.
+  const isAgentActive =
+    activeThreadStatus === 'thinking'
+    || activeThreadStatus === 'tool_calling'
+    || activeThreadStatus === 'streaming'
+    || activeThreadStatus === 'queued';
   const displaySessionStatus = getDisplaySessionStatus({
     sessionStatus,
     connectionStatus,
@@ -359,7 +409,13 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     <div className="flex h-full flex-col">
       {/* Header — Title bar */}
       {!hideChrome && (
-        <header className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-surface-0 px-3 dark:bg-surface-0">
+        <header
+          className={cn(
+            'relative flex h-10 shrink-0 items-center justify-between border-b px-3',
+            buildChrome.headerClassName
+          )}
+        >
+          <span className={cn('absolute inset-x-0 top-0 h-0.5', buildChrome.topBarClassName)} />
           <div className="flex min-w-0 items-center gap-2">
             <Button variant="ghost" size="sm" className="h-6 px-1.5 text-neutral-400 hover:text-neutral-700 dark:text-neutral-500 dark:hover:text-neutral-200" onClick={() => session?.isOrchestrator ? navigate({ to: '/orchestrator' }) : router.history.back()}>
               <BackIcon className="h-3.5 w-3.5" />
@@ -400,7 +456,8 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
               <StuckWakingRestart sessionId={sessionId} />
             )}
           </div>
-          <div className="flex items-center gap-0.5">
+          <div className="flex shrink-0 items-center gap-1">
+            <BuildBadge compact className="max-w-[7.25rem] sm:max-w-none" />
             {canShareSession && (
               <Button
                 variant="ghost"
@@ -499,7 +556,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
         <ChatSkeleton />
       ) : (
         <div className="flex min-h-0 flex-1 flex-row">
-          {isOrchestrator && (
+          {isOrchestrator && !isMobile && (
             <Suspense fallback={<ThreadSidebarFallback />}>
               <ThreadSidebar
                 sessionId={sessionId}
@@ -515,8 +572,8 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
             <MessageList
               messages={filteredMessages}
               isAgentThinking={isAgentThinkingInThread}
-              agentStatus={agentStatus}
-              agentStatusDetail={agentStatusDetail}
+              agentStatus={activeThreadStatus}
+              agentStatusDetail={activeThreadStatusDetail}
               onRevert={revertMessage}
               childSessionEvents={filteredChildSessionEvents}
               childSessions={childSessions}
@@ -600,6 +657,8 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                 : 'Ask or build anything...'
             }
             availableModels={availableModels}
+            userModelPreferences={authUser?.modelPreferences}
+            orgModelPreferences={orgModelPreferences}
             selectedModel={selectedModel}
             onModelChange={setSelectedModel}
             onAbort={handleAbort}

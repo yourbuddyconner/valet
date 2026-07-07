@@ -1,20 +1,20 @@
 ---
 title: Software engineering workflow
-description: How Valet works on a repository — branches, pull requests, CI, approvals, review packets, and recovery from interrupted sessions.
+description: How Valet works on a repository — branches, pull requests, CI, approvals, and recovery from interrupted sessions.
 ---
 
 import { FeatureCard } from '/snippets/feature-card.mdx';
 import { MascotNote } from '/snippets/mascot-note.mdx';
 
-Valet can act like an engineering teammate. Give it a task in your repo and it clones the code into a sandbox, works on a branch, runs checks, and opens or updates a pull request. This page walks through how that workflow actually runs so you know what to expect, what is safe, and how to recover when something goes wrong.
+Valet can act like an engineering teammate. Ask it to work on your repo and it clones the code into a sandbox, works on a branch, runs checks, and opens or updates a pull request. This page walks through how that workflow actually runs so you know what to expect, what is safe, and how to recover when something goes wrong.
 
 <MascotNote
   title="Two layers"
-  heading="Talk in the task. Code in the child."
+  heading="Talk in the session. Code in the child."
   image="/images/characters/laptop.png"
   alt="Valet working at a laptop"
 >
-  The repo work happens inside a [child session](/product/child-sessions). You stay in the task thread, watch progress, approve sensitive steps, and review the PR when it is ready.
+  The repo work happens inside a [child session](/product/child-sessions). You stay in the session, watch progress, approve sensitive steps, and review the PR when it is ready.
 </MascotNote>
 
 ## How Valet works on a repo
@@ -29,7 +29,7 @@ When you ask Valet to change code, it:
 6. Edits files, commits, and pushes the working branch to the remote.
 7. Opens a pull request from the working branch into the base branch, or updates an existing one if you pointed it at one.
 
-The orchestrator task thread shows what the child is doing. The pull request is the durable output.
+The orchestrator session shows what the child is doing. The pull request is the durable output.
 
 ## Branch and pull request policy
 
@@ -39,9 +39,9 @@ Valet follows a consistent branch and PR policy so its changes are easy to revie
 - Valet creates or reuses a **separate working branch** for its commits. It does not commit directly to your base branch.
 - Valet opens or updates a **pull request** from the working branch into the base branch.
 - If you asked Valet to update an existing PR, it pushes new commits to that PR's branch rather than creating a new one.
-- A task is not considered done until the branch is pushed and the PR exists (or you explicitly said no PR is needed).
+- A session is not considered done until the branch is pushed and the PR exists (or you explicitly said no PR is needed).
 
-If the push or PR step fails — for example, because of an auth issue or a remote conflict — Valet treats the task as incomplete and surfaces the blocker in the task thread instead of claiming success.
+If the push or PR step fails — for example, because of an auth issue or a remote conflict — Valet treats the session as incomplete and surfaces the blocker in the session instead of claiming success.
 
 ## CI and checks
 
@@ -51,16 +51,10 @@ Valet pushes to a real branch, so your normal CI runs against its commits just l
 | --- | --- |
 | Before opening a PR | Reads the files, plans the change, and runs any quick checks it can run inside the sandbox. |
 | After pushing | Lets your CI run on the PR. |
-| On CI failure | Reports the failure in the task thread and can attempt a fix in the same working branch. |
+| On CI failure | Reports the failure in the session and can attempt a fix in the same working branch. |
 | On CI success | Reports the green status and waits for human review and merge. |
 
 Valet does not bypass required checks or branch protection. If your repo requires reviews, signed commits, or status checks before merge, those rules still apply.
-
-## Reviews before pull requests (optional)
-
-Some teams prefer an internal review pass before a PR is opened on the public repo. Valet supports a review-packet workflow where a structured summary of the diff is shared for human review first, and only then promoted to a real pull request.
-
-This is a workflow option, not a requirement. Default behavior is straight to a PR. If your org uses the review-packet flow, your admin or your project conventions will tell you when to expect it.
 
 ## Approvals on sensitive actions
 
@@ -71,7 +65,7 @@ Pushing code, opening a PR, and merging are sensitive operations. Valet respects
 - Merging a pull request.
 - Force-pushing or deleting a branch.
 
-If an approval is required and you cancel it, Valet stops at that step and reports what is still pending in the task thread.
+If an approval is required and you cancel it, Valet stops at that step and reports what is still pending in the session.
 
 ## Recovering from interrupted sessions
 
@@ -79,19 +73,19 @@ This is the most important rule for safe coding work in Valet:
 
 **Push early. Un-pushed work in a child session can be lost.**
 
-A child session is a live sandbox. If it ends — because the task finished, because it timed out, because you cancelled it, or because the platform recovered it — anything that was only on disk inside that sandbox may not come back. Once a commit is pushed to your git remote, it is safe. Until then, it is only in the sandbox.
+A child session is a live sandbox. If it ends — because the session finished, because it timed out, because you cancelled it, or because the platform recovered it — anything that was only on disk inside that sandbox may not come back. Once a commit is pushed to your git remote, it is safe. Until then, it is only in the sandbox.
 
 In practice:
 
 - Ask Valet to commit and push as soon as a piece of work is in a sensible state, not only at the end.
 - If a session ends unexpectedly, check the branch on your remote first — Valet may have already pushed the work.
-- If the branch is not on the remote, the change is most likely unrecoverable. Start the task again rather than waiting for the sandbox to be restored.
+- If the branch is not on the remote, the change is most likely unrecoverable. Start the session again rather than waiting for the sandbox to be restored.
 
 This is why repo work runs in [child sessions](/product/child-sessions) in the first place: the sandbox is meant to be disposable. Your source of truth is your git remote and the PR.
 
-## What you see in the task thread
+## What you see in the session
 
-Even though the real work is in a child session, the task thread should always show:
+Even though the real work is in a child session, the session should always show:
 
 - Which repo and base branch Valet is working on.
 - The current working branch.
@@ -113,7 +107,7 @@ If something is missing, ask Valet to summarize what it has done and where the w
   <FeatureCard
     eyebrow="When things go wrong"
     title="Troubleshooting"
-    description="Recovery steps when a task gets stuck, a session ends early, or a PR step fails."
+    description="Recovery steps when a session gets stuck, ends early, or a PR step fails."
     href="/product/troubleshooting"
   />
 </div>

@@ -427,6 +427,24 @@ export class MessageStore {
   }
 
   /**
+   * Find the active turn matching an OpenCode session id. A tool call coming
+   * back from OpenCode arrives with an `opencodeSessionId`; the assistant
+   * turn that triggered the call is the active turn with the matching
+   * metadata. Returns null if no active turn for this session.
+   *
+   * If multiple active turns share the same `opencodeSessionId` (shouldn't
+   * happen in practice — OpenCode dispatches one turn per session at a time)
+   * the most recently inserted one wins.
+   */
+  findActiveTurnByOcSession(ocSessionId: string): string | null {
+    let match: string | null = null;
+    for (const [turnId, turn] of this.activeTurns) {
+      if (turn.metadata.opencodeSessionId === ocSessionId) match = turnId;
+    }
+    return match;
+  }
+
+  /**
    * Recover a turn from SQLite after DO hibernation wipes in-memory state.
    * Re-adds to activeTurns. Returns the snapshot if found.
    */

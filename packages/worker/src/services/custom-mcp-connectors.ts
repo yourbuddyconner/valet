@@ -4,6 +4,8 @@ import {
   type CreateCustomMcpConnectorRequest,
   type UpdateCustomMcpConnectorRequest,
   type CustomMcpConnectorAuthType,
+  type CustomMcpConnectorApiKeyPlacement,
+  type CustomMcpConnectorCredentialScope,
   type CustomMcpConnectorTokenEndpointAuthMethod,
 } from '@valet/shared';
 import { and, eq, sql } from 'drizzle-orm';
@@ -19,7 +21,7 @@ import {
   updateConnector,
 } from '../lib/db/custom-mcp-connectors.js';
 import { listMcpToolCache } from '../lib/db/mcp-tool-cache.js';
-import { customMcpConnectors, mcpOauthClients, mcpToolCache } from '../lib/schema/index.js';
+import { credentials, customMcpConnectors, integrations, mcpOauthClients, mcpToolCache } from '../lib/schema/index.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { validateOutboundUrl } from './outbound-url-policy.js';
 import { createSafeFetchOutbound } from './safe-fetch-outbound.js';
@@ -32,13 +34,21 @@ export interface ResolvedCustomMcpConnector {
   displayName: string;
   serverUrl: string;
   authType: CustomMcpConnectorAuthType;
+  credentialScope: CustomMcpConnectorCredentialScope;
   oauthClientId: string | null;
   oauthTokenEndpointAuthMethod: CustomMcpConnectorTokenEndpointAuthMethod;
   oauthScopes: string | null;
   oauthAuthorizationEndpoint: string | null;
   oauthTokenEndpoint: string | null;
+  apiKeyPlacement: CustomMcpConnectorApiKeyPlacement;
+  apiKeyHeaderName: string | null;
+  apiKeyPrefix: string | null;
+  apiKeyQueryParam: string | null;
   additionalHeaders?: Record<string, string>;
   staticAuthHeader?: { name: string; value: string };
+  staticAuthQueryParam?: { name: string; value: string };
+  tokenAuthHeader?: { name: string; prefix?: string | null };
+  authQueryParam?: string;
 }
 
 export interface CustomMcpConnectorContext {
@@ -67,6 +77,7 @@ type ConnectorRow = typeof customMcpConnectors.$inferSelect;
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const QUERY_PARAM_NAME_RE = /^[A-Za-z0-9._~-]{1,128}$/;
 const PROTECTED_ADDITIONAL_HEADERS = new Set([
   'authorization',
   'content-type',
@@ -243,6 +254,11 @@ export async function updateCustomMcpConnector(
   });
 
   const update = await buildUpdateData(env, existing, input);
+  const previousUserCredentialType = userCredentialTypeForConnector(existing);
+  const nextUserCredentialType = userCredentialTypeForConnector({
+    authType: nextAuthType,
+    credentialScope: update.credentialScope as CustomMcpConnectorCredentialScope,
+  });
   const nextOauthClientId = typeof update.oauthClientId === 'string' ? update.oauthClientId : null;
   const shouldInvalidateToolCache = existing.serverUrl !== nextServerUrl
     || existing.authType !== nextAuthType
@@ -250,13 +266,18 @@ export async function updateCustomMcpConnector(
     || input.additionalHeaders !== undefined
     || input.clearAdditionalHeaders === true
     || input.apiKey !== undefined
+    || input.credentialScope !== undefined
+    || input.apiKeyPlacement !== undefined
     || input.oauthClientId !== undefined
     || input.oauthClientSecret !== undefined
     || input.clearClientSecret === true
     || input.oauthAuthorizationEndpoint !== undefined
     || input.oauthTokenEndpoint !== undefined
     || input.oauthScopes !== undefined
-    || input.oauthTokenEndpointAuthMethod !== undefined;
+    || input.oauthTokenEndpointAuthMethod !== undefined
+    || input.apiKeyHeaderName !== undefined
+    || input.apiKeyPrefix !== undefined
+    || input.apiKeyQueryParam !== undefined;
   const shouldInvalidateOAuthClient = existing.serverUrl !== nextServerUrl
     || existing.authType !== nextAuthType
     || existing.oauthClientId !== nextOauthClientId;
@@ -267,6 +288,9 @@ export async function updateCustomMcpConnector(
   }
   if (shouldInvalidateOAuthClient) {
     await deleteMcpOAuthClientForService(db, existing.serviceSlug);
+  }
+  if (previousUserCredentialType !== nextUserCredentialType) {
+    await deleteUserConnectionsForService(db, existing.serviceSlug);
   }
   return connector;
 }
@@ -287,7 +311,7 @@ export async function deleteCustomMcpConnectorCascade(
     d1.prepare('DELETE FROM mcp_oauth_clients WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM disabled_actions WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM action_policies WHERE service = ?').bind(service),
-    d1.prepare('DELETE FROM user_action_policy_overrides WHERE service = ?').bind(service),
+    d1.prepare('DELETE FROM runtime_grants WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM custom_mcp_connectors WHERE id = ?').bind(id),
   ]);
 }
@@ -300,7 +324,8 @@ async function resolveConnectorRow(
     ? validateAdditionalHeaders(JSON.parse(await decryptString(row.encryptedAdditionalHeaders, env.ENCRYPTION_KEY)) as Record<string, string>)
     : undefined;
 
-  const staticAuthHeader = await resolveStaticAuthHeader(env, row, additionalHeaders);
+  const staticAuth = await resolveStaticAuth(env, row, additionalHeaders);
+  const userAuth = resolveUserCredentialAuth(row, additionalHeaders);
 
   return {
     id: row.id,
@@ -309,27 +334,42 @@ async function resolveConnectorRow(
     displayName: row.displayName,
     serverUrl: row.serverUrl,
     authType: row.authType,
+    credentialScope: row.credentialScope,
     oauthClientId: row.oauthClientId,
     oauthTokenEndpointAuthMethod: row.oauthTokenEndpointAuthMethod,
     oauthScopes: row.oauthScopes,
     oauthAuthorizationEndpoint: row.oauthAuthorizationEndpoint,
     oauthTokenEndpoint: row.oauthTokenEndpoint,
+    apiKeyPlacement: row.apiKeyPlacement,
+    apiKeyHeaderName: row.apiKeyHeaderName,
+    apiKeyPrefix: row.apiKeyPrefix,
+    apiKeyQueryParam: row.apiKeyQueryParam,
     additionalHeaders,
-    staticAuthHeader,
+    staticAuthHeader: staticAuth.staticAuthHeader,
+    staticAuthQueryParam: staticAuth.staticAuthQueryParam,
+    tokenAuthHeader: userAuth.tokenAuthHeader,
+    authQueryParam: userAuth.authQueryParam,
   };
 }
 
-async function resolveStaticAuthHeader(
+async function resolveStaticAuth(
   env: Pick<Env, 'ENCRYPTION_KEY'>,
   row: ConnectorRow,
   additionalHeaders?: Record<string, string>,
-): Promise<{ name: string; value: string } | undefined> {
-  if (row.authType !== 'api_key' && row.authType !== 'bearer') return undefined;
+): Promise<{ staticAuthHeader?: { name: string; value: string }; staticAuthQueryParam?: { name: string; value: string } }> {
+  if (row.authType !== 'api_key' && row.authType !== 'bearer') return {};
+  if (row.credentialScope === 'user') return {};
   if (!row.encryptedApiKey) {
     throw new ValidationError(`Custom connector "${row.serviceSlug}" is missing its API key.`);
   }
 
   const secret = await decryptString(row.encryptedApiKey, env.ENCRYPTION_KEY);
+  if (row.authType === 'api_key' && row.apiKeyPlacement === 'query') {
+    const name = row.apiKeyQueryParam || '';
+    validateQueryParamName(name);
+    return { staticAuthQueryParam: { name, value: secret } };
+  }
+
   const name = row.authType === 'bearer' ? 'Authorization' : row.apiKeyHeaderName || 'X-API-Key';
   const prefix = row.authType === 'bearer' ? 'Bearer' : row.apiKeyPrefix || '';
   validateStaticAuthHeaderName(name);
@@ -339,10 +379,34 @@ async function resolveStaticAuthHeader(
     throw new ValidationError(`Custom connector "${row.serviceSlug}" has duplicate static header "${name}".`);
   }
 
-  return {
-    name,
-    value: prefix ? `${prefix} ${secret}` : secret,
-  };
+  return { staticAuthHeader: { name, value: prefix ? `${prefix} ${secret}` : secret } };
+}
+
+function resolveUserCredentialAuth(
+  row: ConnectorRow,
+  additionalHeaders?: Record<string, string>,
+): { tokenAuthHeader?: { name: string; prefix?: string | null }; authQueryParam?: string } {
+  if (row.authType !== 'api_key' && row.authType !== 'bearer') return {};
+  if (row.credentialScope !== 'user') return {};
+  if (row.encryptedApiKey) {
+    throw new ValidationError(`User-scoped custom connector "${row.serviceSlug}" must not store an org API key.`);
+  }
+
+  if (row.authType === 'api_key' && row.apiKeyPlacement === 'query') {
+    const name = row.apiKeyQueryParam || '';
+    validateQueryParamName(name);
+    return { authQueryParam: name };
+  }
+
+  const name = row.authType === 'bearer' ? 'Authorization' : row.apiKeyHeaderName || 'X-API-Key';
+  const prefix = row.authType === 'bearer' ? 'Bearer' : row.apiKeyPrefix ?? null;
+  validateStaticAuthHeaderName(name);
+  validateHeaderValue(name, prefix ?? '');
+  if (additionalHeaders && Object.keys(additionalHeaders).some((header) => header.toLowerCase() === name.toLowerCase())) {
+    throw new ValidationError(`Custom connector "${row.serviceSlug}" has duplicate token auth header "${name}".`);
+  }
+
+  return { tokenAuthHeader: { name, prefix } };
 }
 
 function validateAdditionalHeaders(headers: Record<string, string>): Record<string, string> {
@@ -387,6 +451,12 @@ function validateHeaderValue(name: string, value: string): void {
   }
 }
 
+function validateQueryParamName(name: string): void {
+  if (!QUERY_PARAM_NAME_RE.test(name)) {
+    throw new ValidationError(`Invalid auth query parameter name "${name}".`);
+  }
+}
+
 async function validateConfiguredUrls(input: {
   serverUrl: string;
   authType: CustomMcpConnectorAuthType;
@@ -404,7 +474,8 @@ async function buildCreateData(
   input: CreateCustomMcpConnectorRequest,
   options: ConnectorServiceOptions,
 ) {
-  const auth = await normalizeAuthFields(env, input.authType, input, null, input.serverUrl);
+  const credentialScope = normalizeCredentialScope(input.authType, input.credentialScope, null);
+  const auth = await normalizeAuthFields(env, input.authType, credentialScope, input, null, input.serverUrl);
   const encryptedAdditionalHeaders = await encryptAdditionalHeaders(env, input.additionalHeaders);
   return {
     orgId: options.orgId ?? 'default',
@@ -412,6 +483,7 @@ async function buildCreateData(
     displayName: input.displayName.trim(),
     serverUrl: input.serverUrl,
     authType: input.authType,
+    credentialScope,
     ...auth,
     encryptedAdditionalHeaders,
     status: input.status ?? 'active',
@@ -425,12 +497,14 @@ async function buildUpdateData(
   input: UpdateCustomMcpConnectorRequest,
 ) {
   const effectiveAuthType = input.authType ?? existing.authType;
+  const effectiveCredentialScope = normalizeCredentialScope(effectiveAuthType, input.credentialScope, existing);
   const effectiveServerUrl = input.serverUrl ?? existing.serverUrl;
-  const auth = await normalizeAuthFields(env, effectiveAuthType, input, existing, effectiveServerUrl);
+  const auth = await normalizeAuthFields(env, effectiveAuthType, effectiveCredentialScope, input, existing, effectiveServerUrl);
   const update: Record<string, unknown> = {
     displayName: input.displayName?.trim() ?? existing.displayName,
     serverUrl: input.serverUrl ?? existing.serverUrl,
     authType: effectiveAuthType,
+    credentialScope: effectiveCredentialScope,
     ...auth,
   };
 
@@ -448,6 +522,7 @@ async function buildUpdateData(
 async function normalizeAuthFields(
   env: Pick<Env, 'ENCRYPTION_KEY'>,
   authType: CustomMcpConnectorAuthType,
+  credentialScope: CustomMcpConnectorCredentialScope,
   input: CreateCustomMcpConnectorRequest | UpdateCustomMcpConnectorRequest,
   existing: ConnectorRow | null,
   serverUrl: string,
@@ -461,8 +536,10 @@ async function normalizeAuthFields(
       oauthAuthorizationEndpoint: null,
       oauthTokenEndpoint: null,
       encryptedApiKey: null,
+      apiKeyPlacement: 'header' as const,
       apiKeyHeaderName: null,
       apiKeyPrefix: null,
+      apiKeyQueryParam: null,
     };
   }
 
@@ -483,8 +560,10 @@ async function normalizeAuthFields(
         oauthAuthorizationEndpoint: null,
         oauthTokenEndpoint: null,
         encryptedApiKey: null,
+        apiKeyPlacement: 'header' as const,
         apiKeyHeaderName: null,
         apiKeyPrefix: null,
+        apiKeyQueryParam: null,
       };
     }
 
@@ -537,26 +616,56 @@ async function normalizeAuthFields(
       oauthAuthorizationEndpoint: authorizationEndpoint,
       oauthTokenEndpoint: tokenEndpoint,
       encryptedApiKey: null,
+      apiKeyPlacement: 'header' as const,
       apiKeyHeaderName: null,
       apiKeyPrefix: null,
+      apiKeyQueryParam: null,
     };
   }
 
   const secret = 'apiKey' in input ? input.apiKey?.trim() : undefined;
-  let encryptedApiKey = existing?.authType === authType ? existing.encryptedApiKey : null;
+  let encryptedApiKey = existing?.authType === authType && existing.credentialScope === credentialScope ? existing.encryptedApiKey : null;
   if (secret) {
+    if (credentialScope === 'user') {
+      throw new ValidationError('User-scoped API key and bearer connectors do not store an org secret.');
+    }
     encryptedApiKey = await encryptString(secret, env.ENCRYPTION_KEY);
   }
-  if (!encryptedApiKey) {
+  if (credentialScope === 'org' && !encryptedApiKey) {
     throw new ValidationError('API key and bearer connectors require a secret.');
   }
+  if (credentialScope === 'user') {
+    encryptedApiKey = null;
+  }
 
-  const apiKeyHeaderName = authType === 'bearer' ? 'Authorization' : input.apiKeyHeaderName || existing?.apiKeyHeaderName || 'X-API-Key';
-  const apiKeyPrefix = authType === 'bearer' ? 'Bearer' : input.apiKeyPrefix ?? existing?.apiKeyPrefix ?? null;
-  validateStaticAuthHeaderName(apiKeyHeaderName);
-  validateHeaderValue(apiKeyHeaderName, apiKeyPrefix ?? '');
-  if (secret) {
-    validateHeaderValue(apiKeyHeaderName, apiKeyPrefix ? `${apiKeyPrefix} ${secret}` : secret);
+  const apiKeyPlacement = authType === 'bearer'
+    ? 'header'
+    : input.apiKeyPlacement ?? existing?.apiKeyPlacement ?? 'header';
+  const apiKeyHeaderName = authType === 'bearer'
+    ? 'Authorization'
+    : apiKeyPlacement === 'header'
+      ? input.apiKeyHeaderName || existing?.apiKeyHeaderName || 'X-API-Key'
+      : null;
+  const apiKeyPrefix = authType === 'bearer'
+    ? 'Bearer'
+    : apiKeyPlacement === 'header'
+      ? input.apiKeyPrefix ?? existing?.apiKeyPrefix ?? null
+      : null;
+  const apiKeyQueryParam = authType === 'api_key' && apiKeyPlacement === 'query'
+    ? normalizeNullableString(input.apiKeyQueryParam ?? existing?.apiKeyQueryParam)
+    : null;
+
+  if (apiKeyPlacement === 'query') {
+    if (!apiKeyQueryParam) {
+      throw new ValidationError('API-key query parameter name is required when API key placement is query.');
+    }
+    validateQueryParamName(apiKeyQueryParam);
+  } else if (apiKeyHeaderName) {
+    validateStaticAuthHeaderName(apiKeyHeaderName);
+    validateHeaderValue(apiKeyHeaderName, apiKeyPrefix ?? '');
+    if (secret) {
+      validateHeaderValue(apiKeyHeaderName, apiKeyPrefix ? `${apiKeyPrefix} ${secret}` : secret);
+    }
   }
 
   return {
@@ -567,9 +676,37 @@ async function normalizeAuthFields(
     oauthAuthorizationEndpoint: null,
     oauthTokenEndpoint: null,
     encryptedApiKey,
+    apiKeyPlacement,
     apiKeyHeaderName,
     apiKeyPrefix,
+    apiKeyQueryParam,
   };
+}
+
+function normalizeCredentialScope(
+  authType: CustomMcpConnectorAuthType,
+  requested: CustomMcpConnectorCredentialScope | undefined,
+  existing: ConnectorRow | null,
+): CustomMcpConnectorCredentialScope {
+  if (authType === 'api_key' || authType === 'bearer') {
+    return requested ?? existing?.credentialScope ?? 'org';
+  }
+  if (authType === 'oauth') return 'user';
+  return 'org';
+}
+
+function userCredentialTypeForConnector(connector: {
+  authType: CustomMcpConnectorAuthType;
+  credentialScope?: CustomMcpConnectorCredentialScope;
+}): 'oauth2' | 'api_key' | null {
+  if (connector.authType === 'oauth') return 'oauth2';
+  if ((connector.authType === 'api_key' || connector.authType === 'bearer') && connector.credentialScope === 'user') return 'api_key';
+  return null;
+}
+
+async function deleteUserConnectionsForService(db: AppDb, service: string): Promise<void> {
+  await db.delete(integrations).where(eq(integrations.service, service));
+  await db.delete(credentials).where(eq(credentials.provider, service));
 }
 
 function normalizeTokenEndpointAuthMethod(

@@ -1,4 +1,5 @@
 import type { ToolCallData } from './types';
+import { getToolSummary } from './summarize';
 
 export interface ToolCardMeta {
   label: string;
@@ -18,28 +19,48 @@ function toolBaseName(toolName: string): string {
   return toolName.toLowerCase().split('__').pop()?.split('.').pop() ?? toolName.toLowerCase();
 }
 
+/** Promote the shared summary to a meta-style ToolCardMeta. */
+function withSharedSummary(meta: ToolCardMeta, tool: ToolCallData): ToolCardMeta {
+  const shared = getToolSummary(tool);
+  if (shared && shared !== meta.summary) {
+    return { ...meta, summary: shared };
+  }
+  return meta;
+}
+
 export function getToolCardMeta(tool: ToolCallData): ToolCardMeta {
   const baseName = toolBaseName(tool.toolName);
   const args = asRecord(tool.args);
 
+  // call_tool is the orchestrator's generic dispatcher — the *real*
+  // tool being invoked is in args.tool_id, plus an optional result
+  // count. The shared summarizer assembles both.
+  if (baseName === 'call_tool') {
+    return withSharedSummary({ label: 'call_tool' }, tool);
+  }
+
+  // Labels are kept in lowercase to match the specialized card labels —
+  // when the specialized chunk lazy-loads, the Suspense fallback (the
+  // summary card) and the specialized card show the same label, so the
+  // header doesn't visibly morph during load.
   switch (baseName) {
     case 'read':
     case 'readfile':
       return {
-        label: 'Read',
+        label: 'read',
         summary: asString(args?.file_path) ?? asString(args?.filePath),
       };
     case 'edit':
     case 'editfile':
       return {
-        label: 'Edit',
+        label: 'edit',
         summary: asString(args?.file_path) ?? asString(args?.filePath),
       };
     case 'write':
     case 'writefile':
     case 'createfile':
       return {
-        label: 'Write',
+        label: 'write',
         summary: asString(args?.file_path) ?? asString(args?.filePath),
       };
     case 'bash':
@@ -48,7 +69,7 @@ export function getToolCardMeta(tool: ToolCallData): ToolCardMeta {
     case 'executecode':
     case 'run':
       return {
-        label: 'Bash',
+        label: 'bash',
         summary: asString(args?.description) ?? asString(args?.command),
       };
     case 'grep':
@@ -56,7 +77,7 @@ export function getToolCardMeta(tool: ToolCallData): ToolCardMeta {
     case 'ripgrep':
     case 'content_search':
       return {
-        label: 'Grep',
+        label: 'grep',
         summary: asString(args?.pattern),
       };
     case 'glob':
@@ -64,20 +85,20 @@ export function getToolCardMeta(tool: ToolCallData): ToolCardMeta {
     case 'find_files':
     case 'file_search':
       return {
-        label: 'Glob',
+        label: 'glob',
         summary: asString(args?.pattern) ?? asString(args?.path),
       };
     case 'patch':
     case 'apply_patch':
       return {
-        label: 'Patch',
+        label: 'patch',
         summary: asString(args?.file_path) ?? asString(args?.filePath),
       };
     case 'webfetch':
     case 'web_fetch':
     case 'fetch_url':
       return {
-        label: 'Fetch',
+        label: 'webfetch',
         summary: asString(args?.url),
       };
     case 'list':
@@ -85,21 +106,21 @@ export function getToolCardMeta(tool: ToolCallData): ToolCardMeta {
     case 'list_directory':
     case 'ls':
       return {
-        label: 'List',
+        label: 'ls',
         summary: asString(args?.path),
       };
     case 'question':
     case 'ask':
     case 'ask_user':
       return {
-        label: 'Question',
+        label: 'question',
         summary: asString(args?.question) ?? asString(args?.header),
       };
     case 'todowrite':
     case 'todo_write':
     case 'write_todos':
       return {
-        label: 'Todo',
+        label: 'todowrite',
         summary: 'Update todos',
       };
     case 'todoread':
@@ -107,48 +128,51 @@ export function getToolCardMeta(tool: ToolCallData): ToolCardMeta {
     case 'read_todos':
     case 'list_todos':
       return {
-        label: 'Todo',
+        label: 'todoread',
         summary: 'Read todos',
       };
     case 'lsp':
     case 'language_server':
       return {
-        label: 'LSP',
+        label: 'lsp',
         summary: asString(args?.operation) ?? asString(args?.symbol) ?? asString(args?.query),
       };
     case 'skill':
     case 'load_skill':
       return {
-        label: 'Skill',
+        label: 'skill',
         summary: asString(args?.name) ?? asString(args?.path),
       };
     case 'task':
     case 'subagent':
       return {
-        label: 'Task',
+        label: 'task',
         summary: asString(args?.description) ?? asString(args?.prompt),
       };
     case 'spawn_session':
     case 'spawnsession':
       return {
-        label: 'Session',
+        label: 'spawn_session',
         summary: 'Spawn session',
       };
     case 'send_message':
     case 'sendmessage':
       return {
-        label: 'Message',
+        label: 'send_message',
         summary: 'Send message',
       };
     case 'read_messages':
     case 'readmessages':
       return {
-        label: 'Messages',
+        label: 'read_messages',
         summary: 'Read messages',
       };
     default:
-      return {
-        label: tool.toolName,
-      };
+      // Fallback: every tool we don't have a hand-tuned card for runs
+      // through the shared summarizer so the collapsed header still
+      // shows arg + result-count above the fold. This is what makes
+      // `list_tools`, `tool_search`, `triggers.*`, etc. readable
+      // without having to expand.
+      return withSharedSummary({ label: tool.toolName }, tool);
   }
 }

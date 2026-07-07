@@ -13,14 +13,34 @@ export type AnalyticsEventRow = {
   channel: string | null;
   model: string | null;
   queue_mode: string | null;
+  // Raw five-way token breakdown from OpenCode. See SQL_BILLABLE_INPUT_EXPR /
+  // SQL_BILLABLE_OUTPUT_EXPR below for the canonical billable totals.
   input_tokens: number | null;
   output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  reasoning_tokens: number | null;
   tool_name: string | null;
   error_code: string | null;
   summary: string | null;
   actor_id: string | null;
   properties: string | null;
 };
+
+// Canonical SQL expressions for "billable input" and "billable output"
+// composed from the raw OpenCode token breakdown. Anthropic bills cache
+// reads + writes as input (at different rates) and reasoning as output.
+// Centralised here so every consumer aggregates the same way.
+export const SQL_BILLABLE_INPUT_EXPR =
+  '(COALESCE(input_tokens, 0) + COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0))';
+export const SQL_BILLABLE_OUTPUT_EXPR =
+  '(COALESCE(output_tokens, 0) + COALESCE(reasoning_tokens, 0))';
+// Same expressions but qualified with the `ae` alias for the existing
+// JOIN-against-sessions queries below.
+const AE_BILLABLE_INPUT_EXPR =
+  '(COALESCE(ae.input_tokens, 0) + COALESCE(ae.cache_read_tokens, 0) + COALESCE(ae.cache_write_tokens, 0))';
+const AE_BILLABLE_OUTPUT_EXPR =
+  '(COALESCE(ae.output_tokens, 0) + COALESCE(ae.reasoning_tokens, 0))';
 
 // ─── Batch Insert (DO flush → D1) ──────────────────────────────────────────
 
@@ -39,6 +59,9 @@ export async function batchInsertAnalyticsEvents(
     queueMode?: string | null;
     inputTokens?: number | null;
     outputTokens?: number | null;
+    cacheReadTokens?: number | null;
+    cacheWriteTokens?: number | null;
+    reasoningTokens?: number | null;
     toolName?: string | null;
     errorCode?: string | null;
     summary?: string | null;
@@ -51,8 +74,8 @@ export async function batchInsertAnalyticsEvents(
   const stmts = entries.map((entry) =>
     db.prepare(
       `INSERT OR IGNORE INTO analytics_events
-        (id, event_type, session_id, user_id, turn_id, duration_ms, created_at, channel, model, queue_mode, input_tokens, output_tokens, tool_name, error_code, summary, actor_id, properties)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (id, event_type, session_id, user_id, turn_id, duration_ms, created_at, channel, model, queue_mode, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, tool_name, error_code, summary, actor_id, properties)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       entry.id,
       entry.eventType,
@@ -66,6 +89,9 @@ export async function batchInsertAnalyticsEvents(
       entry.queueMode ?? null,
       entry.inputTokens ?? null,
       entry.outputTokens ?? null,
+      entry.cacheReadTokens ?? null,
+      entry.cacheWriteTokens ?? null,
+      entry.reasoningTokens ?? null,
       entry.toolName ?? null,
       entry.errorCode ?? null,
       entry.summary ?? null,
@@ -93,8 +119,8 @@ export async function getUsageHeroStats(
   const row = await db
     .prepare(`
       SELECT
-        COALESCE(SUM(ae.input_tokens), 0) as total_input_tokens,
-        COALESCE(SUM(ae.output_tokens), 0) as total_output_tokens,
+        COALESCE(SUM(${AE_BILLABLE_INPUT_EXPR}), 0) as total_input_tokens,
+        COALESCE(SUM(${AE_BILLABLE_OUTPUT_EXPR}), 0) as total_output_tokens,
         COUNT(DISTINCT ae.session_id) as total_sessions,
         COUNT(DISTINCT ae.user_id) as total_users
       FROM analytics_events ae
@@ -133,8 +159,8 @@ export async function getUsageByDay(
       SELECT
         date(ae.created_at) as date,
         ae.model,
-        SUM(ae.input_tokens) as input_tokens,
-        SUM(ae.output_tokens) as output_tokens
+        SUM(${AE_BILLABLE_INPUT_EXPR}) as input_tokens,
+        SUM(${AE_BILLABLE_OUTPUT_EXPR}) as output_tokens
       FROM analytics_events ae
       WHERE ae.event_type = 'llm_call'
         AND ae.created_at >= ?
@@ -171,8 +197,8 @@ export async function getUsageByUser(
         ae.user_id,
         u.email,
         u.name,
-        SUM(ae.input_tokens) as input_tokens,
-        SUM(ae.output_tokens) as output_tokens,
+        SUM(${AE_BILLABLE_INPUT_EXPR}) as input_tokens,
+        SUM(${AE_BILLABLE_OUTPUT_EXPR}) as output_tokens,
         COUNT(DISTINCT ae.session_id) as session_count
       FROM analytics_events ae
       LEFT JOIN users u ON u.id = ae.user_id
@@ -180,7 +206,7 @@ export async function getUsageByUser(
         AND ae.created_at >= ?
         AND ae.user_id IS NOT NULL
       GROUP BY ae.user_id
-      ORDER BY (SUM(ae.input_tokens) + SUM(ae.output_tokens)) DESC
+      ORDER BY (SUM(${AE_BILLABLE_INPUT_EXPR}) + SUM(${AE_BILLABLE_OUTPUT_EXPR})) DESC
     `)
     .bind(periodStart)
     .all();
@@ -200,6 +226,7 @@ export interface UsageByUserModelRow {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  callCount: number;
 }
 
 export async function getUsageByUserModel(
@@ -211,13 +238,15 @@ export async function getUsageByUserModel(
       SELECT
         ae.user_id,
         ae.model,
-        SUM(ae.input_tokens) as input_tokens,
-        SUM(ae.output_tokens) as output_tokens
+        SUM(${AE_BILLABLE_INPUT_EXPR}) as input_tokens,
+        SUM(${AE_BILLABLE_OUTPUT_EXPR}) as output_tokens,
+        COUNT(*) as call_count
       FROM analytics_events ae
       WHERE ae.event_type = 'llm_call'
         AND ae.created_at >= ?
         AND ae.user_id IS NOT NULL
       GROUP BY ae.user_id, ae.model
+      ORDER BY (SUM(${AE_BILLABLE_INPUT_EXPR}) + SUM(${AE_BILLABLE_OUTPUT_EXPR})) DESC
     `)
     .bind(periodStart)
     .all();
@@ -227,6 +256,114 @@ export async function getUsageByUserModel(
     model: String(r.model),
     inputTokens: Number(r.input_tokens),
     outputTokens: Number(r.output_tokens),
+    callCount: Number(r.call_count),
+  }));
+}
+
+export interface UsageByPurposeModelRow {
+  purpose: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  callCount: number;
+}
+
+/**
+ * Usage grouped by session ORIGIN (sessions.purpose: 'interactive' | 'workflow' | 'orchestrator')
+ * × model. Model is retained so the route can compute cost per-model first (pricing is per-model)
+ * and then roll up to a per-origin total. LEFT JOIN + COALESCE keeps any row whose session row is
+ * missing (defaults to 'interactive'). No user_id filter — this is the origin split of ALL usage,
+ * matching the by-model/hero scope.
+ */
+export async function getUsageByPurposeModel(
+  db: D1Database,
+  periodStart: string,
+): Promise<UsageByPurposeModelRow[]> {
+  const result = await db
+    .prepare(`
+      SELECT
+        COALESCE(s.purpose, 'interactive') as purpose,
+        ae.model,
+        SUM(${AE_BILLABLE_INPUT_EXPR}) as input_tokens,
+        SUM(${AE_BILLABLE_OUTPUT_EXPR}) as output_tokens,
+        COUNT(*) as call_count
+      FROM analytics_events ae
+      LEFT JOIN sessions s ON s.id = ae.session_id
+      WHERE ae.event_type = 'llm_call'
+        AND ae.created_at >= ?
+      GROUP BY purpose, ae.model
+      ORDER BY (SUM(${AE_BILLABLE_INPUT_EXPR}) + SUM(${AE_BILLABLE_OUTPUT_EXPR})) DESC
+    `)
+    .bind(periodStart)
+    .all();
+
+  return (result.results ?? []).map((r: Record<string, unknown>) => ({
+    purpose: String(r.purpose),
+    model: String(r.model),
+    inputTokens: Number(r.input_tokens),
+    outputTokens: Number(r.output_tokens),
+    callCount: Number(r.call_count),
+  }));
+}
+
+export interface UsageByWorkflowModelRow {
+  workflowId: string | null;
+  workflowName: string;
+  triggerType: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  callCount: number;
+}
+
+/**
+ * Usage for AUTOMATED (workflow) sessions attributed to the SPECIFIC workflow that produced it,
+ * and how it fired. Joins analytics_events → sessions (by session_id) → workflow_executions
+ * (by sessions.workflow_execution_id) → workflows (name) → triggers (type:
+ * schedule/webhook/manual; NULL trigger = manual/on-demand). Model is kept for per-model cost,
+ * rolled up per workflow in the route. INNER JOINs on sessions + workflow_executions scope this
+ * to the automated subset — interactive/orchestrator rows simply don't appear. LEFT JOINs to
+ * workflows/triggers keep usage for a deleted workflow/trigger visible as 'Unknown workflow'.
+ *
+ * sessions.workflow_execution_id is the durable attribution column; unlike
+ * workflow_spawned_sessions (which is pruned on successful terminal cleanup) it persists for
+ * the life of the session row.
+ */
+export async function getUsageByWorkflowModel(
+  db: D1Database,
+  periodStart: string,
+): Promise<UsageByWorkflowModelRow[]> {
+  const result = await db
+    .prepare(`
+      SELECT
+        we.workflow_id,
+        COALESCE(w.name, w.slug, 'Unknown workflow') as workflow_name,
+        COALESCE(t.type, 'manual') as trigger_type,
+        ae.model,
+        SUM(${AE_BILLABLE_INPUT_EXPR}) as input_tokens,
+        SUM(${AE_BILLABLE_OUTPUT_EXPR}) as output_tokens,
+        COUNT(*) as call_count
+      FROM analytics_events ae
+      JOIN sessions s ON s.id = ae.session_id
+      JOIN workflow_executions we ON we.id = s.workflow_execution_id
+      LEFT JOIN workflows w ON w.id = we.workflow_id
+      LEFT JOIN triggers t ON t.id = we.trigger_id
+      WHERE ae.event_type = 'llm_call'
+        AND ae.created_at >= ?
+      GROUP BY we.workflow_id, w.name, w.slug, t.type, ae.model
+      ORDER BY (SUM(${AE_BILLABLE_INPUT_EXPR}) + SUM(${AE_BILLABLE_OUTPUT_EXPR})) DESC
+    `)
+    .bind(periodStart)
+    .all();
+
+  return (result.results ?? []).map((r: Record<string, unknown>) => ({
+    workflowId: r.workflow_id ? String(r.workflow_id) : null,
+    workflowName: String(r.workflow_name),
+    triggerType: String(r.trigger_type),
+    model: String(r.model),
+    inputTokens: Number(r.input_tokens),
+    outputTokens: Number(r.output_tokens),
+    callCount: Number(r.call_count),
   }));
 }
 
@@ -245,14 +382,14 @@ export async function getUsageByModel(
     .prepare(`
       SELECT
         model,
-        SUM(input_tokens) as input_tokens,
-        SUM(output_tokens) as output_tokens,
+        SUM(${SQL_BILLABLE_INPUT_EXPR}) as input_tokens,
+        SUM(${SQL_BILLABLE_OUTPUT_EXPR}) as output_tokens,
         COUNT(*) as call_count
       FROM analytics_events
       WHERE event_type = 'llm_call'
         AND created_at >= ?
       GROUP BY model
-      ORDER BY (SUM(input_tokens) + SUM(output_tokens)) DESC
+      ORDER BY (SUM(${SQL_BILLABLE_INPUT_EXPR}) + SUM(${SQL_BILLABLE_OUTPUT_EXPR})) DESC
     `)
     .bind(periodStart)
     .all();

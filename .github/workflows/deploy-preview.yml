@@ -1,0 +1,115 @@
+name: Deploy Preview
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: deploy-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: Deploy frontend preview
+    runs-on: ubuntu-latest
+    environment: dev
+    if: github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: echo "$GITHUB_WORKSPACE/packages/worker/node_modules/.bin" >> $GITHUB_PATH
+
+      - name: Build workspace packages
+        run: pnpm --filter '@valet/*' --filter '!@valet/worker' --filter '!@valet/client' run build
+
+      - name: Create deploy config
+        env:
+          PROJECT_NAME: ${{ secrets.PROJECT_NAME }}
+          ALLOWED_EMAILS: ${{ secrets.ALLOWED_EMAILS }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          MODAL_BACKEND_URL: ${{ secrets.MODAL_BACKEND_URL }}
+          API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL }}
+        run: |
+          if [ -z "${API_PUBLIC_URL}" ]; then
+            echo "::error::API_PUBLIC_URL is not set on the dev environment."
+            echo "Set it as a GitHub Actions variable (Settings → Environments → dev → Variables)."
+            echo "Value should be the public dev Worker origin, e.g. https://dev-valet-turnkey.<account>.workers.dev"
+            exit 1
+          fi
+          cat > .env.deploy.dev <<EOF
+          PROJECT_NAME=${PROJECT_NAME}
+          ALLOWED_EMAILS=${ALLOWED_EMAILS}
+          D1_DATABASE_ID=${D1_DATABASE_ID}
+          MODAL_BACKEND_URL=${MODAL_BACKEND_URL}
+          API_PUBLIC_URL=${API_PUBLIC_URL}
+          EOF
+
+      - name: Deploy Pages preview
+        id: preview
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_BRANCH: pr-${{ github.event.pull_request.number }}
+        run: |
+          ENVIRONMENT=dev \
+            PAGES_DEPLOY_BRANCH="${PREVIEW_BRANCH}" \
+            make deploy-client 2>&1 | tee /tmp/preview-deploy.log
+
+          PREVIEW_URL=$(grep -oE 'Deployment alias URL: https://[^[:space:]]+\.pages\.dev' /tmp/preview-deploy.log | sed -E 's/^Deployment alias URL: //' | tail -1 || true)
+          if [ -z "$PREVIEW_URL" ]; then
+            PREVIEW_URL=$(grep -oE "https://${PREVIEW_BRANCH}\.[^[:space:]]+\.pages\.dev" /tmp/preview-deploy.log | tail -1 || true)
+          fi
+          if [ -z "$PREVIEW_URL" ]; then
+            echo "Could not find a Pages preview URL in deploy output." >&2
+            exit 1
+          fi
+          echo "url=$PREVIEW_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Comment preview URL
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
+        with:
+          script: |
+            const body = `Preview deployment: ${process.env.PREVIEW_URL}`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((comment) => comment.body.startsWith('Preview deployment:'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

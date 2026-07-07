@@ -1,27 +1,112 @@
 ---
 title: Operations
-description: Use Valet for scheduled checks, channel-driven requests, internal workflows, and operational handoffs.
+description: A playbook for operations and internal-tools teams — scheduled briefings, inbox triage, recurring reports, Slack intake, and meeting prep with approval gates.
 ---
 
-Valet can handle recurring operational work when it has the right connected tools, instructions, and approval rules. It can receive requests, gather information, run checklists, and send the result back to the right channel.
+This page is for operations and internal-tools teams: the people who keep a company running on a rhythm of checks, reports, requests, and handoffs. After reading it, you can hand Valet a set of recurring operational jobs — each with a clear trigger, a defined output, and an approval gate before anything leaves your systems.
 
-Typical work includes:
+Operations work suits Valet because it is less about code and more about remembered procedures, clear channels, and safe tool use. The pattern is always the same: something starts the work (a schedule, a webhook, a Slack message), Valet gathers information from connected tools, prepares a draft or summary, pauses at [approvals](/product/approvals) before changing anything external, and delivers the result back to the channel where people already work.
 
-- Running scheduled checks and posting summaries.
-- Responding to Slack or Telegram requests.
-- Gathering information from connected tools before taking action.
-- Preparing drafts, reports, or follow-up tasks.
-- Waiting for approval before actions that change external systems.
-- Preserving memory about preferences and recurring procedures.
+The plays below are ordered roughly by how teams usually adopt them: start with a read-only digest, then add drafting, then intake.
 
-## Product surfaces involved
+## Play: the morning briefing
 
-- [Workflows](/product/workflows) define recurring or event-driven work.
-- [Channels](/product/channels) decide where requests and replies happen.
-- [Memory](/product/memory) keeps useful team instructions available over time.
-- [Approvals](/product/approvals) keep control explicit.
-- [Connect tools](/product/tools) defines what Valet can reach.
+**Trigger:** a [schedule](/product/triggers) — for example, every weekday at 7am in your timezone.
+
+Each morning, Valet:
+
+1. Reads your calendar for the day with [Google Calendar](/product/integrations/google-calendar).
+2. Checks overnight [Gmail](/product/integrations/gmail) for unread messages that look like they need action.
+3. Pulls anything else your team tracks — open Linear issues, GitHub PRs waiting on review, yesterday's support queue.
+4. Posts one digest to a [Slack](/product/integrations/slack) channel or DM: today's meetings, items needing a reply, and anything that changed overnight.
+
+This play works well as a scheduled prompt to your orchestrator — your personal always-on Valet agent, the one you talk to in chat — rather than a formal workflow — the work is judgment-based ("what matters this morning?"), and the [triggers page](/product/triggers) explains when to pick a scheduled prompt over a scheduled workflow. Because every step is read-only until the final Slack post, you can approve the posting action once with "Always allow" and the briefing runs unattended from then on.
+
+To set it up, just ask:
+
+```text
+Every weekday at 7am Pacific, send me a Slack DM with my calendar for
+the day, unread emails that need a reply, and open PRs assigned to me.
+```
+
+## Play: inbox triage with drafted replies
+
+**Trigger:** a schedule (a few times a day), or on demand — "triage my inbox."
+
+Valet:
+
+1. Triages the inbox: fetches recent unread messages and categorizes them — newsletters, meeting references, messages containing questions or action requests.
+2. Archives or labels the routine mail: newsletters get labeled and marked read, receipts get filed.
+3. For messages that need a response, drafts a threaded reply. Drafts are safe — nothing leaves your account until someone sends it.
+4. Posts a summary to Slack or the web app: what was filed, what was drafted, what needs your judgment.
+
+The approval shape matters here. Set **Always allow** on creating drafts (nothing external happens) and keep **sending** gated — sending mail is a high-risk action that prompts for approval every time. You review each draft in Gmail or from the approval prompt, then approve the send. The [approvals page](/product/approvals) walks through this exact recipe.
+
+## Play: the weekly report
+
+**Trigger:** a scheduled [workflow](/product/workflows) — for example, Friday at 3pm.
+
+Recurring reports are the clearest case for a workflow instead of a loose prompt: the steps are fixed, the output has a known shape, and you want a clean execution record for each run. A typical assembly:
+
+1. Pull the week's numbers from a Google Sheet (see [Google Workspace](/product/integrations/google-workspace) for how Valet accesses Drive files).
+2. Read status updates from a [Notion](/product/integrations/notion) database or the team's project pages.
+3. Skim the relevant Slack channels for decisions and blockers worth surfacing.
+4. Assemble the report in the agreed format — the one your team wrote into the workflow instructions.
+5. Pause at an approval gate. A person reviews the draft before Valet publishes it to Notion or posts it in Slack.
+
+Workflows keep versions, so when the report format changes, you edit the workflow once and every future run follows the new shape. After a couple of clean runs, approvals on the read-only steps can be relaxed; keep the gate on publishing.
+
+## Play: Slack-request intake
+
+**Trigger:** someone mentions Valet in a bound Slack channel.
+
+Operations teams field a steady stream of small requests: "can you pull the numbers for X", "who owns Y", "file a ticket for Z." Binding a Slack channel to Valet turns the channel itself into an intake queue. Someone asks in `#ops-requests`, Valet reads the message, gathers what it needs from connected tools, and replies in the thread — or files the Linear ticket, drafts the doc, or escalates to a human when the request is out of scope.
 
 <Note>
-  Operations use cases are usually less about code and more about remembered procedures, clear channels, and safe tool use.
+  Team orchestrators are rolling out. A team — a named group inside your org — owns its own orchestrator, memory, integrations, and channel bindings, so a bound channel routes `@valet` to the *team's* agent rather than any one person's. One binding per channel. Team roles are currently `admin` and `member`; richer role-based access is in progress.
 </Note>
+
+Requests that change external systems still pause for approval, and approval prompts can be answered directly from Slack — the requester or an admin approves in the thread without switching tools. See [channels](/product/channels) for deciding which channels can start sessions and show approval prompts.
+
+## Play: meeting prep
+
+**Trigger:** a morning schedule that covers the day's meetings, or on demand — "prep me for my 2pm."
+
+Valet:
+
+1. Reads your calendar and picks out the meetings with external attendees or agendas.
+2. For each, gathers context: the last email thread with those attendees in Gmail, the relevant Notion page or project doc, and recent Slack discussion.
+3. Sends you a short prep note per meeting — who's attending, what was last discussed, open items, and a suggested agenda if there isn't one.
+
+This play is read-only end to end, so it needs no approval gates at all — a good first automation for a cautious team. If you extend it to *create* calendar events or send agendas to attendees, those become gated actions.
+
+## Memory makes procedures durable
+
+Every play above depends on Valet knowing how your team does things: what the weekly report includes, which senders always get archived, what a well-formed intake ticket looks like. Ask Valet to remember these once and they persist across sessions:
+
+```text
+Remember that the weekly ops report includes headcount changes, vendor
+spend over $5k, and any SLA breaches — in that order, as bullet points.
+```
+
+Procedures and preferences live in [memory](/product/memory); pin the rules that must never age out as preferences. When a process changes, tell Valet to update the note — the next scheduled run follows the new procedure without editing anything else. For procedures the whole team should share, capture them as [skills](/product/skills-and-personas) instead of personal memory.
+
+## Set this up
+
+<Steps>
+  <Step title="Connect your tools">
+    An admin connects [Slack](/product/integrations/slack); each user connects their own [Gmail](/product/integrations/gmail) and [Google Calendar](/product/integrations/google-calendar) by signing in with Google. See [Connect tools](/product/tools).
+  </Step>
+  <Step title="Start with the briefing">
+    Ask Valet for a daily digest, following the [quickstart](/product/quickstart) and [triggers](/product/triggers). It is read-only, so it is a safe first automation.
+  </Step>
+  <Step title="Tune approvals">
+    Run each play once, approving as you go, then apply "Always allow" to the safe, repeated actions. Keep sends, publishes, and deletes gated. See [Approvals](/product/approvals).
+  </Step>
+  <Step title="Promote repeated work into workflows">
+    When a job has settled into fixed steps, write it as a [workflow](/product/workflows) with an approval gate before the output ships.
+  </Step>
+  <Step title="Teach Valet your procedures">
+    Save report formats, triage rules, and team conventions to [memory](/product/memory) so every future run follows them.
+  </Step>
+</Steps>

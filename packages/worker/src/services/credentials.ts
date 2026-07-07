@@ -4,6 +4,7 @@ import { encryptStringPBKDF2, decryptStringPBKDF2 } from '../lib/crypto.js';
 import * as credentialDb from '../lib/db/credentials.js';
 import * as mcpOAuthDb from '../lib/db/mcp-oauth.js';
 import { getDb } from '../lib/drizzle.js';
+import { log } from '../lib/log.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { getCustomMcpOAuthConfig, getCustomMcpOAuthConnector } from './custom-mcp-connectors.js';
 import { createSafeFetchOutbound } from './safe-fetch-outbound.js';
@@ -32,6 +33,26 @@ export interface CredentialResolutionError {
 export type CredentialResult =
   | { ok: true; credential: ResolvedCredential }
   | { ok: false; error: CredentialResolutionError };
+
+/**
+ * Build the `credentials` object that action handlers receive, given a
+ * successfully-resolved credential. Actions read the token under
+ * different keys depending on the credential type (`bot_token` for
+ * Slack-style bot tokens, `access_token` for OAuth / API key / etc.),
+ * so the mapping has to honour `credentialType` — every call site that
+ * bridges the resolver output to an action must go through this helper.
+ */
+export function buildActionCredentials(
+  credResult: CredentialResult & { ok: true },
+): Record<string, string> {
+  const cred = credResult.credential;
+  const credentials: Record<string, string> = cred.credentialType === 'bot_token'
+    ? { bot_token: cred.accessToken }
+    : { access_token: cred.accessToken };
+  if (cred.refreshToken) credentials.refresh_token = cred.refreshToken;
+  if (cred.credentialType) credentials._credential_type = cred.credentialType;
+  return credentials;
+}
 
 // ─── Internal Helpers ───────────────────────────────────────────────────────
 
@@ -481,6 +502,55 @@ export async function getCredential(
   // Default to 'oauth2' for GitHub as a safety net — only oauth2 rows exist now.
   const effectiveType = provider === 'github' ? 'oauth2' : undefined;
   const row = await credentialDb.getCredentialRow(db, ownerType, ownerId, provider, effectiveType);
+  const result = await getCredentialInner(env, ownerType, ownerId, provider, row, options);
+
+  // Edge-triggered failure logging at the one chokepoint all callers share, so a
+  // broken integration (expired/revoked token, failed refresh, undecryptable row)
+  // surfaces wherever it bites: tool calls, env assembly, webhooks, DOs. Logs only
+  // on state TRANSITIONS — first failure, reason change, recovery — so a stuck
+  // credential retried by the refresh cron sweep warns once, not once per pass.
+  // 'not_found' is just "never connected" (and has no row to track), so it stays
+  // quiet, as before.
+  const priorFailure = row?.lastFailureReason ?? null;
+  if (!result.ok && result.error.reason !== 'not_found') {
+    if (row && priorFailure !== result.error.reason) {
+      log.warn('integration auth/refresh failed', {
+        service: provider,
+        ownerType,
+        ownerId,
+        reason: result.error.reason,
+        detail: result.error.message,
+        ...(priorFailure ? { previousReason: priorFailure } : {}),
+      });
+      // Best-effort bookkeeping: a transient D1 write error must not turn a
+      // resolution result into a throw at ~20 call sites. Worst case the state
+      // doesn't persist and the next attempt re-warns (at-least-once).
+      await credentialDb.setCredentialFailureState(db, row.id, result.error.reason).catch((err) => {
+        log.warn('failed to persist credential failure state', { service: provider, error: String(err) });
+      });
+    }
+  } else if (result.ok && row && priorFailure) {
+    log.info('integration auth recovered', {
+      service: provider,
+      ownerType,
+      ownerId,
+      previousReason: priorFailure,
+    });
+    await credentialDb.setCredentialFailureState(db, row.id, null).catch((err) => {
+      log.warn('failed to persist credential failure state', { service: provider, error: String(err) });
+    });
+  }
+  return result;
+}
+
+async function getCredentialInner(
+  env: Env,
+  ownerType: string,
+  ownerId: string,
+  provider: string,
+  row: credentialDb.CredentialRow | null,
+  options?: { forceRefresh?: boolean },
+): Promise<CredentialResult> {
   if (!row) {
     return {
       ok: false,

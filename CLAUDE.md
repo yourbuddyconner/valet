@@ -46,8 +46,7 @@ valet/
 ├── V1.md                    # Original architecture spec (may be outdated)
 ├── V2.md                    # Orchestration layer spec (orchestrators, channels, personas)
 ├── Makefile                 # Dev, test, deploy commands
-├── docker-compose.yml       # Local dev (OpenCode container)
-└── .beans/                  # Task tracking (beans)
+└── docker-compose.yml       # Local dev (OpenCode container)
 ```
 
 ## Tech Stack Quick Reference
@@ -71,7 +70,7 @@ Detailed per-subsystem specifications live in `docs/specs/`. These are the sourc
 | [`docs/specs/sessions.md`](docs/specs/sessions.md) | Session lifecycle, state machine, sandbox orchestration, prompt queue, message streaming, hibernation/restore, access control, multiplayer |
 | [`docs/specs/sandbox-runtime.md`](docs/specs/sandbox-runtime.md) | Sandbox boot sequence, service ports, auth gateway, Runner process, OpenCode lifecycle, Runner↔DO WebSocket protocol, Modal backend |
 | [`docs/specs/real-time.md`](docs/specs/real-time.md) | SessionAgentDO WebSocket handling, EventBusDO, event types, V2 streaming protocol, client reconnection, message deduplication |
-| [`docs/specs/workflows.md`](docs/specs/workflows.md) | Workflow definitions, trigger types (webhook/schedule/manual), execution lifecycle, WorkflowExecutorDO, step engine, approval gates, proposals, version history |
+| [`docs/specs/workflows.md`](docs/specs/workflows.md) | Workflow definitions, trigger types (webhook/schedule/manual), execution lifecycle, ValetWorkflowInterpreter (Cloudflare Workflow), approval gates via workflow_approvals + step.waitForEvent, version history |
 | [`docs/specs/auth-access.md`](docs/specs/auth-access.md) | OAuth flows (GitHub/Google), token auth, admin middleware, org model (settings/invites/LLM keys), session access control, JWT issuance |
 | [`docs/specs/orchestrator.md`](docs/specs/orchestrator.md) | Orchestrator identity, auto-restart, child session spawning, memory system (FTS), mailbox, channel routing, task board |
 | [`docs/specs/integrations.md`](docs/specs/integrations.md) | Integration framework, GitHub (OAuth/webhooks/API proxy), Telegram bot, Gmail, Google Calendar, channel bindings, custom LLM providers, credential storage |
@@ -91,7 +90,7 @@ When using superpowers skills (brainstorming → writing-plans → executing-pla
 These are decided and locked in. Do not revisit:
 
 1. **WebSocket only** between Runner and SessionAgent DO. No HTTP callbacks.
-2. **Single merged SessionAgent DO** for session orchestration. Three DOs total: `SessionAgentDO`, `EventBusDO`, `WorkflowExecutorDO`.
+2. **Single merged SessionAgent DO** for session orchestration. Two DOs total: `SessionAgentDO`, `EventBusDO`. Workflows execute on a Cloudflare Workflow entrypoint (`ValetWorkflowInterpreter`) — not a Durable Object.
 3. **Single Modal App** for the Python backend (structured for future split).
 4. **Repo-specific images** from day one. Base image fallback for unconfigured repos.
 5. **iframes** for VNC (websockify noVNC web UI) and Terminal (TTYD web UI). No embedded JS clients.
@@ -197,14 +196,17 @@ The sandbox image is cached. To force a rebuild after changing `docker/start.sh`
 
 ### GitHub Actions CD
 
-Two workflows live in `.github/workflows/`:
+Three deploy workflows live in `.github/workflows/`:
 
 | Workflow | Trigger | Target |
 |---|---|---|
+| `deploy-preview.yml` | Pull request to `main` | frontend-only Cloudflare Pages preview against the dev API |
 | `deploy-dev.yml` | Push to `main` | dev environment |
 | `deploy-prod.yml` | Push of a `v*` tag | prod environment |
 
-Both workflows call `make deploy` (the full `scripts/deploy.sh cmd_all` path: worker → migrations → modal → client). They reconstruct `.env.deploy.<env>` from GitHub Actions variables and secrets at runtime rather than committing environment config to the repo.
+`deploy-dev.yml` and `deploy-prod.yml` call `make deploy` (the full `scripts/deploy.sh cmd_all` path: worker → migrations → modal → client). `deploy-preview.yml` calls `make deploy-client` with `PAGES_DEPLOY_BRANCH=pr-<number>` so the preview branch is published to the dev Pages project without deploying a per-PR Worker, D1, R2 bucket, or Modal backend. All three workflows write `API_PUBLIC_URL` into `.env.deploy.<env>` from a GitHub Actions **secret** of the same name in each environment; the deploy script requires it (no auto-discovery fallback) and the client build uses it as `VITE_API_URL`.
+
+The Worker accepts preview OAuth redirects only for the configured frontend origin or for hosts under `FRONTEND_PREVIEW_ORIGIN_SUFFIX`, which defaults to `${PAGES_PROJECT_NAME}.pages.dev` during deploy config generation. Keep that suffix project-specific; do not set it to a broad value like `pages.dev`.
 
 **Required GitHub Actions configuration** (set under *Settings → Environments → dev / prod*):
 
@@ -218,6 +220,7 @@ Both workflows call `make deploy` (the full `scripts/deploy.sh cmd_all` path: wo
 | `CLOUDFLARE_ACCOUNT_ID` | Secret | Your Cloudflare account ID (find it in the dashboard URL or `wrangler whoami`) |
 | `ALLOWED_EMAILS` | Secret | Comma-separated email allowlist; empty = no restriction |
 | `D1_DATABASE_ID` | Secret | Optional — auto-discovered from `wrangler d1 list` if omitted |
+| `API_PUBLIC_URL` | Secret | **Required** in each environment. Full public Worker origin (e.g. `https://dev-valet-turnkey.<subdomain>.workers.dev` for dev). Written into `.env.deploy.<env>` and consumed by `deploy.sh` + the Worker runtime + the client build's `VITE_API_URL` |
 
 **Prod environment protection:** Add required reviewers to the `prod` GitHub Actions environment so every `v*` tag push triggers a manual approval gate before secrets are exposed.
 
@@ -368,6 +371,10 @@ async () => cloudflare.request({
 - **Can't**: access Modal container logs historically (live-stream only via `modal container logs <id>`), query logs older than CF's retention period
 - **Tip**: `modal container list --json` shows all currently running sandbox containers with full IDs; cross-reference timestamps with CF logs to correlate DO events with sandbox lifecycle
 
+### OpenTelemetry tracing
+
+The Worker + Durable Objects emit OpenTelemetry traces (`@microlabs/otel-cf-workers`), and `lib/log.ts` provides structured, trace-aware logging. Tracing is a **no-op until `OTEL_EXPORTER_OTLP_ENDPOINT` is set**. Run the local backend with `make otel-local` (Grafana + Tempo on `:3000`/`:4318`) and point the worker at it. Full guide: [`docs/observability.md`](docs/observability.md).
+
 ## Code Conventions
 
 ### Worker (Hono)
@@ -376,7 +383,7 @@ async () => cloudflare.request({
 - Each route file exports a Hono router: `export const fooRouter = new Hono<{ Bindings: Env; Variables: Variables }>()`
 - Route is mounted in `index.ts`: `app.route('/api/foo', fooRouter)`
 - Database uses **Drizzle ORM**: schema in `src/lib/schema/`, query helpers in `src/lib/db/`, Drizzle instance via `src/lib/drizzle.ts`. Barrel re-export at `src/lib/db.ts`.
-- Three Durable Objects in `src/durable-objects/`: `SessionAgentDO` (session-agent.ts), `EventBusDO` (event-bus.ts), `WorkflowExecutorDO` (workflow-executor.ts). All re-exported from `index.ts`.
+- Two Durable Objects in `src/durable-objects/`: `SessionAgentDO` (session-agent.ts), `EventBusDO` (event-bus.ts). Both re-exported from `index.ts`. Workflow runs are handled by `ValetWorkflowInterpreter` in `src/workflows/interpreter.ts` — a Cloudflare Workflow entrypoint exported alongside the DOs.
 - Services go in `packages/worker/src/services/<name>.ts`
 - Middleware: `auth.ts` (OAuth + API keys), `db.ts` (Drizzle setup), `admin.ts` (role-based access), `error-handler.ts` (global error handling). Auth sets `c.get('user')` with `{ id, email, role }`.
 - Plugin registries: `src/integrations/packages.ts` (actions), `src/channels/packages.ts` (channels), `src/plugins/content-registry.ts` (skills/personas/tools). All auto-generated by `make generate-registries` from `packages/plugin-*/`.
@@ -445,7 +452,6 @@ Auto-discovered by `make generate-registries` which scans `packages/plugin-*/` a
 - OpenCode interaction: `packages/runner/src/prompt.ts`
 - OpenCode lifecycle: `packages/runner/src/opencode-manager.ts`
 - Auth gateway: `packages/runner/src/gateway.ts` (Hono on port 9000)
-- Workflow engine: `packages/runner/src/workflow-engine.ts`, `workflow-compiler.ts`, `workflow-cli.ts`
 - Secrets: `packages/runner/src/secrets.ts`, `onepassword-provider.ts`
 
 ### Backend
@@ -475,7 +481,8 @@ This codebase has accumulated `any`, `unknown`, and type assertions (`as`) as sh
 
 ### Git Conventions
 
-- Commit code upon completion of each bean.
+- Commit at logical checkpoints — each phase / sub-task / passing test surface — rather than batching everything into one mega-commit at the end.
+- Keep commit messages succinct. The subject line is one short sentence (≤72 chars); the body, when needed, is a few terse bullet points covering what changed and why. Skip exhaustive enumerations of files, line counts, or test totals — `git log` and the diff already show that. If you find yourself writing a multi-paragraph essay, trim.
 
 ## Common Patterns
 

@@ -23,6 +23,7 @@ export const sessions = sqliteTable('sessions', {
   personaId: text(),
   isOrchestrator: integer({ mode: 'boolean' }).notNull().default(false),
   purpose: text().notNull().default('interactive'),
+  workflowExecutionId: text('workflow_execution_id'),
   createdAt: text().default(sql`(datetime('now'))`),
   lastActiveAt: text().default(sql`(datetime('now'))`),
 }, (table) => [
@@ -34,6 +35,7 @@ export const sessions = sqliteTable('sessions', {
   index('idx_sessions_workspace_created_at').on(table.workspace, table.createdAt),
   index('idx_sessions_status_last_active_at').on(table.status, table.lastActiveAt),
   index('idx_sessions_purpose_user_status').on(table.purpose, table.userId, table.status),
+  index('idx_sessions_workflow_execution_id').on(table.workflowExecutionId),
 ]);
 
 export const messages = sqliteTable('messages', {

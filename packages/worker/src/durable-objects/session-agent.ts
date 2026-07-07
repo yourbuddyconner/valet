@@ -1,7 +1,10 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel } from '../lib/db.js';
+import { createDoTracer, parseTraceparent, type DoTracer } from '../lib/do-tracing.js';
+import { activeTraceparent } from '../lib/tracing.js';
+import type { Context } from '@opentelemetry/api';
+import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel, getOrchestratorIdentity, getUserSlackIdentityLink, getWorkflowNameByExecutionId } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
 import { getSlackBotToken } from '../services/slack.js';
@@ -10,16 +13,17 @@ import { assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleR
 import { resolveAvailableModels } from '../services/model-catalog.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { updateIntegrationStatus } from '../lib/db/integrations.js';
-import { approveInvocation, denyInvocation, markFailed } from '../services/actions.js';
-import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOverride, deleteSessionActionPolicyOverrides } from '../lib/db/actions.js';
+import { denyInvocation, markFailed } from '../services/actions.js';
+import { resolveAdminPolicyMatch, updateInvocationStatus, deleteRuntimeGrantsByScope } from '../lib/db/actions.js';
+import { resolveInvocationWithScope, type ApprovalScope } from '../services/scoped-approvals.js';
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
 import { MessageStore } from './message-store.js';
 import { getChannelForMessage, dropEmission } from './channel-resolver.js';
 import { ChannelRouter } from './channel-router.js';
-import { PromptQueue } from './prompt-queue.js';
-import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
+import { PromptQueue, type QueueEntry } from './prompt-queue.js';
+import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type DOMessageOf } from './runner-link.js';
 import { SessionState, type SessionStartParams } from './session-state.js';
 import { SessionLifecycle, SandboxAlreadyExitedError, SandboxSnapshotFailedError } from './session-lifecycle.js';
 import { SessionHealthMonitor, DISCONNECT_GRACE_MS, SANDBOX_WAKE_TIMEOUT_MS, type HealthSnapshot } from './session-health-monitor.js';
@@ -33,17 +37,6 @@ import { spawnChild, sendSessionMessage, getSessionMessages, forwardMessages, te
 import { listTools as listToolsSvc, resolveActionPolicy, executeAction as executeActionSvc, type CredentialCache } from '../services/session-tools.js';
 import { loadCustomMcpConnectorContext } from '../services/custom-mcp-connectors.js';
 import {
-  workflowList as workflowListSvc,
-  workflowSync as workflowSyncSvc,
-  workflowRun as workflowRunSvc,
-  workflowExecutions as workflowExecutionsSvc,
-  handleWorkflowAction as handleWorkflowActionSvc,
-  handleTriggerAction as handleTriggerActionSvc,
-  handleExecutionAction as handleExecutionActionSvc,
-  processWorkflowExecutionResult as processWorkflowExecutionResultSvc,
-  buildWorkflowDispatch,
-} from '../services/session-workflows.js';
-import {
   sanitizePromptAttachments,
   attachmentPartsForDisplay,
   attachmentsForClientState,
@@ -51,7 +44,11 @@ import {
   parsePromptAttachmentBlobUrl,
   SUPPORTED_FILE_TYPES_DESCRIPTION,
 } from '../lib/utils/prompt-validation.js';
-import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
+import { deriveRuntimeStates } from '../lib/utils/runtime.js';
+import { ensureChannelBinding } from '../lib/db/channels.js';
+import { getOrgSlackInstallAny } from '../lib/db/slack.js';
+import { registerChannelThread } from '../lib/db/channel-threads.js';
+import { channelScopeKey } from '@valet/shared';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
 
@@ -106,6 +103,15 @@ function isCancelTransportAction(actionId: string): boolean {
 type PromptResolutionResult =
   | { ok: true }
   | { ok: false; status: number; error: string };
+
+const PROMPT_QUEUE_POLICY_HEADER = 'X-Valet-Prompt-Queue-Policy';
+const PROMPT_QUEUE_POLICY_APPEND = 'append';
+
+interface PromptQueuePolicy {
+  replaceExistingQueued?: boolean;
+  priority?: number;
+  replaceable?: boolean;
+}
 
 function buildThreadContinuationContext(rows: Array<{ role?: unknown; content?: unknown }>): string {
   return rows
@@ -217,6 +223,9 @@ const SCHEMA_SQL = `
     channel_type TEXT,
     channel_id TEXT,
     channel_key TEXT, -- computed key for per-channel queuing (e.g. "web:default", "telegram:12345")
+    replaceable INTEGER NOT NULL DEFAULT 1,
+    received_at INTEGER, -- ms epoch when the prompt was enqueued (per-row replacement for the global promptReceivedAt state key)
+    dispatched_at INTEGER, -- ms epoch when this prompt was sent to the runner (per-row replacement for lastPromptDispatchedAt)
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
@@ -240,6 +249,9 @@ const SCHEMA_SQL = `
     queue_mode TEXT,
     input_tokens INTEGER,
     output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    reasoning_tokens INTEGER,
     tool_name TEXT,
     error_code TEXT,
     summary TEXT,
@@ -263,7 +275,9 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS channel_state (
     channel_key TEXT PRIMARY KEY,
     busy INTEGER NOT NULL DEFAULT 0,
-    opencode_session_id TEXT
+    opencode_session_id TEXT,
+    idle_queued_since INTEGER, -- ms epoch when this channel last went queued-with-no-runner; powers per-channel stuck-queue watchdog
+    error_safety_net_at INTEGER -- ms epoch a per-channel safety net is armed; cleared when this channel's prompt completes
   );
 
 `;
@@ -326,6 +340,28 @@ export class SessionAgentDO {
   private runnerLink!: RunnerLink;
   private sessionState!: SessionState;
   private lifecycle!: SessionLifecycle;
+
+  // DO-scoped OTel tracer: created once and reused across fetch / WS / alarm. Spans are batched
+  // in the DO (do-tracing.ts) and flushed externally — never one POST per span on the WS hotpath.
+  // traceFlushDeadline keeps an alarm pending so buffered spans drain within the interval even if
+  // the DO is evicted (the in-memory batch buffer is otherwise lost on hibernation).
+  private static readonly TRACE_FLUSH_INTERVAL_MS = 10_000;
+  // Per-token streaming frames + keepalive: high-frequency, low-value; not traced individually.
+  private static readonly WS_TRACE_SKIP = new Set<string>(['ping', 'pong', 'message.part.text-delta', 'message.part.tool-update']);
+  private doTracerPromise?: Promise<DoTracer>;
+  private traceFlushDeadline: number | null = null;
+  // Per-turn W3C traceparent of the originating Worker trace, captured at prompt dispatch so
+  // webSocketMessage can parent the runner's reply spans to it instead of disconnected roots.
+  // Keyed by a channel key (the DO runs cross-thread turns concurrently); turnChannelKeys maps a
+  // turnId → that key so runner messages carrying only a turnId (finalize/usage-report) resolve
+  // too. In-memory + best-effort: lost on hibernation (spans fall back to roots), and size-capped.
+  private turnTraceparents = new Map<string, string>();
+  private turnChannelKeys = new Map<string, string>();
+
+  /** Tracks the workflow execution ID for direct-dispatch workflow turns
+   *  (where no queue row exists). Set when handleWorkflowExecuteDispatch
+   *  sends directly to the runner; cleared on turn completion. */
+  private _activeWorkflowExecutionId: string | undefined;
 
   private static readonly RUNNER_GRACE_PERIOD_MS = 60_000;
   private static readonly MODAL_SANDBOX_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -403,6 +439,13 @@ export class SessionAgentDO {
     // Run schema migration on construction (blockConcurrencyWhile ensures it completes before any request)
     this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(SCHEMA_SQL);
+      // Idempotent column adds for analytics_events on existing DOs. SQLite
+      // ALTER TABLE ADD COLUMN errors when the column already exists; the
+      // try/catch makes each migration safe to re-run. Matches the pattern
+      // used by PromptQueue.runMigrations.
+      for (const col of ['cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens']) {
+        try { this.ctx.storage.sql.exec(`ALTER TABLE analytics_events ADD COLUMN ${col} INTEGER`); } catch { /* already exists */ }
+      }
       this.sessionState = new SessionState(this.ctx.storage.sql);
       this.messageStore = new MessageStore(this.ctx.storage.sql);
       const stateDeps = {
@@ -483,15 +526,36 @@ export class SessionAgentDO {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // WebSocket upgrade
+    // WebSocket upgrade (not traced — returns a 101 hijack)
     if (request.headers.get('Upgrade') === 'websocket') {
       return this.handleWebSocketUpgrade(request, url);
     }
 
-    // Internal control endpoints
+    // Wrap control-endpoint dispatch in a DO root span, parented to the worker→DO
+    // traceparent, so DO-internal work nests under the worker trace. ctx.storage stays native.
+    const tracer = await this.getTracer();
+    return tracer.traceFetch(request, `SessionAgentDO ${url.pathname}`, (span) => {
+      span.setAttribute('do.path', url.pathname);
+      // Correlate DO spans with the session/user, mirroring the worker's
+      // setSessionAttributes. Best-effort: tracing must never break the request.
+      try {
+        const sid = this.sessionState.sessionId;
+        const uid = this.sessionState.userId;
+        if (sid) span.setAttribute('valet.session.id', sid);
+        if (uid) span.setAttribute('valet.user.id', uid);
+      } catch {
+        // sessionState not ready / unreadable — skip correlation
+      }
+      return this.dispatchControl(request, url, tracer);
+    });
+  }
+
+  private async dispatchControl(request: Request, url: URL, tracer: DoTracer): Promise<Response> {
+    // Internal control endpoints — each handler runs in a child span so DO-internal
+    // operation timing is visible separately from the DO-fetch overhead.
     switch (url.pathname) {
       case '/start':
-        return this.handleStart(request);
+        return tracer.span('handleStart', () => this.handleStart(request));
       case '/stop': {
         let reason: string | undefined;
         if (request.method === 'POST') {
@@ -502,30 +566,32 @@ export class SessionAgentDO {
             // ignore missing/invalid body
           }
         }
-        return this.handleStop(reason);
+        return tracer.span('handleStop', () => this.handleStop(reason));
       }
       case '/status':
-        return this.handleStatus();
+        return tracer.span('handleStatus', () => this.handleStatus());
+      case '/thread-status':
+        return tracer.span('handleThreadStatus', () => this.handleThreadStatus(url));
       case '/wake':
-        return this.handleWake();
+        return tracer.span('handleWake', () => this.handleWake());
       case '/hibernate':
-        return this.handleHibernate();
+        return tracer.span('handleHibernate', () => this.handleHibernate());
       case '/clear-queue':
-        return this.handleClearQueue();
+        return tracer.span('handleClearQueue', () => this.handleClearQueue(url));
       case '/flush-metrics':
-        return this.handleFlushMetrics();
+        return tracer.span('handleFlushMetrics', () => this.handleFlushMetrics());
       case '/messages':
-        return this.handleMessagesEndpoint(url);
+        return tracer.span('handleMessages', () => this.handleMessagesEndpoint(url));
       case '/prompt-attachment':
-        return this.handlePromptAttachmentEndpoint(url);
+        return tracer.span('handlePromptAttachment', () => this.handlePromptAttachmentEndpoint(url));
       case '/gc':
-        return this.handleGarbageCollect();
+        return tracer.span('handleGarbageCollect', () => this.handleGarbageCollect());
       case '/webhook-update':
-        return this.handleWebhookUpdate(request);
+        return tracer.span('handleWebhookUpdate', () => this.handleWebhookUpdate(request));
       case '/ensure-running':
-        return this.handleEnsureRunning();
+        return tracer.span('handleEnsureRunning', () => this.handleEnsureRunning());
       case '/refresh':
-        return this.handleRefresh();
+        return tracer.span('handleRefresh', () => this.handleRefresh());
       case '/models': {
         const models = this.sessionState.availableModels || [];
         return Response.json({ models });
@@ -564,7 +630,12 @@ export class SessionAgentDO {
         // Handle interrupt-only (no content) — e.g., /stop command
         if (body.interrupt && !content && attachments.length === 0) {
           if (this.promptQueue.runnerBusy) {
-            await this.handleAbort();
+            // Mirror handleInterruptPrompt: prefer threadId, otherwise the
+            // request's channel pair. Scoping prevents a stop on one thread
+            // from aborting concurrent turns on other threads.
+            const abortChannelType = body.threadId ? 'thread' : body.channelType;
+            const abortChannelId = body.threadId ? body.threadId : body.channelId;
+            await this.handleAbort(abortChannelType, abortChannelId);
           }
           return Response.json({ success: true, aborted: true });
         }
@@ -596,6 +667,10 @@ export class SessionAgentDO {
           name: body.authorName,
           avatarUrl: body.authorAvatarUrl,
         } : undefined;
+        const queuePolicy: PromptQueuePolicy | undefined =
+          request.headers.get(PROMPT_QUEUE_POLICY_HEADER) === PROMPT_QUEUE_POLICY_APPEND
+            ? { replaceExistingQueued: false, priority: 0, replaceable: false }
+            : undefined;
 
         switch (effectiveMode) {
           case 'steer':
@@ -605,7 +680,7 @@ export class SessionAgentDO {
             await this.handleCollectPrompt(content, body.model, author, attachments, body.channelType, body.channelId, body.threadId, body.contextPrefix);
             break;
           default:
-            await this.handlePrompt(content, body.model, author, attachments, body.channelType, body.channelId, body.threadId, undefined, body.contextPrefix, body.replyTo);
+            await this.handlePrompt(content, body.model, author, attachments, body.channelType, body.channelId, body.threadId, undefined, body.contextPrefix, body.replyTo, queuePolicy);
             break;
         }
         console.log(`[SessionAgentDO] /prompt HTTP: completed, runnerBusy=${this.promptQueue.runnerBusy}`);
@@ -618,16 +693,6 @@ export class SessionAgentDO {
         }
         await this.handleSystemMessage(body.content, body.parts, body.wake, body.threadId);
         return Response.json({ success: true });
-      }
-      case '/workflow-execute': {
-        if (request.method !== 'POST') {
-          return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
-        }
-        const body = await request.json() as {
-          executionId?: string;
-          payload?: WorkflowExecutionDispatchPayload;
-        };
-        return this.handleWorkflowExecuteDispatch(body.executionId, body.payload);
       }
       case '/tunnels': {
         if (request.method !== 'POST') {
@@ -973,18 +1038,42 @@ export class SessionAgentDO {
 
     console.log(`[SessionAgentDO] WebSocket message: isRunner=${isRunner}, type=${parsed.type}, data=${data.slice(0, 200)}`);
 
-    if (isRunner) {
-      await this.runnerLink.handleMessage(
-        parsed as RunnerToDOMessage,
-        this.runnerHandlers,
-        () => {
-          this.lifecycle.touchActivity();
-          this.rescheduleIdleAlarm();
-        },
-      );
-    } else {
-      await this.handleClientMessage(ws, parsed as ClientMessage);
+    const dispatch = isRunner
+      ? () => this.runnerLink.handleMessage(
+          parsed as RunnerToDOMessage,
+          this.runnerHandlers,
+          () => {
+            this.lifecycle.touchActivity();
+            this.rescheduleIdleAlarm();
+          },
+        )
+      : () => this.handleClientMessage(ws, parsed as ClientMessage);
+
+    // Trace each non-noise inbound message as a ROOT span — the WS protocol carries no
+    // traceparent, so there is nothing to parent to; correlate by attributes instead. Skip
+    // keepalive + per-token streaming frames (high-frequency, low-value).
+    const msgType = typeof parsed.type === 'string' ? parsed.type : 'unknown';
+    if (SessionAgentDO.WS_TRACE_SKIP.has(msgType)) {
+      await dispatch();
+      return;
     }
+
+    const tracer = await this.getTracer();
+    const userId = isRunner ? this.sessionState.userId : this.getClientUserId(ws);
+    // Parent the runner's reply spans to the originating turn's trace (captured at dispatch, keyed
+    // by channel). Channel-bearing messages resolve directly; turnId-only ones (finalize/usage-
+    // report) resolve via the turnId→channel map populated on message.create. Client messages and
+    // unkeyable runner messages fall back to a root span (no inbound trace context exists).
+    const parent = isRunner ? this.resolveTurnParent(parsed as RunnerToDOMessage) : undefined;
+    await tracer.span(`ws.${isRunner ? 'runner' : 'client'}.${msgType}`, dispatch, {
+      'valet.session.id': this.sessionState.sessionId,
+      ...(userId ? { 'valet.user.id': userId } : {}),
+      'ws.side': isRunner ? 'runner' : 'client',
+      'ws.msg_type': msgType,
+      ...(parent ? { 'ws.trace_parented': true } : {}),
+    }, parent);
+    // Keep an alarm pending so this buffered span drains within the flush interval even on eviction.
+    this.armTraceFlush();
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean) {
@@ -1002,8 +1091,18 @@ export class SessionAgentDO {
           console.log(`[SessionAgentDO] Disconnect grace expired — reverting processing→queued`);
           this.promptQueue.revertProcessingToQueued();
           this.promptQueue.runnerBusy = false;
-          if (this.promptQueue.length > 0 && !this.promptQueue.idleQueuedSince) {
-            this.promptQueue.idleQueuedSince = Date.now();
+          this._activeWorkflowExecutionId = undefined;
+          // Clear all per-channel busy flags and error safety nets — the
+          // runner is gone, so every channel is logically idle. Without
+          // this clear, channel_state.busy=1 latches survive the disconnect
+          // and pickNextDispatchableQueuedPrompt's channel-busy filter would
+          // skip every reverted row on reconnect (permanent queue stall).
+          this.promptQueue.clearAllChannelBusy();
+          this.promptQueue.clearAllChannelErrorSafetyNets();
+          // Arm idle-queued timers per-channel for any channel that now has queued
+          // work but no longer has a busy marker.
+          if (this.promptQueue.length > 0) {
+            this.promptQueue.armIdleQueuedSinceForAllQueuedChannels(Date.now());
             this.rescheduleIdleAlarm();
           }
         }
@@ -1071,6 +1170,9 @@ export class SessionAgentDO {
     } catch {
       // Socket already closed or invalid close code — ignore
     }
+
+    // Flush buffered spans before the DO can hibernate after this disconnect.
+    this.ctx.waitUntil(this.flushTraces());
   }
 
   async webSocketError(ws: WebSocket, error: unknown) {
@@ -1079,6 +1181,11 @@ export class SessionAgentDO {
   }
 
   private buildHealthSnapshot(): HealthSnapshot {
+    const STUCK_PROCESSING_TIMEOUT_MS = 5 * 60 * 1000;
+    const oldestProcessingDispatchedAt = this.promptQueue.getOldestProcessingDispatchedAt();
+    const stuckProcessingMessageId = this.promptQueue.getStuckProcessingMessageId(STUCK_PROCESSING_TIMEOUT_MS);
+    const idleQueued = this.promptQueue.getEarliestChannelIdleQueuedSince();
+    const errorSafetyNet = this.promptQueue.getEarliestChannelErrorSafetyNetAt();
     return {
       now: Date.now(),
       runnerConnected: this.runnerLink.isConnected,
@@ -1086,9 +1193,12 @@ export class SessionAgentDO {
       runnerBusy: this.promptQueue.runnerBusy,
       queuedCount: this.promptQueue.length,
       processingCount: this.promptQueue.processingCount,
-      lastDispatchedAt: this.promptQueue.lastPromptDispatchedAt,
-      idleQueuedSince: this.promptQueue.idleQueuedSince,
-      errorSafetyNetAt: this.promptQueue.errorSafetyNetAt,
+      oldestProcessingDispatchedAt,
+      stuckProcessingMessageId,
+      idleQueuedSince: idleQueued?.armedAt ?? 0,
+      idleQueuedChannelKey: idleQueued?.channelKey ?? null,
+      errorSafetyNetAt: errorSafetyNet?.armedAt ?? 0,
+      errorSafetyNetChannelKey: errorSafetyNet?.channelKey ?? null,
       sessionStatus: this.sessionState.status,
       runnerDisconnectedAt: this.sessionState.runnerDisconnectedAt,
       runnerConnectedAt: this.runnerLink.connectedAt,
@@ -1099,12 +1209,24 @@ export class SessionAgentDO {
   // ─── Alarm Handler ────────────────────────────────────────────────────
 
   async alarm() {
+    // Drain spans buffered on the WS/alarm hotpath — the alarm is the bounded-interval flush
+    // driver (JS timers freeze under hibernation). Runs even before the terminal early-return.
+    this.ctx.waitUntil(this.flushTraces());
+
     // ─── Early Exit: terminal states don't need alarms ──────────────
     const status = this.sessionState.status;
     if (['terminated', 'archived', 'error', 'hibernated'].includes(status)) {
       return; // don't re-arm
     }
 
+    // The alarm is a self-initiated tick with no inbound trace context → a root span. The branch
+    // actually taken (recovery / hibernate / health action) shows as the work inside.
+    const tracer = await this.getTracer();
+    await tracer.span('do.alarm', () => this.alarmTick(), { 'valet.session.id': this.sessionState.sessionId });
+  }
+
+  private async alarmTick(): Promise<void> {
+    const status = this.sessionState.status;
     const now = Date.now();
     const nowSecs = Math.floor(now / 1000);
 
@@ -1142,7 +1264,14 @@ export class SessionAgentDO {
     }
 
     // ─── Idle Hibernate Check ─────────────────────────────────────────
-    if (this.lifecycle.checkIdleTimeout()) {
+    // Skip hibernate while ANY turn is in flight. With cross-thread concurrent
+    // dispatch a long-running workflow or tool call would otherwise trigger
+    // hibernate mid-execution, killing the runner and (in the workflow case)
+    // potentially leaving the execution in an inconsistent state.
+    const idleHibernateAllowed = !this.promptQueue.runnerBusy
+      && this.promptQueue.processingCount === 0
+      && !this._activeWorkflowExecutionId;
+    if (idleHibernateAllowed && this.lifecycle.checkIdleTimeout()) {
       // Set status immediately to prevent re-entrant hibernation from subsequent alarms.
       // performHibernate() checks this guard and skips if already in progress.
       this.sessionState.status = 'hibernating';
@@ -1166,33 +1295,86 @@ export class SessionAgentDO {
 
       for (const action of result.actions) {
         switch (action.type) {
-          case 'revert_and_drain':
-            this.promptQueue.revertProcessingToQueued();
-            this.promptQueue.runnerBusy = false;
-            this.promptQueue.clearDispatchTimers();
-            this.promptQueue.idleQueuedSince = 0;
+          case 'revert_and_drain': {
+            // Revert only the specific wedged row. Healthy concurrent in-flight
+            // rows stay 'processing' so they don't get re-dispatched as
+            // duplicates by the subsequent drain.
+            if (action.messageId) {
+              this.promptQueue.revertProcessingToQueued(action.messageId);
+              const revertedKey = this.promptQueue.getChannelKeyById(action.messageId);
+              if (revertedKey) {
+                this.promptQueue.setChannelBusy(revertedKey, false);
+                this.promptQueue.armChannelIdleQueuedSince(revertedKey, Date.now());
+              }
+            } else {
+              // No specific row identified — fall back to the session-wide
+              // revert (used by tests; production paths always provide a
+              // messageId via getStuckProcessingMessageId).
+              this.promptQueue.revertProcessingToQueued();
+              this.promptQueue.runnerBusy = false;
+              this._activeWorkflowExecutionId = undefined;
+              this.promptQueue.armIdleQueuedSinceForAllQueuedChannels(Date.now());
+            }
+            // If no rows are still processing after the revert, the runner
+            // is idle session-wide.
+            if (this.promptQueue.processingCount === 0) {
+              this.promptQueue.runnerBusy = false;
+              this._activeWorkflowExecutionId = undefined;
+            }
             if (this.runnerLink.isConnected) {
               await this.sendNextQueuedPrompt();
             }
             break;
+          }
           case 'drain_queue':
+            // Re-arm timers for channels with remaining queued work so the
+            // stuck-queue watchdog can fire again if drain didn't reach them.
             if (await this.sendNextQueuedPrompt()) {
-              this.promptQueue.idleQueuedSince = 0;
+              this.promptQueue.armIdleQueuedSinceForAllQueuedChannels(Date.now());
             }
             break;
-          case 'force_complete':
-            this.promptQueue.errorSafetyNetAt = 0;
-            await this.handlePromptComplete();
+          case 'force_complete': {
+            // Surgically complete only the targeted channel's processing row.
+            // We look up the row by channel_key here (not via action.messageId,
+            // which is null because the error-safety-net timer doesn't align
+            // with the stuck-processing timer). Calling handlePromptComplete
+            // with no messageId would mass-delete every processing row —
+            // wiping healthy concurrent in-flight prompts on sibling channels.
+            let forceCompleteMessageId: string | undefined;
+            if (action.channelKey) {
+              this.promptQueue.setChannelErrorSafetyNetAt(action.channelKey, 0);
+              const rows = this.ctx.storage.sql
+                .exec(
+                  "SELECT id FROM prompt_queue WHERE channel_key = ? AND status = 'processing' ORDER BY created_at DESC LIMIT 1",
+                  action.channelKey,
+                )
+                .toArray();
+              forceCompleteMessageId = (rows[0]?.id as string | undefined) || undefined;
+            }
+            // Only complete if we identified a specific row. With no
+            // channelKey + no row, calling complete with undefined would
+            // mass-delete siblings; better to no-op and let the next health
+            // check decide.
+            if (forceCompleteMessageId) {
+              await this.handlePromptComplete(forceCompleteMessageId);
+            }
             break;
+          }
           case 'mark_not_busy':
+            // Only clears the session-wide runnerBusy. Per-channel busy
+            // flags are owned by the dispatch path and cleared by completion;
+            // we don't touch them here.
             this.promptQueue.runnerBusy = false;
-            this.promptQueue.clearDispatchTimers();
-            if (this.promptQueue.length > 0 && !this.promptQueue.idleQueuedSince) {
-              this.promptQueue.idleQueuedSince = Date.now();
+            this._activeWorkflowExecutionId = undefined;
+            if (this.promptQueue.length > 0) {
+              this.promptQueue.armIdleQueuedSinceForAllQueuedChannels(Date.now());
             }
             break;
           case 'clear_safety_net':
-            this.promptQueue.errorSafetyNetAt = 0;
+            // Per-channel — only clear the specific channel's net.
+            if (action.channelKey) {
+              this.promptQueue.setChannelErrorSafetyNetAt(action.channelKey, 0);
+            }
             break;
           case 'perform_recovery':
             this.sessionState.sandboxWakeStartedAt = 0;
@@ -1201,7 +1383,12 @@ export class SessionAgentDO {
         }
         this.broadcastToClients({
           type: 'status',
-          data: { runnerBusy: this.promptQueue.runnerBusy, watchdogRecovery: true },
+          data: {
+            runnerBusy: this.promptQueue.runnerBusy,
+            watchdogRecovery: true,
+            actionType: action.type,
+            reason: action.reason,
+          },
         });
         this.emitAuditEvent(`watchdog.${action.type}`, action.reason);
       }
@@ -1506,7 +1693,9 @@ export class SessionAgentDO {
         break;
 
       case 'abort':
-        await this.handleAbort();
+        // Scope the abort to the channel/thread the client specified so a
+        // Stop on one thread doesn't kill concurrent turns on other threads.
+        await this.handleAbort(msg.channelType, msg.channelId);
         break;
 
       case 'revert':
@@ -1633,9 +1822,12 @@ export class SessionAgentDO {
               threadId: withdrawn.threadId,
             },
           });
+          // Include the withdrawn entry's threadId so the client routes the
+          // "clear pending" to that thread's slot — not session-wide, which
+          // would wipe sibling threads' pending followups.
           this.broadcastToClients({
             type: 'queue.state',
-            data: { pending: null },
+            data: { pending: null, threadId: withdrawn.threadId ?? null },
           });
           this.emitAuditEvent('user.queue_withdraw', `Withdrew pending prompt ${withdrawn.id}`);
         }
@@ -1646,10 +1838,11 @@ export class SessionAgentDO {
         const entry = this.promptQueue.withdrawQueued();
         if (!entry) break; // no-op if nothing queued
 
-        // Broadcast withdrawal so the pending card clears immediately
+        // Broadcast withdrawal so the pending card clears immediately — scope
+        // to the promoted entry's thread so sibling threads' cards survive.
         this.broadcastToClients({
           type: 'queue.state',
-          data: { pending: null },
+          data: { pending: null, threadId: entry.threadId ?? null },
         });
 
         // If there are pending questions, the promoted message IS the user's
@@ -1774,6 +1967,7 @@ export class SessionAgentDO {
     author: { id: string; email: string; name?: string; avatarUrl?: string; gitName?: string; gitEmail?: string } | undefined,
     channelType: string | undefined,
     channelId: string | undefined,
+    threadId?: string,
   ): Promise<boolean> {
     const sessionOwnerId = this.sessionState.userId;
     if (!channelType || !author?.id || author.id !== sessionOwnerId) {
@@ -1794,6 +1988,14 @@ export class SessionAgentDO {
         }
       }
       const originTarget = this.getPromptOriginTarget(context);
+      // Thread-first matching: two threads sharing a channel (e.g. multiple
+      // threads bound to web:default) must not resolve each other's questions.
+      // The interactive_prompts.context stores threadId at creation; require it
+      // to match the incoming reply's threadId before considering channel pair.
+      const promptThreadId = typeof context?.threadId === 'string' ? (context.threadId as string) : undefined;
+      if (threadId || promptThreadId) {
+        if (threadId !== promptThreadId) return false;
+      }
       return this.sameChannelTarget(originTarget, { channelType, channelId });
     });
 
@@ -1818,7 +2020,7 @@ export class SessionAgentDO {
     continuationContext?: string,
     contextPrefix?: string,
     replyTo?: { channelType: string; channelId: string },
-    skipSingleSlot?: boolean,
+    queuePolicy?: PromptQueuePolicy,
   ) {
     // ─── Thread-reply capture for pending questions ─────────────────────
     // If there's a pending question and this message came from the same
@@ -1826,7 +2028,7 @@ export class SessionAgentDO {
     const replyQuestionChannelType = replyTo?.channelType ?? channelType;
     const replyQuestionChannelId = replyTo?.channelId ?? channelId;
     const incomingAttachmentCount = attachments?.length ?? 0;
-    if (await this.tryResolveChannelQuestion(content, author, replyQuestionChannelType, replyQuestionChannelId)) {
+    if (await this.tryResolveChannelQuestion(content, author, replyQuestionChannelType, replyQuestionChannelId, threadId)) {
       if (incomingAttachmentCount > 0) {
         console.warn(
           `[SessionAgentDO] handlePrompt: attachment-bearing prompt resolved pending question ` +
@@ -1881,10 +2083,9 @@ export class SessionAgentDO {
     this.lifecycle.touchActivity();
     this.rescheduleIdleAlarm();
 
-    // Track the current prompt author for PR attribution (Part 6)
-    if (author?.id) {
-      this.promptQueue.currentPromptAuthorId = author.id;
-    }
+    // (currentPromptAuthorId was removed — author is stored per-row on
+    // prompt_queue and per-channel on the dispatched ChannelSession in the
+    // runner; PR attribution should resolve via the message's author_id.)
 
     // If hibernated, auto-trigger wake before processing
     const currentStatus = this.sessionState.status;
@@ -1940,6 +2141,9 @@ export class SessionAgentDO {
     const channelBusy = this.promptQueue.isChannelBusy(channelKey);
     const anyChannelTracked = this.promptQueue.getBusyChannelKey() !== null;
     const shouldQueue = !runnerConnected || !runnerReady || channelBusy || (runnerBusy && !anyChannelTracked);
+    const replaceExistingQueued = queuePolicy?.replaceExistingQueued ?? true;
+    const queuePriority = queuePolicy?.priority ?? 0;
+    const queueReplaceable = queuePolicy?.replaceable ?? true;
     if (shouldQueue) {
       // ─── Enqueue path: defer message write to dispatch time ──────────
       const reason = channelBusy ? 'channel busy'
@@ -1951,10 +2155,10 @@ export class SessionAgentDO {
         `messageId=${messageId} attachments=${normalizedAttachments.length}`,
       );
 
-      // Single-slot enforcement: withdraw existing pending user prompt
-      // Skipped for steer prompts so the existing pending followup is preserved
-      if (!skipSingleSlot) {
-        const existingPending = this.promptQueue.withdrawQueued();
+      // Single-slot enforcement: normal user followups replace the pending prompt.
+      // Internal append/steer paths preserve existing queued work.
+      if (replaceExistingQueued) {
+        const existingPending = this.promptQueue.withdrawQueued({ replaceableOnly: true });
         if (existingPending) {
           this.broadcastToClients({
             type: 'queue.withdrawn',
@@ -1969,31 +2173,36 @@ export class SessionAgentDO {
         }
       }
 
-      // Enqueue WITHOUT writing to message store — write happens at dispatch time
+      // Enqueue WITHOUT writing to message store — write happens at dispatch time.
+      // received_at is stamped automatically by enqueue (per-row, not session-wide).
       this.promptQueue.enqueue({
         id: messageId, content, attachments: serializedQueuedAttachments, model,
         authorId: author?.id, authorEmail: author?.email, authorName: author?.name, authorAvatarUrl: author?.avatarUrl,
         channelType, channelId, channelKey, threadId, continuationContext, contextPrefix,
         replyChannelType: effectiveReplyTo?.channelType, replyChannelId: effectiveReplyTo?.channelId,
-        priority: skipSingleSlot ? 1 : 0,
+        priority: queuePriority,
+        replaceable: queueReplaceable,
       });
-      this.promptQueue.stampPromptReceived();
       this.emitAuditEvent(
         'prompt.queued',
         `Queued: ${reason} (status=${status || 'unknown'}, sandbox=${sandboxId ? 'yes' : 'no'}, queued=${this.promptQueue.length})`,
         author?.id
       );
 
-      // Runner not busy — arm idle-queue watchdog
-      if (!runnerBusy && !this.promptQueue.idleQueuedSince) {
-        this.promptQueue.idleQueuedSince = Date.now();
+      // Runner not busy — arm THIS channel's idle-queue watchdog. Per-channel
+      // so a wedged channel can be detected even while siblings are dispatching.
+      if (!runnerBusy) {
+        this.promptQueue.armChannelIdleQueuedSince(channelKey, Date.now());
         this.rescheduleIdleAlarm();
       }
 
-      // Broadcast queue.state instead of user message
+      // Broadcast queue.state instead of user message — top-level threadId
+      // lets the client route per-thread instead of clobbering its single
+      // pendingFollowup slot session-wide.
       this.broadcastToClients({
         type: 'queue.state',
         data: {
+          threadId,
           pending: {
             messageId,
             content,
@@ -2004,7 +2213,15 @@ export class SessionAgentDO {
       });
       this.broadcastToClients({
         type: 'status',
-        data: { promptQueued: true, queuePosition: this.promptQueue.length, queueReason: runnerBusy ? 'busy' : 'waking' },
+        data: {
+          promptQueued: true,
+          queuePosition: this.promptQueue.length,
+          queueReason: runnerBusy ? 'busy' : 'waking',
+          messageId,
+          channelType,
+          channelId,
+          threadId,
+        },
       });
       return;
     }
@@ -2060,18 +2277,20 @@ export class SessionAgentDO {
       `[SessionAgentDO] handlePrompt: DISPATCHING DIRECTLY channel=${channelKey} ` +
       `messageId=${messageId} attachments=${normalizedAttachments.length}`,
     );
-    this.promptQueue.stampPromptReceived();
-    // Insert into prompt_queue as 'processing' so it can be recovered if the runner disconnects
+    // Insert into prompt_queue as 'processing' so it can be recovered if the runner disconnects.
+    // received_at is stamped automatically by enqueue.
     this.promptQueue.enqueue({
       id: messageId, content, attachments: serializedQueuedAttachments, model, status: 'processing',
       authorId: author?.id, authorEmail: author?.email, authorName: author?.name, authorAvatarUrl: author?.avatarUrl,
       channelType, channelId, channelKey, threadId, continuationContext, contextPrefix,
       replyChannelType: effectiveReplyTo?.channelType, replyChannelId: effectiveReplyTo?.channelId,
+      priority: queuePriority,
+      replaceable: queueReplaceable,
     });
 
     // Forward directly to runner with author info + channel metadata
-    this.promptQueue.stampDispatched(channelKey);
-    this.promptQueue.idleQueuedSince = 0;
+    this.promptQueue.stampDispatched(messageId, channelKey);
+    this.promptQueue.setChannelIdleQueuedSince(channelKey, 0);
     this.sessionState.lastParentIdleNotice = undefined;
     this.sessionState.parentIdleNotifyAt = 0;
     this.sessionState.waitSubscription = null;
@@ -2099,7 +2318,7 @@ export class SessionAgentDO {
       : content;
 
     const channelOcSessionId = this.getChannelOcSessionId(channelKey);
-    const dispatched = this.runnerLink.send({
+    const dispatched = this.sendPrompt({
       type: 'prompt',
       messageId,
       content: agentContent,
@@ -2125,10 +2344,8 @@ export class SessionAgentDO {
       // Runner disappeared between the check and send — revert to queued for recovery
       this.promptQueue.revertProcessingToQueued(messageId);
       this.promptQueue.runnerBusy = false;
-      if (!this.promptQueue.idleQueuedSince) {
-        this.promptQueue.idleQueuedSince = Date.now();
-        this.rescheduleIdleAlarm();
-      }
+      this.promptQueue.armChannelIdleQueuedSince(channelKey, Date.now());
+      this.rescheduleIdleAlarm();
       this.emitAuditEvent('prompt.dispatch_failed', `Dispatch failed, reverted to queue: ${messageId}`);
     }
   }
@@ -2225,20 +2442,104 @@ export class SessionAgentDO {
   }
 
   private async handleAbort(channelType?: string, channelId?: string) {
-    if (channelType && channelId) {
+    if (channelType === 'thread' && channelId) {
       this.runnerLink.send({ type: 'abort', channelType, channelId });
+    } else if (channelType && channelId) {
+      // The DO normalizes threadId → channelType='thread' at dispatch
+      // time, so the runner's ChannelSession map is keyed `thread:<id>`.
+      // A non-thread channel-scoped abort (e.g. {channelType:'slack',
+      // channelId:'C1'}) cannot be resolved by the runner — it would fall
+      // through to the empty-target branch and never abort the still-
+      // streaming thread sessions on that channel. Fan out to one frame
+      // per active thread instead. The lookup matches BOTH the row's
+      // channel_key (unthreaded rows enqueued directly under
+      // 'slack:C1') AND its reply_channel_* pair (threaded rows whose
+      // channel_key was rewritten to 'thread:<tid>' but whose origin is
+      // still 'slack:C1') — otherwise the fan-out misses every thread
+      // launched from this channel.
+      const channelKey = this.channelKeyFrom(channelType, channelId);
+      const rows = this.ctx.storage.sql
+        .exec(
+          "SELECT DISTINCT thread_id FROM prompt_queue WHERE status = 'processing' AND (channel_key = ? OR (reply_channel_type = ? AND reply_channel_id = ?))",
+          channelKey,
+          channelType,
+          channelId,
+        )
+        .toArray();
+      const threadIds = rows
+        .map((r) => (r.thread_id as string | null) ?? null)
+        .filter((tid): tid is string => typeof tid === 'string' && tid.length > 0);
+      if (threadIds.length === 0) {
+        // No thread rows on this channel — emit a session-wide abort so
+        // the runner aborts any untracked sessions on that channel pair.
+        this.runnerLink.send({ type: 'abort' });
+      } else {
+        for (const tid of threadIds) {
+          this.runnerLink.send({ type: 'abort', channelType: 'thread', channelId: tid });
+        }
+      }
     } else {
       this.runnerLink.send({ type: 'abort' });
     }
 
-    // Broadcast status immediately (runner will confirm with 'aborted')
-    this.broadcastToClients({
-      type: 'agentStatus',
-      status: 'idle',
-    });
+    // Broadcast status immediately (runner will confirm with 'aborted').
+    // Scope the agentStatus event by channel/thread so concurrent thread
+    // turns each render their own state correctly. Resolve threadId from
+    // the processing row when the channel scope isn't a 'thread:' key
+    // (e.g. a Slack-channel-scoped abort) so the client can still clear
+    // its per-thread status entry.
+    if (channelType === 'thread') {
+      this.broadcastToClients({
+        type: 'agentStatus',
+        status: 'idle',
+        channelType,
+        channelId,
+        threadId: channelId,
+      });
+    } else if (channelType && channelId) {
+      // Channel-scoped abort (e.g. Slack-channel-scoped). Multiple threads
+      // may share the same channel_key; broadcast a clear for each distinct
+      // thread plus an unscoped clear if any NULL-thread rows exist (e.g.
+      // legacy or system-message rows on this channel). Lookup matches
+      // both the row's channel_key AND its reply_channel_* pair — see
+      // the runner fan-out above for rationale.
+      const channelKey = this.channelKeyFrom(channelType, channelId);
+      const rows = this.ctx.storage.sql
+        .exec(
+          "SELECT DISTINCT thread_id FROM prompt_queue WHERE status = 'processing' AND (channel_key = ? OR (reply_channel_type = ? AND reply_channel_id = ?))",
+          channelKey,
+          channelType,
+          channelId,
+        )
+        .toArray();
+      const threadIds: string[] = [];
+      let hasNullThread = false;
+      for (const r of rows) {
+        const tid = r.thread_id as string | null;
+        if (tid) threadIds.push(tid);
+        else hasNullThread = true;
+      }
+      if (threadIds.length === 0 && !hasNullThread) {
+        this.broadcastToClients({ type: 'agentStatus', status: 'idle', channelType, channelId, threadId: undefined });
+      } else {
+        for (const tid of threadIds) {
+          this.broadcastToClients({ type: 'agentStatus', status: 'idle', channelType, channelId, threadId: tid });
+        }
+        if (hasNullThread) {
+          this.broadcastToClients({ type: 'agentStatus', status: 'idle', channelType, channelId, threadId: undefined });
+        }
+      }
+    } else {
+      // Fully unscoped abort — session-wide.
+      this.broadcastToClients({
+        type: 'agentStatus',
+        status: 'idle',
+      });
+    }
 
-    // Clear promptReceivedAt so stale timestamps don't inflate turn_complete durations
-    this.promptQueue.clearPromptReceived();
+    // received_at is per-row now and persists with the prompt row; no global
+    // clear needed. The completed row will be marked completed via the runner's
+    // aborted/complete message and pruned naturally.
 
     this.emitAuditEvent('user.abort', `User aborted agent${channelType ? ` (channel: ${channelType}:${channelId})` : ''}`);
   }
@@ -2261,7 +2562,7 @@ export class SessionAgentDO {
     const abortChannelType = threadId ? 'thread' : channelType;
     const abortChannelId = threadId ? threadId : channelId;
     const incomingAttachmentCount = attachments?.length ?? 0;
-    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
+    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId, threadId)) {
       if (incomingAttachmentCount > 0) {
         console.warn(
           `[SessionAgentDO] handleInterruptPrompt: attachment-bearing prompt resolved pending question ` +
@@ -2288,7 +2589,11 @@ export class SessionAgentDO {
     }
     // Queue the new prompt — when the runner confirms abort, handlePromptComplete
     // will drain the queue and send this prompt to the runner
-    await this.handlePrompt(content, model, author, attachments, channelType, channelId, threadId, undefined, contextPrefix, undefined, true);
+    await this.handlePrompt(content, model, author, attachments, channelType, channelId, threadId, undefined, contextPrefix, undefined, {
+      replaceExistingQueued: false,
+      priority: 1,
+      replaceable: false,
+    });
   }
 
   // ─── Collect Mode (Phase D) ──────────────────────────────────────────
@@ -2308,7 +2613,7 @@ export class SessionAgentDO {
     // channel, resolve the question instead of buffering. Without this, the
     // reply gets collected and the question times out after 5 minutes.
     const incomingAttachmentCount = attachments?.length ?? 0;
-    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
+    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId, threadId)) {
       if (incomingAttachmentCount > 0) {
         console.warn(
           `[SessionAgentDO] handleCollectPrompt: attachment-bearing prompt resolved pending question ` +
@@ -2383,10 +2688,17 @@ export class SessionAgentDO {
     const flushAt = Date.now() + this.promptQueue.collectDebounceMs;
     this.rescheduleCollectAlarm(flushAt);
 
-    // Broadcast collect status
+    // Broadcast collect status with per-channel scope so a sibling channel's
+    // flush doesn't wipe this channel's "collecting…" indicator.
     this.broadcastToClients({
       type: 'status',
-      data: { collectPending: true, collectCount: bufferLength },
+      data: {
+        collectPending: true,
+        collectCount: bufferLength,
+        channelType,
+        channelId,
+        threadId,
+      },
     });
   }
 
@@ -2411,10 +2723,17 @@ export class SessionAgentDO {
       );
     }
 
-    if (flushes.length > 0) {
+    for (const { buffer } of flushes) {
+      const last = buffer[buffer.length - 1];
       this.broadcastToClients({
         type: 'status',
-        data: { collectPending: false, collectCount: 0 },
+        data: {
+          collectPending: false,
+          collectCount: 0,
+          channelType: last?.channelType,
+          channelId: last?.channelId,
+          threadId: last?.threadId,
+        },
       });
     }
 
@@ -2460,11 +2779,19 @@ export class SessionAgentDO {
         const entries = msg.entries;
         if (Array.isArray(entries)) {
           for (const entry of entries) {
+            // entry.{inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,
+            // reasoningTokens} mirror OpenCode's tokens shape verbatim. The
+            // billable-input view is input + cache_read + cache_write; the
+            // billable-output view is output + reasoning. See lib/db/analytics
+            // SQL_BILLABLE_*_EXPR for the canonical SQL composition.
             this.emitEvent('llm_call', {
               turnId: msg.turnId,
               model: entry.model ?? 'unknown',
               inputTokens: entry.inputTokens ?? 0,
               outputTokens: entry.outputTokens ?? 0,
+              cacheReadTokens: entry.cacheReadTokens ?? 0,
+              cacheWriteTokens: entry.cacheWriteTokens ?? 0,
+              reasoningTokens: entry.reasoningTokens ?? 0,
               properties: { oc_message_id: entry.ocMessageId },
             });
           }
@@ -2477,47 +2804,6 @@ export class SessionAgentDO {
         } else {
           this.sessionState.tunnels = [];
         }
-      },
-
-      'workflow-chat-message': (msg) => {
-        const ALLOWED_ROLES = new Set(['user', 'assistant', 'system']);
-        const rawRole = typeof msg.role === 'string' ? msg.role : 'user';
-        const role = (ALLOWED_ROLES.has(rawRole) ? rawRole : 'user') as 'user' | 'assistant' | 'system';
-        const content = (msg.content || '').trim();
-        if (!content) return;
-
-        const workflowMsgId = crypto.randomUUID();
-        const partsObj = msg.parts && typeof msg.parts === 'object' ? msg.parts as Record<string, unknown> : null;
-        const partsJson = partsObj ? JSON.stringify(partsObj) : null;
-        const workflowChannelType = typeof msg.channelType === 'string'
-          ? msg.channelType
-          : (partsObj && typeof partsObj.channelType === 'string' ? partsObj.channelType : null);
-        const workflowChannelId = typeof msg.channelId === 'string'
-          ? msg.channelId
-          : (partsObj && typeof partsObj.channelId === 'string' ? partsObj.channelId : null);
-        const workflowOcSessionId = typeof msg.opencodeSessionId === 'string'
-          ? msg.opencodeSessionId
-          : (partsObj && typeof partsObj.opencodeSessionId === 'string' ? partsObj.opencodeSessionId : null);
-        this.messageStore.writeMessage({
-          id: workflowMsgId,
-          role,
-          content,
-          parts: partsJson,
-          channelType: workflowChannelType,
-          channelId: workflowChannelId,
-          opencodeSessionId: workflowOcSessionId,
-        });
-        this.broadcastToClients({
-          type: 'message',
-          data: {
-            id: workflowMsgId,
-            role,
-            content,
-            ...(partsJson ? { parts: JSON.parse(partsJson) } : {}),
-            ...(workflowChannelType && workflowChannelId ? { channelType: workflowChannelType, channelId: workflowChannelId } : {}),
-            createdAt: Math.floor(Date.now() / 1000),
-          },
-        });
       },
 
       'question': async (msg) => {
@@ -2671,10 +2957,19 @@ export class SessionAgentDO {
               }
             }
             this.messageStore.updateMessageParts(msg.messageId, JSON.stringify(parts));
-            // Broadcast updated message to all clients
+            // Broadcast updated message to all clients. Include the source
+            // message's channel/thread so the client can route — siblings
+            // shouldn't be tempted to merge a stranger thread's update.
+            const sourceCh = this.getChannelForMessage(msg.messageId);
             this.broadcastToClients({
               type: 'message.updated',
-              data: { id: msg.messageId, parts },
+              data: {
+                id: msg.messageId,
+                parts,
+                threadId: sourceCh.found ? sourceCh.target.threadId : undefined,
+                channelType: sourceCh.found ? sourceCh.target.channelType : undefined,
+                channelId: sourceCh.found ? sourceCh.target.channelId : undefined,
+              },
             });
           }
         }
@@ -2711,6 +3006,7 @@ export class SessionAgentDO {
           error: msg.error,
           channelType: errCh.channelType,
           channelId: errCh.channelId,
+          threadId: errCh.threadId,
         });
         this.emitEvent('turn_error', {
           errorCode: 'agent_error',
@@ -2719,8 +3015,16 @@ export class SessionAgentDO {
         this.emitAuditEvent('agent.error', errorText.slice(0, 120));
 
         // Safety-net: if runner doesn't send 'complete' within 60s, force flush
+        // THIS channel's prompt — per-channel so a sibling's normal completion
+        // can't disarm an unrelated thread's safety net.
+        //
+        // Arm under the row's stored channel_key (NOT the reply-overridden
+        // errCh.channelType/channelId) so handlePromptComplete's clear path
+        // — which reads channel_key from the row — actually matches.
         const ERROR_SAFETY_NET_MS = 60_000;
-        this.promptQueue.errorSafetyNetAt = Date.now() + ERROR_SAFETY_NET_MS;
+        const errChannelKey = (msg.messageId ? this.promptQueue.getChannelKeyById(msg.messageId) : null)
+          ?? this.channelKeyFrom(errCh.channelType ?? undefined, errCh.channelId ?? undefined);
+        this.promptQueue.setChannelErrorSafetyNetAt(errChannelKey, Date.now() + ERROR_SAFETY_NET_MS);
         this.rescheduleIdleAlarm();
 
         // Publish session.errored to EventBus
@@ -2813,6 +3117,7 @@ export class SessionAgentDO {
 
       'message.finalize': (msg) => {
         const turnId = msg.turnId!;
+        this.turnChannelKeys.delete(turnId); // turn done — drop the trace correlation (bounded-growth)
         if (!this.messageStore.getTurnSnapshot(turnId)) {
           if (!this.messageStore.recoverTurn(turnId)) {
             console.warn(`[SessionAgentDO] finalize for unknown turn ${turnId}`);
@@ -2963,7 +3268,7 @@ export class SessionAgentDO {
               if (initialModel) {
                 this.sessionState.initialModel = undefined;
               }
-              this.runnerLink.send({
+              this.sendPrompt({
                 type: 'prompt',
                 messageId,
                 content: initialPrompt,
@@ -2971,7 +3276,7 @@ export class SessionAgentDO {
                 opencodeSessionId: this.getChannelOcSessionId(this.channelKeyFrom(undefined, undefined)),
                 modelPreferences: ipModelPrefs,
               });
-              this.promptQueue.stampDispatched(ipChannelKey);
+              this.promptQueue.stampDispatched(messageId, ipChannelKey);
               console.log(`[SessionAgentDO] agentStatus idle: dispatched initial prompt ${messageId}`);
             }
           }
@@ -3043,11 +3348,32 @@ export class SessionAgentDO {
         // race where a rapid new prompt can be dispatched then immediately
         // completed by markCompleted().
         const abortedMessageId = (msg as { messageId?: string }).messageId;
+        const ackChannelType = (msg as { channelType?: string }).channelType;
+        const ackChannelId = (msg as { channelId?: string }).channelId;
+        // Scope the idle broadcast by the aborted row's thread/channel when
+        // available. Channel-scoped fan-out (one 'aborted' frame per active
+        // thread) would otherwise flood every client with N unscoped idle
+        // events and repeatedly flip the session-wide chrome.
+        // Resolve target preference: messageId → ack channel context →
+        // per-channel processing context. The runner now forwards
+        // channelType/channelId on the aborted frame so completion can
+        // route correctly even when messageId is missing (e.g. duplicate
+        // abort whose activeMessageId was cleared by a sibling frame).
+        const target = abortedMessageId
+          ? this.promptQueue.getChannelTargetById(abortedMessageId)
+          : undefined;
+        const broadcastChannelType = target?.channelType ?? ackChannelType ?? undefined;
+        const broadcastChannelId = target?.channelId ?? ackChannelId ?? undefined;
+        const broadcastThreadId = target?.threadId
+          ?? (ackChannelType === 'thread' ? ackChannelId : undefined);
         this.broadcastToClients({
           type: 'agentStatus',
           status: 'idle',
+          channelType: broadcastChannelType,
+          channelId: broadcastChannelId,
+          threadId: broadcastThreadId,
         });
-        await this.handlePromptComplete(abortedMessageId);
+        await this.handlePromptComplete(abortedMessageId, ackChannelType, ackChannelId);
       },
 
       'reverted': (msg) => {
@@ -3570,108 +3896,6 @@ export class SessionAgentDO {
         }
       },
 
-      'workflow-list': async (msg) => {
-        try {
-          const result = await workflowListSvc(this.appDb, this.sessionState.userId);
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-list-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-list-result', requestId: msg.requestId!, workflows: result.data!.workflows } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to list workflows:', err);
-          this.runnerLink.send({ type: 'workflow-list-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-sync': async (msg) => {
-        try {
-          const result = await workflowSyncSvc(this.appDb, this.env.DB, this.sessionState.userId, {
-            id: msg.id,
-            slug: msg.slug,
-            name: msg.name,
-            description: msg.description,
-            version: msg.version,
-            data: msg.data,
-          });
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-sync-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-sync-result', requestId: msg.requestId!, success: true, workflow: result.data!.workflow } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to sync workflow:', err);
-          this.runnerLink.send({ type: 'workflow-sync-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-run': async (msg) => {
-        try {
-          const result = await workflowRunSvc(this.appDb, this.env.DB, this.env, this.sessionState.userId, msg.requestId!, {
-            workflowId: msg.workflowId!,
-            variables: msg.variables,
-            repoContext: {
-              repoUrl: msg.repoUrl,
-              branch: msg.branch,
-              ref: msg.ref,
-              sourceRepoFullName: msg.sourceRepoFullName,
-            },
-            spawnRequest: this.sessionState.spawnRequest,
-          });
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-run-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-run-result', requestId: msg.requestId!, execution: result.data!.execution } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to run workflow:', err);
-          this.runnerLink.send({ type: 'workflow-run-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-executions': async (msg) => {
-        try {
-          const result = await workflowExecutionsSvc(this.appDb, this.env.DB, this.sessionState.userId, msg.workflowId, msg.limit);
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-executions-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-executions-result', requestId: msg.requestId!, executions: result.data!.executions } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to list workflow executions:', err);
-          this.runnerLink.send({ type: 'workflow-executions-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-api': async (msg) => {
-        try {
-          const result = await handleWorkflowActionSvc(this.appDb, this.env.DB, this.sessionState.userId, msg.action || '', msg.payload);
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-api-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-api-result', requestId: msg.requestId!, data: result.data } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Workflow API error:', err);
-          this.runnerLink.send({ type: 'workflow-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'trigger-api': async (msg) => {
-        try {
-          const augmentedPayload = msg.payload ? { ...msg.payload, requestId: msg.requestId, _spawnRequest: this.sessionState.spawnRequest } : { requestId: msg.requestId, _spawnRequest: this.sessionState.spawnRequest };
-          const result = await handleTriggerActionSvc(this.appDb, this.env.DB, this.env, this.sessionState.userId, this.sessionState.sessionId, msg.action || '', augmentedPayload);
-          if (result.error) {
-            this.runnerLink.send({ type: 'trigger-api-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'trigger-api-result', requestId: msg.requestId!, data: result.data } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Trigger API error:', err);
-          this.runnerLink.send({ type: 'trigger-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
       'skill-api': async (msg) => {
         try {
           const orgId = await this.resolveOrgId() ?? 'default';
@@ -3743,32 +3967,6 @@ export class SessionAgentDO {
         } catch (err) {
           console.error('[SessionAgentDO] Identity API error:', err);
           this.runnerLink.send({ type: 'identity-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err), statusCode: 500 } as any);
-        }
-      },
-
-      'execution-api': async (msg) => {
-        try {
-          const result = await handleExecutionActionSvc(this.appDb, this.env.DB, this.env, this.sessionState.userId, msg.action || '', msg.payload);
-          if (result.error) {
-            this.runnerLink.send({ type: 'execution-api-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'execution-api-result', requestId: msg.requestId!, data: result.data } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Execution API error:', err);
-          this.runnerLink.send({ type: 'execution-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-execution-result': async (msg) => {
-        const resultData = await processWorkflowExecutionResultSvc(
-          this.appDb,
-          this.env.DB,
-          msg,
-          this.sessionState.sessionId,
-        );
-        if (resultData?.shouldStopSession) {
-          this.ctx.waitUntil(this.handleStop(`workflow_execution_${resultData.nextStatus}`));
         }
       },
 
@@ -3899,7 +4097,7 @@ export class SessionAgentDO {
       },
 
       'call-tool': async (msg) => {
-        await this.handleCallTool(msg.requestId!, msg.toolId!, msg.params ?? {}, msg.summary);
+        await this.handleCallTool(msg.requestId!, msg.toolId!, msg.params ?? {}, msg.summary, msg.opencodeSessionId);
       },
 
       'repo:refresh-token': async (msg) => {
@@ -4031,6 +4229,16 @@ export class SessionAgentDO {
     return value || undefined;
   }
 
+  /** Reverse lookup: which channel_key owns this OpenCode session?
+   *  Used by handleCallTool to route an approval back to the originating
+   *  thread under cross-thread concurrent dispatch. */
+  private getChannelKeyByOcSessionId(opencodeSessionId: string): string | undefined {
+    const row = this.ctx.storage.sql
+      .exec('SELECT channel_key FROM channel_state WHERE opencode_session_id = ? LIMIT 1', opencodeSessionId)
+      .toArray();
+    return (row[0]?.channel_key as string | undefined) || undefined;
+  }
+
   private async hydrateThreadResumeContext(threadId: string): Promise<{ opencodeSessionId?: string; continuationContext?: string }> {
     const threadRow = await this.env.DB
       .prepare('SELECT session_id, opencode_session_id FROM session_threads WHERE id = ?')
@@ -4076,7 +4284,11 @@ export class SessionAgentDO {
     }
   }
 
-  private async handlePromptComplete(messageId?: string) {
+  private async handlePromptComplete(
+    messageId?: string,
+    ackChannelType?: string,
+    ackChannelId?: string,
+  ) {
     // Read channel target BEFORE markCompletedById deletes the row — needed
     // to resolve channel followups so stale reminders don't fire after the
     // prompt has already been handled. Hoisted above try so the catch block
@@ -4085,19 +4297,27 @@ export class SessionAgentDO {
       ? this.promptQueue.getChannelTargetById(messageId)
       : this.promptQueue.getProcessingChannelContext();
 
-    // Resolve per-channel busy key BEFORE the row is deleted.
+    // Resolve per-channel busy key BEFORE the row is deleted. Prefer
+    // messageId → ack-frame channel (runner now forwards channelType/
+    // channelId on 'aborted' so we can resolve under concurrent dispatch
+    // when getProcessingChannelKey bails on 2+ processing rows) →
+    // per-channel processing context.
     const completedChannelKey = messageId
       ? this.promptQueue.getChannelKeyById(messageId)
-      : this.promptQueue.getProcessingChannelKey();
+      : (ackChannelType && ackChannelId
+        ? this.channelKeyFrom(ackChannelType, ackChannelId)
+        : this.promptQueue.getProcessingChannelKey());
 
     try {
-      this.promptQueue.clearDispatchTimers();
+      // Resolve the completed prompt's per-row timing + model BEFORE the row
+      // is marked completed so we can attribute turn_complete correctly under
+      // concurrent dispatch (no shared session-wide promptReceivedAt slot).
+      const receivedAt = messageId ? this.promptQueue.getReceivedAtById(messageId) : 0;
+      const turnModel = messageId
+        ? (this.promptQueue.getModelById(messageId) ?? undefined)
+        : (this.promptQueue.getProcessingModel() ?? undefined);
 
-      // Emit turn_complete timing — measure total time from prompt received to completion
-      const promptStart = this.promptQueue.promptReceivedAt;
-      if (promptStart > 0) {
-        // Read model from the processing prompt_queue entry before it's marked completed
-        const turnModel = this.promptQueue.getProcessingModel() || undefined;
+      if (receivedAt > 0) {
         // Resolve channel from the specific prompt's messageId; no fallback to
         // mutable state. If messageId is absent or the row is gone (e.g. queue
         // was already pruned), emit without channel attribution rather than
@@ -4105,22 +4325,32 @@ export class SessionAgentDO {
         const completedLookup = messageId ? this.getChannelForMessage(messageId) : null;
         const completedCh = completedLookup?.found ? completedLookup.target : null;
         this.emitEvent('turn_complete', {
-          durationMs: Date.now() - promptStart,
+          durationMs: Date.now() - receivedAt,
           channel: completedCh?.channelType || undefined,
           model: turnModel,
           queueMode: this.promptQueue.queueMode || undefined,
         });
-        this.promptQueue.clearPromptReceived();
       }
 
       this.emitAuditEvent('agent.turn_complete', 'Agent turn completed');
 
-      // Mark processing → completed, then prune
-      const processingCount = this.promptQueue.markCompletedById(messageId);
+      // Mark processing → completed, then prune. When messageId is absent
+      // (runner sent `aborted` without a specific row reference), fall back
+      // to the channel context — completing one row on the resolved channel
+      // is correct; the previous unscoped fallback wiped EVERY processing
+      // row across the DO and orphaned sibling threads' runner state.
+      let processingCount = 0;
+      if (messageId) {
+        processingCount = this.promptQueue.markCompletedById(messageId);
+      } else if (completedChannelKey) {
+        const completedId = this.promptQueue.markCompletedMostRecentByChannel(completedChannelKey);
+        processingCount = completedId ? 1 : 0;
+      }
 
-      // Clear per-channel busy state for the completed channel.
+      // Clear per-channel busy + per-channel safety net for the completed channel.
       if (completedChannelKey) {
         this.promptQueue.setChannelBusy(completedChannelKey, false);
+        this.promptQueue.setChannelErrorSafetyNetAt(completedChannelKey, 0);
       }
 
       // If scoped messageId was already completed (e.g. dedup path sent a second
@@ -4128,6 +4358,14 @@ export class SessionAgentDO {
       // the first complete already handled it.
       if (messageId && processingCount === 0) {
         console.log(`[SessionAgentDO] handlePromptComplete: messageId=${messageId} already completed, skipping`);
+        return;
+      }
+      // If we couldn't resolve either a messageId or a channel context, skip
+      // the queue drain. Otherwise a confused 'aborted' frame would trigger
+      // an unrelated channel's next queued prompt — surprising side-effect
+      // the user never asked for.
+      if (!messageId && !completedChannelKey) {
+        console.log(`[SessionAgentDO] handlePromptComplete: no messageId and no channel context, skipping drain`);
         return;
       }
 
@@ -4147,14 +4385,17 @@ export class SessionAgentDO {
       // Runner is now idle — flush messages synchronously so they survive hibernation
       await this.flushMessagesToD1();
 
-      // Track idle-queued timing for watchdog
+      // Track idle-queued timing for watchdog. With per-channel timers we
+      // only arm timers for channels that genuinely have queued work waiting.
       if (this.promptQueue.length > 0) {
-        if (!this.promptQueue.idleQueuedSince) {
-          this.promptQueue.idleQueuedSince = Date.now();
-          this.rescheduleIdleAlarm();
-        }
+        // Re-arm idle timers for every channel that still has queued rows so
+        // the stuck-queue watchdog catches wedges. Enqueue paths only arm when
+        // `!runnerBusy`, so prompts queued while busy may have no timer until
+        // we get here.
+        this.promptQueue.armIdleQueuedSinceForAllQueuedChannels(Date.now());
+        this.rescheduleIdleAlarm();
       } else {
-        this.promptQueue.idleQueuedSince = 0;
+        this.promptQueue.clearAllChannelIdleQueuedSince();
       }
 
       // Only mark runner idle if no other channels are still processing.
@@ -4166,22 +4407,44 @@ export class SessionAgentDO {
       } else {
         console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
         this.promptQueue.runnerBusy = false;
+        this._activeWorkflowExecutionId = undefined;
+        // Session-wide idle event. Include completed-turn scope so clients
+        // can also route "this thread just completed" per-thread.
+        const completedLookup = messageId ? this.getChannelForMessage(messageId) : null;
+        const completedThreadId = completedLookup?.found ? completedLookup.target.threadId : undefined;
         this.broadcastToClients({
           type: 'status',
-          data: { runnerBusy: false },
+          data: {
+            runnerBusy: false,
+            messageId,
+            threadId: completedThreadId,
+          },
         });
         this.notifyParentIfIdle();
       }
     } catch (err) {
-      // Ensure runnerBusy is cleared even on error to prevent permanent stuck state
-      console.error('[SessionAgentDO] handlePromptComplete error, forcing runnerBusy=false:', err);
-      this.promptQueue.runnerBusy = false;
+      console.error('[SessionAgentDO] handlePromptComplete error, recovering channel state:', err);
       if (completedChannelKey) {
         this.promptQueue.setChannelBusy(completedChannelKey, false);
+        // Also clear that channel's error safety net so the watchdog doesn't
+        // later fire force_complete against a row that's already gone.
+        this.promptQueue.setChannelErrorSafetyNetAt(completedChannelKey, 0);
+      }
+      // Only clear session-wide runnerBusy if NO other channels still hold
+      // processing rows. Under cross-thread concurrent dispatch a failure in
+      // channel A's completion path mustn't free the runner while channel B
+      // is still in flight — otherwise the next dispatch bypasses the
+      // exclusivity gate and overlaps with B on the same OpenCode session.
+      if (this.promptQueue.processingCount === 0) {
+        this.promptQueue.runnerBusy = false;
+        this._activeWorkflowExecutionId = undefined;
+      }
+      if (this.promptQueue.length > 0) {
+        this.promptQueue.armIdleQueuedSinceForAllQueuedChannels(Date.now());
       }
       this.broadcastToClients({
         type: 'status',
-        data: { runnerBusy: false },
+        data: { runnerBusy: this.promptQueue.runnerBusy },
       });
 
       // Best-effort: resolve followups even on error so stale reminders don't
@@ -4204,7 +4467,8 @@ export class SessionAgentDO {
     // This is important for well-known DOs (orchestrators) that get reused.
     this.messageStore.reset();
     this.promptQueue.clearAll();
-    this.promptQueue.idleQueuedSince = 0;
+    this.promptQueue.clearAllChannelIdleQueuedSince();
+    this.promptQueue.clearAllChannelErrorSafetyNets();
     this.ctx.storage.sql.exec('DELETE FROM analytics_events');
     this.ctx.storage.sql.exec('DELETE FROM channel_followups');
 
@@ -4395,7 +4659,7 @@ export class SessionAgentDO {
     // Expire session-scoped action policy overrides before stopping the runner
     // so no in-flight tool call can sneak through with a stale auto-allow.
     if (sessionId) {
-      await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+      await deleteRuntimeGrantsByScope(this.appDb, { sessionId });
     }
 
     // Tell runner to stop
@@ -4566,6 +4830,15 @@ export class SessionAgentDO {
     });
   }
 
+  private handleThreadStatus(url: URL): Response {
+    const threadId = url.searchParams.get('threadId')?.trim();
+    if (!threadId) {
+      return Response.json({ error: 'Missing threadId' }, { status: 400 });
+    }
+
+    return Response.json(this.promptQueue.getThreadPromptStatus(threadId));
+  }
+
   private notifyParentIfIdle() {
     const sessionId = this.sessionState.sessionId;
     if (!sessionId) return;
@@ -4714,7 +4987,7 @@ export class SessionAgentDO {
           // Runner is connected and idle — insert as 'processing' for recoverability, then dispatch
           const sysChannelKey = this.channelKeyFrom(sysChannelType, sysChannelId);
           this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, channelKey: sysChannelKey, status: 'processing', childSessionId: queueChildSessionId, childStatus: queueChildStatus });
-          this.promptQueue.stampDispatched(sysChannelKey);
+          this.promptQueue.stampDispatched(messageId, sysChannelKey);
           this.sessionState.lastParentIdleNotice = undefined;
           this.sessionState.parentIdleNotifyAt = 0;
           this.sessionState.waitSubscription = null;
@@ -4725,7 +4998,7 @@ export class SessionAgentDO {
             await this.ensureThreadOcSessionHydrated(threadId, sysChannelKey);
           }
           const sysOcSessionId = this.getChannelOcSessionId(sysChannelKey);
-          const sysDispatched = this.runnerLink.send({
+          const sysDispatched = this.sendPrompt({
             type: 'prompt',
             messageId,
             content,
@@ -4738,11 +5011,9 @@ export class SessionAgentDO {
           if (!sysDispatched) {
             this.promptQueue.revertProcessingToQueued(messageId);
             this.promptQueue.runnerBusy = false;
-            this.promptQueue.clearDispatchTimers();
-            if (!this.promptQueue.idleQueuedSince) {
-              this.promptQueue.idleQueuedSince = Date.now();
-              this.rescheduleIdleAlarm();
-            }
+            const sysChannelKey = this.channelKeyFrom(sysChannelType, sysChannelId);
+            this.promptQueue.armChannelIdleQueuedSince(sysChannelKey, Date.now());
+            this.rescheduleIdleAlarm();
             this.emitAuditEvent('prompt.dispatch_failed', `System prompt dispatch failed, reverted: ${messageId.slice(0, 8)}`);
           }
           this.rescheduleIdleAlarm();
@@ -4752,84 +5023,6 @@ export class SessionAgentDO {
         }
       }
     }
-  }
-
-  private async handleWorkflowExecuteDispatch(
-    executionIdRaw?: string,
-    payload?: WorkflowExecutionDispatchPayload,
-  ): Promise<Response> {
-    const dispatchResult = buildWorkflowDispatch(executionIdRaw, payload);
-    if (dispatchResult.error) {
-      return Response.json({ error: dispatchResult.error.error }, { status: dispatchResult.error.status });
-    }
-
-    const { executionId, payload: validPayload } = dispatchResult.ready!;
-
-    const status = this.sessionState.status;
-    const queueWorkflowDispatch = (reason: string) => {
-      const queueId = crypto.randomUUID();
-      this.promptQueue.enqueue({
-        id: queueId, content: '', queueType: 'workflow_execute',
-        workflowExecutionId: executionId, workflowPayload: JSON.stringify(validPayload),
-      });
-      this.emitAuditEvent(
-        'workflow.dispatch_queued',
-        `Workflow execution queued (${executionId.slice(0, 8)}): ${reason}`,
-        undefined,
-        { executionId, kind: validPayload.kind, reason },
-      );
-      return Response.json({ success: true, queued: true, reason }, { status: 202 });
-    };
-
-    if (status === 'hibernated') {
-      this.ctx.waitUntil(this.performWake());
-      return queueWorkflowDispatch('session_hibernated_waking');
-    }
-    if (status === 'restoring' || status === 'initializing' || status === 'hibernating') {
-      return queueWorkflowDispatch(`session_not_ready:${status}`);
-    }
-
-    if (!this.runnerLink.isConnected) {
-      return queueWorkflowDispatch('runner_not_connected');
-    }
-
-    if (!this.runnerLink.isReady) {
-      return queueWorkflowDispatch('runner_not_ready');
-    }
-
-    if (this.promptQueue.runnerBusy) {
-      return queueWorkflowDispatch('runner_busy');
-    }
-
-    this.lifecycle.touchActivity();
-    this.promptQueue.stampDispatched();
-    this.rescheduleIdleAlarm();
-    this.sessionState.lastParentIdleNotice = undefined;
-    this.sessionState.parentIdleNotifyAt = 0;
-    this.sessionState.waitSubscription = null;
-    const dispatchOwnerId = this.sessionState.userId;
-    const dispatchOwnerDetails = dispatchOwnerId ? await this.getUserDetails(dispatchOwnerId) : undefined;
-    const dispatchModelPrefs = await this.resolveModelPreferences(dispatchOwnerDetails);
-
-    const directWfDispatched = this.runnerLink.send({
-      type: 'workflow-execute',
-      executionId,
-      payload: validPayload,
-      modelPreferences: dispatchModelPrefs,
-    });
-    if (!directWfDispatched) {
-      this.promptQueue.runnerBusy = false;
-      return queueWorkflowDispatch('runner_send_failed');
-    }
-
-    this.emitAuditEvent(
-      'workflow.dispatch',
-      `Workflow execution dispatched (${executionId.slice(0, 8)})`,
-      undefined,
-      { executionId, kind: validPayload.kind },
-    );
-
-    return Response.json({ success: true });
   }
 
   private async sendNextQueuedPrompt(): Promise<boolean> {
@@ -4842,6 +5035,58 @@ export class SessionAgentDO {
       return false;
     }
 
+    // Drain as many queued prompts as we can dispatch in one pass. Items on
+    // different channels can run concurrently (TKAI-65), so when the runner
+    // wakes up to a queue of N cross-channel prompts we fire them all instead
+    // of dispatching one and waiting for it to finish before sending the next.
+    // `skippedBusyIds` prevents the dequeue/revert pair from cycling forever
+    // on rows whose channels are still busy after we already passed them.
+    // We snapshot `waitSubscription` because `dispatchQueuedPromptEntry`
+    // clears it on every successful dispatch — without the snapshot, the
+    // first dispatch's clear would silently disable child-event filtering for
+    // items 2..N in the same pass.
+    let dispatchedAny = false;
+    const skippedBusyIds = new Set<string>();
+    const waitSubscriptionSnapshot = this.sessionState.waitSubscription;
+
+    while (true) {
+      const next = this.pickNextDispatchableQueuedPrompt(skippedBusyIds, waitSubscriptionSnapshot);
+      if (!next) {
+        if (!dispatchedAny) {
+          console.log(`[SessionAgentDO] sendNextQueuedPrompt: no queued items`);
+        }
+        break;
+      }
+
+      const ok = await this.dispatchQueuedPromptEntry(next);
+      if (!ok) {
+        // Dispatch failed — revert + audit already happened inside the helper.
+        // Don't keep trying; the runner is likely unhealthy.
+        break;
+      }
+      dispatchedAny = true;
+    }
+
+    return dispatchedAny;
+  }
+
+  /**
+   * Select the next queue row that can be dispatched right now: drops
+   * malformed/filtered entries, reverts rows whose channels are busy, and
+   * returns the first row marked 'processing' that's ready to send.
+   *
+   * `skippedBusyIds` is mutated to remember rows already reverted as busy in
+   * this drain pass. We pass that set into `dequeueNext` so each subsequent
+   * pick advances past those rows instead of cycling on the oldest one.
+   *
+   * `waitSubscription` is a snapshot taken at drain entry so child-event
+   * filtering uses the subscription that was in effect when the drain
+   * started, not whatever a mid-drain dispatch left behind.
+   */
+  private pickNextDispatchableQueuedPrompt(
+    skippedBusyIds: Set<string>,
+    waitSubscription: { reason?: string; sessionIds?: string[]; notifyOn?: string; statuses?: string[] } | null,
+  ): QueueEntry | null {
     // When a wait subscription is active, prefer child events that match the
     // subscription (dispatched directly by handleSystemMessage's wake path,
     // not via the queue — but legacy queued events may exist). If the next
@@ -4849,7 +5094,7 @@ export class SessionAgentDO {
     // to general dispatch and let the user prompt wake the agent — per the
     // orchestrator persona, user messages always wake an agent that yielded
     // via wait_for_event. The subscription is cleared at dispatch time below.
-    let prompt = this.promptQueue.dequeueNext();
+    let prompt = this.promptQueue.dequeueNext(skippedBusyIds);
     while (prompt) {
       console.log(`[SessionAgentDO] sendNextQueuedPrompt: found queued item id=${prompt.id} channelType=${prompt.channelType || 'none'} channelId=${prompt.channelId || 'none'} queueType=${prompt.queueType || 'prompt'}`);
 
@@ -4858,7 +5103,7 @@ export class SessionAgentDO {
       // the agent registered via wait_for_event — drop them and try the next entry.
       let shouldSkip = false;
       if (prompt.childSessionId) {
-        const queueSub = this.sessionState.waitSubscription;
+        const queueSub = waitSubscription;
         if (queueSub) {
           const terminalStatuses = new Set(['terminated', 'error', 'hibernated']);
           const notifyOn = queueSub.notifyOn || 'status_change';
@@ -4880,40 +5125,73 @@ export class SessionAgentDO {
         }
       }
 
-      // Drop malformed workflow entries
-      if (!shouldSkip && prompt.queueType === 'workflow_execute') {
-        const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
-        const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload);
-        if (!queuedExecutionId || !queuedPayload) {
-          console.warn(`[SessionAgentDO] Dropping malformed queued workflow dispatch id=${prompt.id}`);
-          shouldSkip = true;
-        }
-      }
-
       if (shouldSkip) {
         this.promptQueue.dropEntry(prompt.id);
-        prompt = this.promptQueue.dequeueNext();
+        prompt = this.promptQueue.dequeueNext(skippedBusyIds);
+        continue;
+      }
+
+      // Refuse to dispatch when runnerBusy is set but no channel is
+      // tracked — that signals an untracked turn (e.g. recovery) owns
+      // the runner.
+      const anyChannelBusy = this.promptQueue.getBusyChannelKey() !== null;
+      if (this.promptQueue.runnerBusy && !anyChannelBusy) {
+        console.log(`[SessionAgentDO] sendNextQueuedPrompt: skipping item ${prompt.id} — runner exclusively busy (runnerBusy=${this.promptQueue.runnerBusy} anyChannelBusy=${anyChannelBusy})`);
+        skippedBusyIds.add(prompt.id);
+        this.promptQueue.revertProcessingToQueued(prompt.id);
+        prompt = this.promptQueue.dequeueNext(skippedBusyIds);
         continue;
       }
 
       // Skip items whose target channel is already busy (concurrent dispatch).
       // Don't drop — revert to queued so they dispatch when the channel completes.
+      // Re-arm this channel's idle timer so the stuck-queue watchdog can still
+      // catch the wedge (a prior drain may have cleared the timer en masse).
       const queuedChannelKey = prompt.channelKey || this.channelKeyFrom(prompt.channelType || undefined, prompt.channelId || undefined);
       if (this.promptQueue.isChannelBusy(queuedChannelKey)) {
         console.log(`[SessionAgentDO] sendNextQueuedPrompt: skipping item ${prompt.id} — channel ${queuedChannelKey} is busy`);
+        skippedBusyIds.add(prompt.id);
         this.promptQueue.revertProcessingToQueued(prompt.id);
-        prompt = this.promptQueue.dequeueNext();
+        this.promptQueue.armChannelIdleQueuedSince(queuedChannelKey, Date.now());
+        prompt = this.promptQueue.dequeueNext(skippedBusyIds);
         continue;
       }
 
-      break;
+      return prompt;
     }
 
-    if (!prompt) {
-      console.log(`[SessionAgentDO] sendNextQueuedPrompt: no queued items`);
+    return null;
+  }
+
+  /**
+   * Dispatch a single queue entry that has already been marked 'processing'
+   * by {@link pickNextDispatchableQueuedPrompt}. Returns true on a successful
+   * runner send; on failure (send refused or any other thrown error during
+   * the dispatch body) the row is reverted to 'queued' and false is returned.
+   *
+   * Channel-busy/wait-subscription filtering is the caller's job. The body
+   * is wrapped in try/catch so a mid-drain exception only reverts THIS row;
+   * earlier successfully-dispatched rows stay 'processing' so they aren't
+   * silently re-sent to the runner on the next drain pass.
+   */
+  private async dispatchQueuedPromptEntry(prompt: QueueEntry): Promise<boolean> {
+    try {
+      return await this.dispatchQueuedPromptEntryUnsafe(prompt);
+    } catch (err) {
+      console.error(
+        `[SessionAgentDO] dispatchQueuedPromptEntry: error dispatching ${prompt.id}, reverting to queued:`,
+        err,
+      );
+      this.promptQueue.revertProcessingToQueued(prompt.id);
+      this.emitAuditEvent(
+        'prompt.dispatch_failed',
+        `Queue dispatch threw: ${prompt.id.slice(0, 8)}`,
+      );
       return false;
     }
+  }
 
+  private async dispatchQueuedPromptEntryUnsafe(prompt: QueueEntry): Promise<boolean> {
     // ─── Deferred user message write ───────────────────────────────────
     // User messages are not written to the message store at enqueue time.
     // Write + broadcast now at dispatch time. Uses INSERT OR IGNORE for
@@ -4970,51 +5248,12 @@ export class SessionAgentDO {
         this.emitAuditEvent('user.prompt', prompt.content?.slice(0, 120) || '[empty]', prompt.authorId || undefined);
       }
 
-      // Always broadcast queue.state to clear the pending card
+      // Broadcast per-thread queue.state to clear that thread's pending card
+      // (an unscoped null would wipe every thread's pendingFollowup on the client).
       this.broadcastToClients({
         type: 'queue.state',
-        data: { pending: null },
+        data: { pending: null, threadId: prompt.threadId ?? null },
       });
-    }
-
-    if (prompt.queueType === 'workflow_execute') {
-      const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
-      const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload)!;
-
-      this.promptQueue.stampDispatched();
-      this.promptQueue.idleQueuedSince = 0;
-      this.sessionState.lastParentIdleNotice = undefined;
-      this.sessionState.parentIdleNotifyAt = 0;
-      this.sessionState.waitSubscription = null;
-      const queueOwnerId = this.sessionState.userId;
-      const queueOwnerDetails = queueOwnerId ? await this.getUserDetails(queueOwnerId) : undefined;
-      const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
-      const wfDispatched = this.runnerLink.send({
-        type: 'workflow-execute',
-        executionId: queuedExecutionId,
-        payload: queuedPayload,
-        modelPreferences: queueModelPrefs,
-      });
-      if (!wfDispatched) {
-        this.promptQueue.revertProcessingToQueued(prompt.id);
-        this.promptQueue.runnerBusy = false;
-        if (!this.promptQueue.idleQueuedSince) {
-          this.promptQueue.idleQueuedSince = Date.now();
-        }
-        this.emitAuditEvent('workflow.dispatch_failed', `Workflow dispatch failed, reverted to queue: ${queuedExecutionId.slice(0, 8)}`);
-        return false;
-      }
-      this.broadcastToClients({
-        type: 'status',
-        data: { promptDequeued: true, remaining: this.promptQueue.length },
-      });
-      this.emitAuditEvent(
-        'workflow.dispatch',
-        `Workflow execution dispatched (${queuedExecutionId.slice(0, 8)})`,
-        undefined,
-        { executionId: queuedExecutionId, kind: queuedPayload.kind, queued: true },
-      );
-      return true;
     }
 
     // Look up git details from cache for the prompt author
@@ -5022,10 +5261,7 @@ export class SessionAgentDO {
     const authorDetails = authorId ? this.userDetailsCache.get(authorId) : undefined;
     const { attachments } = parseQueuedPromptAttachments(prompt.attachments);
 
-    // Track current prompt author for PR attribution
-    if (authorId) {
-      this.promptQueue.currentPromptAuthorId = authorId;
-    }
+    // (currentPromptAuthorId removed — author lives on the prompt_queue row.)
 
     const queueChannelType = prompt.channelType || undefined;
     const queueChannelId = prompt.channelId || undefined;
@@ -5058,7 +5294,7 @@ export class SessionAgentDO {
       ? `${prompt.contextPrefix}\n\n${prompt.content}`
       : prompt.content;
 
-    const queueDispatched = this.runnerLink.send({
+    const queueDispatched = this.sendPrompt({
       type: 'prompt',
       messageId: prompt.id,
       content: queueAgentContent,
@@ -5083,15 +5319,19 @@ export class SessionAgentDO {
       this.emitAuditEvent('prompt.dispatch_failed', `Queue dispatch failed, reverted: ${prompt.id.slice(0, 8)}`);
       return false;
     }
-    this.promptQueue.stampDispatched(prompt.channelKey || undefined);
-    this.promptQueue.idleQueuedSince = 0;
+    this.promptQueue.stampDispatched(prompt.id, prompt.channelKey || undefined);
+    // Clear this channel's idle timer — we just dispatched from it.
+    if (prompt.channelKey) {
+      this.promptQueue.setChannelIdleQueuedSince(prompt.channelKey, 0);
+    }
     this.sessionState.lastParentIdleNotice = undefined;
     this.sessionState.parentIdleNotifyAt = 0;
     this.sessionState.waitSubscription = null;
     this.rescheduleIdleAlarm();
 
-    // Emit queue_wait timing — measure how long the prompt waited before dispatch
-    const queuedAt = this.promptQueue.promptReceivedAt;
+    // Emit queue_wait timing — measure how long THIS prompt waited (per-row
+    // received_at; the global slot is gone so siblings can't clobber it).
+    const queuedAt = this.promptQueue.getReceivedAtById(prompt.id);
     if (queuedAt > 0) {
       this.emitEvent('queue_wait', {
         durationMs: Date.now() - queuedAt,
@@ -5101,7 +5341,14 @@ export class SessionAgentDO {
 
     this.broadcastToClients({
       type: 'status',
-      data: { promptDequeued: true, remaining: this.promptQueue.length },
+      data: {
+        promptDequeued: true,
+        remaining: this.promptQueue.length,
+        messageId: prompt.id,
+        channelType: queueChannelType,
+        channelId: queueChannelId,
+        threadId: queueThreadId,
+      },
     });
     return true;
   }
@@ -5155,36 +5402,91 @@ export class SessionAgentDO {
   }
 
 
-  private async handleClearQueue(): Promise<Response> {
-    // Withdraw pending user prompt and broadcast
-    const pending = this.promptQueue.withdrawQueued();
-    if (pending) {
+  private async handleClearQueue(url: URL): Promise<Response> {
+    // Optional scoping: ?threadId=… / ?channelType=…&channelId=… so a user
+    // clearing the queue on one thread doesn't silently nuke pending work
+    // from sibling threads in a multi-thread session.
+    const requestedThreadId = url.searchParams.get('threadId') || undefined;
+    const requestedChannelType = url.searchParams.get('channelType') || undefined;
+    const requestedChannelId = url.searchParams.get('channelId') || undefined;
+    const scopedChannelKey = requestedThreadId
+      ? `thread:${requestedThreadId}`
+      : (requestedChannelType && requestedChannelId)
+        ? this.channelKeyFrom(requestedChannelType, requestedChannelId)
+        : undefined;
+
+    // Withdraw pending user prompt(s). When scoped, only withdraw on that channel.
+    const pendingEntries: Array<{ id: string; content: string; attachments: string | null; threadId: string | null; channelKey: string | null }> = [];
+    if (scopedChannelKey) {
+      const rows = this.ctx.storage.sql
+        .exec(
+          "SELECT id, content, attachments, thread_id, channel_key FROM prompt_queue WHERE status = 'queued' AND queue_type = 'prompt' AND child_session_id IS NULL AND channel_key = ?",
+          scopedChannelKey,
+        )
+        .toArray();
+      for (const r of rows) {
+        pendingEntries.push({
+          id: r.id as string,
+          content: r.content as string,
+          attachments: (r.attachments as string | null) ?? null,
+          threadId: (r.thread_id as string | null) ?? null,
+          channelKey: (r.channel_key as string | null) ?? null,
+        });
+      }
+      // Clear them
+      for (const e of pendingEntries) {
+        this.ctx.storage.sql.exec('DELETE FROM prompt_queue WHERE id = ?', e.id);
+      }
+    } else {
+      const pending = this.promptQueue.withdrawQueued();
+      if (pending) {
+        pendingEntries.push({
+          id: pending.id,
+          content: pending.content,
+          attachments: pending.attachments,
+          threadId: pending.threadId,
+          channelKey: pending.channelKey,
+        });
+      }
+    }
+
+    // Broadcast queue.withdrawn for each withdrawn entry (carries threadId).
+    for (const entry of pendingEntries) {
       this.broadcastToClients({
         type: 'queue.withdrawn',
         data: {
-          messageId: pending.id,
-          content: pending.content,
-          attachments: pending.attachments ? attachmentsForClientState(JSON.parse(pending.attachments)) : undefined,
-          threadId: pending.threadId,
+          messageId: entry.id,
+          content: entry.content,
+          attachments: entry.attachments ? attachmentsForClientState(JSON.parse(entry.attachments)) : undefined,
+          threadId: entry.threadId,
         },
       });
     }
 
-    // Clear remaining queued entries (workflow events, child events)
-    const cleared = this.promptQueue.clearQueued();
+    // Clear remaining queued entries.
+    const cleared = scopedChannelKey
+      ? this.promptQueue.clearQueued(scopedChannelKey)
+      : this.promptQueue.clearQueued();
 
+    // queue.state is per-thread when scoped; clients route by threadId.
     this.broadcastToClients({
       type: 'queue.state',
-      data: { pending: null },
+      data: { pending: null, threadId: requestedThreadId ?? null },
     });
 
-    // Keep legacy broadcast for backwards compatibility
+    // Keep legacy broadcast — include channel scope so listeners can route.
     this.broadcastToClients({
       type: 'status',
-      data: { queueCleared: true, cleared: cleared + (pending ? 1 : 0) },
+      data: {
+        queueCleared: true,
+        cleared: cleared + pendingEntries.length,
+        threadId: requestedThreadId,
+        channelType: requestedChannelType,
+        channelId: requestedChannelId,
+      },
     });
 
-    return Response.json({ success: true, cleared: cleared + (pending ? 1 : 0) });
+    return Response.json({ success: true, cleared: cleared + pendingEntries.length });
   }
 
   private async handleFlushMetrics(): Promise<Response> {
@@ -5395,7 +5697,7 @@ export class SessionAgentDO {
     // replaced, so ephemeral "allow for this session" approvals should not
     // carry over to the fresh OpenCode instance.
     if (sessionId) {
-      await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+      await deleteRuntimeGrantsByScope(this.appDb, { sessionId });
     }
 
     // Explicit refresh — reset circuit breaker so the user can force a restart
@@ -5603,6 +5905,8 @@ export class SessionAgentDO {
       console.log(`[SessionAgentDO] performHibernate skipped — status is ${currentStatus}`);
       return;
     }
+    // Drain buffered spans before the isolate is torn down.
+    this.ctx.waitUntil(this.flushTraces());
 
     console.log(`[SessionAgentDO] performHibernate starting for session ${sessionId}`);
 
@@ -5629,7 +5933,7 @@ export class SessionAgentDO {
       // Expire session-scoped action policy overrides before snapshot/stop
       // so no in-flight tool call can sneak through with a stale auto-allow.
       if (sessionId) {
-        await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+        await deleteRuntimeGrantsByScope(this.appDb, { sessionId });
       }
 
       // Snapshot via lifecycle (pure HTTP)
@@ -5872,11 +6176,85 @@ export class SessionAgentDO {
       ? wakeStarted + SANDBOX_WAKE_TIMEOUT_MS
       : null;
 
-    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline, backoffDeadline, wakeDeadline];
+    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline, backoffDeadline, wakeDeadline, this.traceFlushDeadline];
   }
 
   private rescheduleIdleAlarm(): void {
     this.lifecycle.scheduleAlarm(this.collectAlarmDeadlines());
+  }
+
+  // ─── DO-scoped tracing (batched; see do-tracing.ts) ───────────────────
+  private getTracer(): Promise<DoTracer> {
+    return (this.doTracerPromise ??= createDoTracer(this.env, this.ctx, 'valet-session-agent-do'));
+  }
+
+  /** Drain buffered spans now (alarm / close / hibernate / fetch). Best-effort — never throws. */
+  private async flushTraces(): Promise<void> {
+    this.traceFlushDeadline = null;
+    try {
+      await (await this.getTracer()).forceFlush();
+    } catch {
+      // tracing is best-effort
+    }
+  }
+
+  /**
+   * Keep an alarm pending while spans are buffered so they flush within TRACE_FLUSH_INTERVAL_MS
+   * even if the DO hibernates (the in-memory buffer is lost on eviction). Idempotent + cheap:
+   * arms once per flush cycle, through the existing scheduleAlarm machinery (collectAlarmDeadlines
+   * includes traceFlushDeadline). Call after handling a WS message that produced spans.
+   */
+  private armTraceFlush(): void {
+    if (this.traceFlushDeadline !== null) return;
+    // armTraceFlush is only called right after a span was buffered, so there is always something
+    // to flush — no need to probe a pending count.
+    this.traceFlushDeadline = Date.now() + SessionAgentDO.TRACE_FLUSH_INTERVAL_MS;
+    this.lifecycle.scheduleAlarm(this.collectAlarmDeadlines());
+  }
+
+  /**
+   * Stable key for the per-turn traceparent map. Derived from the SAME raw channel fields that
+   * appear on both the outbound prompt and the runner's echoed reply messages, so store-time and
+   * lookup-time keys match by construction (independent of channelKeyFrom's normalization).
+   */
+  private turnKeyFor(channelType?: string, channelId?: string, threadId?: string): string {
+    return threadId ? `thread:${threadId}` : `${channelType ?? ''}:${channelId ?? ''}`;
+  }
+
+  /**
+   * Send a prompt to the runner, stamping it with the active turn's traceparent and recording that
+   * traceparent (keyed by channel) so webSocketMessage can parent the runner's reply spans to the
+   * originating Worker trace. No-op on the trace side when there's no active span (e.g. a queue- or
+   * alarm-driven dispatch outside a Worker request); the prompt is still sent.
+   */
+  private sendPrompt(msg: DOMessageOf<'prompt'>): boolean {
+    const tp = activeTraceparent();
+    if (tp) {
+      msg.traceparent = tp;
+      const key = this.turnKeyFor(msg.channelType, msg.channelId, msg.threadId);
+      this.turnTraceparents.set(key, tp);
+      if (this.turnTraceparents.size > 64) this.turnTraceparents.delete(this.turnTraceparents.keys().next().value!);
+    }
+    return this.runnerLink.send(msg);
+  }
+
+  /** Resolve the parent trace Context for an inbound runner message, or undefined to root it. */
+  private resolveTurnParent(msg: RunnerToDOMessage): Context | undefined {
+    const m = msg as { channelType?: string; channelId?: string; threadId?: string; turnId?: string };
+    let key: string | undefined;
+    if (m.channelType || m.channelId || m.threadId) {
+      key = this.turnKeyFor(m.channelType, m.channelId, m.threadId);
+      // message.create carries both turnId and channel — remember the mapping so later turnId-only
+      // messages (finalize / usage-report) resolve the same traceparent.
+      if (m.turnId) {
+        this.turnChannelKeys.set(m.turnId, key);
+        if (this.turnChannelKeys.size > 256) this.turnChannelKeys.delete(this.turnChannelKeys.keys().next().value!);
+      }
+    } else if (m.turnId) {
+      key = this.turnChannelKeys.get(m.turnId);
+    }
+    const tp = key ? this.turnTraceparents.get(key) : undefined;
+    return tp ? parseTraceparent(tp) : undefined;
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────
@@ -5983,9 +6361,13 @@ export class SessionAgentDO {
     try {
       const id = this.env.EVENT_BUS.idFromName('global');
       const stub = this.env.EVENT_BUS.get(id);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // Propagate trace context so EventBus spans join the originating trace.
+      const traceparent = activeTraceparent();
+      if (traceparent) headers['traceparent'] = traceparent;
       stub.fetch(new Request('https://event-bus/publish', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           userId: event.userId,
           event,
@@ -6083,7 +6465,7 @@ export class SessionAgentDO {
 
       // Flush unflushed analytics events to D1 (single path replacing audit_log + usage_events)
       const unflushed = this.ctx.storage.sql
-        .exec('SELECT id, event_type, turn_id, duration_ms, channel, model, queue_mode, input_tokens, output_tokens, tool_name, error_code, summary, actor_id, properties, created_at FROM analytics_events WHERE flushed = 0 ORDER BY id ASC LIMIT 100')
+        .exec('SELECT id, event_type, turn_id, duration_ms, channel, model, queue_mode, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, tool_name, error_code, summary, actor_id, properties, created_at FROM analytics_events WHERE flushed = 0 ORDER BY id ASC LIMIT 100')
         .toArray();
 
       if (unflushed.length > 0) {
@@ -6099,6 +6481,9 @@ export class SessionAgentDO {
             queueMode: row.queue_mode != null ? (row.queue_mode as string) : undefined,
             inputTokens: row.input_tokens != null ? (row.input_tokens as number) : undefined,
             outputTokens: row.output_tokens != null ? (row.output_tokens as number) : undefined,
+            cacheReadTokens: row.cache_read_tokens != null ? (row.cache_read_tokens as number) : undefined,
+            cacheWriteTokens: row.cache_write_tokens != null ? (row.cache_write_tokens as number) : undefined,
+            reasoningTokens: row.reasoning_tokens != null ? (row.reasoning_tokens as number) : undefined,
             toolName: row.tool_name != null ? (row.tool_name as string) : undefined,
             errorCode: row.error_code != null ? (row.error_code as string) : undefined,
             summary: row.summary != null ? (row.summary as string) : undefined,
@@ -6132,8 +6517,17 @@ export class SessionAgentDO {
       channel?: string;
       model?: string;
       queueMode?: string;
+      // Raw five-way token breakdown from OpenCode. Anthropic bills each
+      // bucket differently (cache reads cheap, cache writes expensive,
+      // reasoning charged as output) so we store each verbatim and let
+      // consumers compose the view they need. "Billable input" totals are
+      // `input + cache_read + cache_write`; "billable output" is
+      // `output + reasoning`.
       inputTokens?: number;
       outputTokens?: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+      reasoningTokens?: number;
       toolName?: string;
       errorCode?: string;
       summary?: string;
@@ -6145,8 +6539,9 @@ export class SessionAgentDO {
       this.ctx.storage.sql.exec(
         `INSERT INTO analytics_events
           (event_type, turn_id, duration_ms, channel, model, queue_mode,
-           input_tokens, output_tokens, tool_name, error_code, summary, actor_id, properties)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+           tool_name, error_code, summary, actor_id, properties)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         eventType,
         fields?.turnId ?? null,
         fields?.durationMs ?? null,
@@ -6155,6 +6550,9 @@ export class SessionAgentDO {
         fields?.queueMode ?? null,
         fields?.inputTokens ?? null,
         fields?.outputTokens ?? null,
+        fields?.cacheReadTokens ?? null,
+        fields?.cacheWriteTokens ?? null,
+        fields?.reasoningTokens ?? null,
         fields?.toolName ?? null,
         fields?.errorCode ?? null,
         fields?.summary ?? null,
@@ -6175,10 +6573,16 @@ export class SessionAgentDO {
     summary: string,
     actorId?: string,
     metadata?: Record<string, unknown>,
+    // Set when the event refers to a specific tool — surfaces the name in
+    // the `tool_name` column rather than burying it inside JSON properties.
+    // Used by the agent.tool_call event family so downstream analytics can
+    // group/filter by tool.
+    toolName?: string,
   ): void {
     this.emitEvent(eventType, {
       summary,
       actorId,
+      toolName,
       properties: metadata,
     });
     // Broadcast to connected clients in real-time
@@ -6236,7 +6640,8 @@ export class SessionAgentDO {
       }
 
       // Restore thread_ts when the agent drops it from a Slack reply.
-      const storedReplyId = this.promptQueue.getProcessingChannelContext()?.channelId;
+      const processingChannelContext = this.promptQueue.getProcessingChannelContext();
+      const storedReplyId = processingChannelContext?.channelId;
       const effectiveChannelId = resolveSlackChannelId(channelType, channelId, storedReplyId);
       if (effectiveChannelId !== channelId) {
         console.log(`[SessionAgentDO] handleChannelReply: restored thread_ts from prompt context (${channelId} -> ${effectiveChannelId})`);
@@ -6260,35 +6665,34 @@ export class SessionAgentDO {
         return;
       }
 
-      this.runnerLink.send({ type: 'channel-reply-result', requestId, success: true } as any);
-
-      // Store image as a system message for web UI visibility.
-      // TODO: Treat web UI as a channel. This is the primary remaining coupling
-      // between channel dispatch and the DO's message/broadcast layer.
-      if (imageBase64) {
-        const msgId = crypto.randomUUID();
-        const channelLabel = `Sent image to ${channelType}`;
-        this.messageStore.writeMessage({
-          id: msgId,
-          role: 'system',
-          content: message || channelLabel,
-          parts: JSON.stringify({ type: 'image', data: imageBase64, mimeType: imageMimeType || 'image/jpeg' }),
-          channelType,
-          channelId,
-        });
-        this.broadcastToClients({
-          type: 'message',
-          data: {
-            id: msgId,
-            role: 'system',
-            content: message || channelLabel,
-            parts: { type: 'image', data: imageBase64, mimeType: imageMimeType || 'image/jpeg' },
-            createdAt: Math.floor(Date.now() / 1000),
-            channelType,
-            channelId,
-          },
-        });
+      // When Valet sends a new top-level Slack message (2-part channelId = teamId:slackChannelId),
+      // bind the resulting thread back to this session so replies route here instead of creating
+      // a new session via the orchestrator. Fire-and-forget: binding failure is non-fatal.
+      if (channelType === 'slack' && result.messageId) {
+        const parts = effectiveChannelId.split(':');
+        if (parts.length === 2) {
+          const threadChannelId = `${effectiveChannelId}:${result.messageId}`;
+          const slackChannelId = parts[1];
+          const sessionId = this.sessionState.sessionId;
+          this.resolveOrgId().then((orgId) =>
+            ensureChannelBinding(this.appDb, {
+              sessionId,
+              channelType: 'slack',
+              channelId: threadChannelId,
+              userId,
+              orgId: orgId ?? 'default',
+              scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+              queueMode: 'followup',
+              slackChannelId,
+              slackThreadTs: result.messageId,
+            }),
+          ).catch((err) => {
+            console.warn('[SessionAgentDO] Failed to create Slack thread binding:', err instanceof Error ? err.message : String(err));
+          });
+        }
       }
+
+      this.runnerLink.send({ type: 'channel-reply-result', requestId, success: true } as any);
     } catch (err) {
       this.runnerLink.send({
         type: 'channel-reply-result',
@@ -6381,7 +6785,7 @@ export class SessionAgentDO {
     }
   }
 
-  private async handleCallTool(requestId: string, toolId: string, params: Record<string, unknown>, summary?: string) {
+  private async handleCallTool(requestId: string, toolId: string, params: Record<string, unknown>, summary?: string, opencodeSessionId?: string) {
     let invocationIdForCleanup: string | null = null;
     let promptInsertedForCleanup = false;
     let shouldFailInvocationOnCatch = false;
@@ -6412,7 +6816,7 @@ export class SessionAgentDO {
       // ─── Deny ──────────────────────────────────────────────────────────
       if (outcome === 'denied') {
         this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" denied by policy (risk level: ${riskLevel})` } as any);
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} denied by policy`, undefined, { invocationId, riskLevel });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} denied by policy`, undefined, { invocationId, riskLevel }, toolId);
         return;
       }
 
@@ -6442,16 +6846,59 @@ export class SessionAgentDO {
           riskLevel,
           invocationId: invocationId,
           summary,
+          // Carried through to executeActionAndSend after approval resolution so
+          // the tool_exec analytics event can be attributed to the originating
+          // assistant turn (and therefore the thread).
+          opencodeSessionId,
         };
-        // Resolve channel from the processing prompt — deterministic queue state,
-        // not a mutable cursor. If no prompt is processing (shouldn't happen inside
-        // handleCallTool, which is triggered by agent tool invocations during a turn),
-        // leave channel context unset; the approval will still be visible in the web
-        // UI via broadcastToClients.
-        const approvalCh = this.promptQueue.getProcessingChannelTarget();
-        if (approvalCh?.channelType && approvalCh?.channelId) {
-          approvalContext.channelType = approvalCh.channelType;
-          approvalContext.channelId = approvalCh.channelId;
+        // Resolve channel deterministically via the calling OC session id.
+        // The runner passes opencodeSessionId through call-tool exactly so we
+        // can route approvals back to the originating thread under cross-
+        // thread concurrent dispatch (TKAI-65). Fall back to the legacy
+        // single-row lookup only when the OC session id is absent (older
+        // runner builds); when ambiguous, getProcessingChannelTarget returns
+        // null and the approval is delivered via the unattended-DM fallback.
+        let resolvedFromOcSession = false;
+        let approvalChannelKey: string | undefined;
+        if (opencodeSessionId) {
+          approvalChannelKey = this.getChannelKeyByOcSessionId(opencodeSessionId);
+        }
+        if (approvalChannelKey) {
+          // Look up the processing row(s) for this channel; pull channel ids
+          // from the row so reply_channel_* override applies the same way as
+          // getProcessingChannelTarget did pre-fix.
+          const rows = this.ctx.storage.sql
+            .exec(
+              "SELECT channel_type, channel_id, reply_channel_type, reply_channel_id, thread_id FROM prompt_queue WHERE channel_key = ? AND status = 'processing' ORDER BY created_at DESC LIMIT 1",
+              approvalChannelKey,
+            )
+            .toArray();
+          if (rows.length > 0) {
+            const r = rows[0];
+            const cType = (r.reply_channel_type as string) || (r.channel_type as string) || null;
+            const cId = (r.reply_channel_id as string) || (r.channel_id as string) || null;
+            if (cType && cId) {
+              approvalContext.channelType = cType;
+              approvalContext.channelId = cId;
+            }
+            if (r.thread_id) {
+              approvalContext.threadId = r.thread_id as string;
+            }
+            resolvedFromOcSession = true;
+          }
+        }
+        if (!resolvedFromOcSession) {
+          // Fallback for: (a) older runner without opencodeSessionId, (b) the
+          // channel_state row hasn't been hydrated yet, or (c) no processing
+          // row was found for that channel (e.g. call_tool arriving after the
+          // turn already completed). getProcessingChannelTarget returns null
+          // when ambiguous (multiple processing rows), in which case the
+          // approval drops to the unattended-DM fallback below.
+          const approvalCh = this.promptQueue.getProcessingChannelTarget();
+          if (approvalCh?.channelType && approvalCh?.channelId) {
+            approvalContext.channelType = approvalCh.channelType;
+            approvalContext.channelId = approvalCh.channelId;
+          }
         }
 
         // Use model-provided summary as the approval body
@@ -6513,7 +6960,7 @@ export class SessionAgentDO {
           timestamp: new Date().toISOString(),
         });
 
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationId, riskLevel });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationId, riskLevel }, toolId);
 
         await this.sendChannelInteractivePrompts(invocationId, prompt);
 
@@ -6525,7 +6972,7 @@ export class SessionAgentDO {
       }
 
       // ─── Allow — execute immediately ───────────────────────────────────
-      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId, orgId);
+      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId, orgId, opencodeSessionId);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       if (shouldFailInvocationOnCatch && invocationIdForCleanup) {
@@ -6548,6 +6995,91 @@ export class SessionAgentDO {
    * Execute an integration action via the service and send the result to the runner.
    * Shared between immediate execution and post-approval execution.
    */
+  /**
+   * Dispatch tools for invocations that the scoped-approval sweep just
+   * resolved alongside the originating prompt.
+   *
+   * Each sibling has its own `interactive_prompts` row in this DO with
+   * the same context shape as the originating prompt. We claim the row
+   * (CAS), run the tool, then clean up — mirroring the originating
+   * prompt's flow but condensed since the resolver already approved the
+   * invocation row.
+   *
+   * Best-effort: a sibling failure is logged and the invocation is
+   * marked failed, but the originating approval response has already
+   * been returned to the user. Runner-side MCP timeouts are the final
+   * safety net for any sibling whose tool genuinely never ran.
+   */
+  private async dispatchSweptApprovalSiblings(siblingIds: string[], userId: string): Promise<void> {
+    if (siblingIds.length === 0) return;
+    for (const siblingId of siblingIds) {
+      try {
+        await this.dispatchOneSweptSibling(siblingId, userId);
+      } catch (err) {
+        console.warn(`[session-agent] swept sibling dispatch failed for ${siblingId}: ${err instanceof Error ? err.message : String(err)}`);
+        await markFailed(this.appDb, siblingId, err instanceof Error ? err.message : String(err)).catch(() => {});
+      }
+    }
+  }
+
+  private async dispatchOneSweptSibling(siblingId: string, userId: string): Promise<void> {
+    const rows = this.ctx.storage.sql.exec(
+      'SELECT id, type, request_id, context, channel_refs FROM interactive_prompts WHERE id = ?',
+      siblingId,
+    ).toArray();
+    if (rows.length === 0) {
+      // Prompt entry already gone (sibling resolved separately, sibling
+      // belongs to a different DO, etc.). Nothing to dispatch here; the
+      // resolver-side state is already consistent.
+      return;
+    }
+    const row = rows[0] as Record<string, unknown>;
+    if (row.type !== 'approval') return;
+
+    const claimed = this.ctx.storage.sql.exec(
+      "UPDATE interactive_prompts SET status = 'resolving' WHERE id = ? AND status = 'pending' RETURNING id",
+      siblingId,
+    ).toArray();
+    if (claimed.length === 0) {
+      // Raced with another resolver; let that one own dispatch.
+      return;
+    }
+
+    const requestId = (row.request_id as string | null) ?? null;
+    const context = row.context ? JSON.parse(row.context as string) : {};
+    const channelRefsJson = (row.channel_refs as string) || null;
+    const toolId = String(context.toolId ?? '');
+    const service = String(context.service ?? '');
+    const actionId = String(context.actionId ?? '');
+    const params = (context.params as Record<string, unknown>) ?? {};
+    const ocSession = typeof context.opencodeSessionId === 'string' ? context.opencodeSessionId : undefined;
+
+    const orgId = await this.resolveOrgId() ?? 'default';
+    const customContext = await loadCustomMcpConnectorContext(this.env, this.appDb, orgId);
+    const actionSource = integrationRegistry.getActions(service, customContext);
+
+    if (requestId) {
+      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, siblingId, orgId, ocSession);
+    }
+
+    this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', siblingId);
+
+    const resolved: InteractiveResolution = {
+      actionId: 'allow_once',
+      resolvedBy: userId,
+    };
+    this.broadcastToClients({
+      type: 'interactive_prompt_resolved',
+      promptId: siblingId,
+      promptType: 'approval',
+      resolution: resolved,
+      context,
+    });
+    if (channelRefsJson) {
+      this.ctx.waitUntil(this.updateChannelInteractivePrompts(channelRefsJson, resolved));
+    }
+  }
+
   private async executeActionAndSend(
     requestId: string,
     toolId: string,
@@ -6558,10 +7090,21 @@ export class SessionAgentDO {
     actionSource: ReturnType<typeof integrationRegistry.getActions>,
     invocationId: string,
     orgId?: string,
+    // The OpenCode session that triggered this tool call. Used solely to
+    // bridge the tool_exec analytics event back to the originating assistant
+    // turn (and thus the thread) so per-thread usage attribution stays whole.
+    opencodeSessionId?: string,
   ): Promise<{ success: boolean; error?: string }> {
     const spawnRequest = this.sessionState.spawnRequest;
     const spawnEnvVars = spawnRequest?.envVars as Record<string, string> | undefined;
     const guardConfig = await this.getGuardConfig();
+    // Best-effort: find the in-flight assistant turn for this OC session. Tools
+    // can fire after a turn finalizes (post-approval, queued execution); a null
+    // turnId in that case leaves the row attributed at session level only,
+    // matching pre-fix behaviour.
+    const toolTurnId = opencodeSessionId
+      ? this.messageStore.findActiveTurnByOcSession(opencodeSessionId) ?? undefined
+      : undefined;
 
     let result;
     try {
@@ -6577,6 +7120,7 @@ export class SessionAgentDO {
       });
       this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
       this.emitEvent('tool_exec', {
+        turnId: toolTurnId,
         toolName: toolId,
         errorCode: 'action_failed',
       });
@@ -6585,6 +7129,7 @@ export class SessionAgentDO {
 
     // Emit tool_exec timing event
     this.emitEvent('tool_exec', {
+      turnId: toolTurnId,
       toolName: toolId,
       durationMs: result.durationMs,
       errorCode: result.success ? undefined : 'action_failed',
@@ -6637,6 +7182,83 @@ export class SessionAgentDO {
       }
     }
 
+    // When a DM action succeeds, bind the DM channel back to this session so replies route
+    // here instead of falling through to the orchestrator. Fire-and-forget: binding failure
+    // is non-fatal.
+    //
+    // Two bindings are created to cover both reply styles:
+    // - 2-part (teamId:channelId): for regular DM replies — Slack sends no thread_ts, so the
+    //   event handler computes a 2-part scope key.
+    // - 3-part (teamId:channelId:ts): for explicit "Reply in thread" — Slack sets thread_ts to
+    //   the bot message's ts, producing a 3-part scope key.
+    //
+    // send_message to non-DM channels is skipped: slack-events.ts ignores non-DM events, so
+    // those bindings would never be looked up.
+    if (result.success) {
+      const isDmAction = actionId === 'slack.dm_owner' || actionId === 'slack.dm_user';
+      const isSendToDm = actionId === 'slack.send_message' &&
+        !(typeof params.thread_ts === 'string' && params.thread_ts.length > 0);
+      if (isDmAction || isSendToDm) {
+        const slackData = result.data as { ts?: string; channel?: string } | undefined;
+        const slackChannel = slackData?.channel;
+        const slackTs = slackData?.ts;
+        if (slackChannel && (isDmAction || slackChannel.startsWith('D'))) {
+          const sessionId = this.sessionState.sessionId;
+          // Capture the current processing thread ID so we can pre-register the
+          // channel→thread mapping. This routes Slack replies back to the same
+          // orchestrator thread that triggered the send, instead of spawning a new one.
+          const currentThreadId = this.promptQueue.getProcessingThreadId();
+          getOrgSlackInstallAny(this.appDb, this.env.ENCRYPTION_KEY)
+            .then((install) => {
+              if (!install?.teamId) return;
+              const { teamId } = install;
+              const dmChannelId = `${teamId}:${slackChannel}`;
+              const threadChannelId = slackTs ? `${teamId}:${slackChannel}:${slackTs}` : null;
+              return this.resolveOrgId().then(async (orgId) => {
+                const base = {
+                  sessionId,
+                  channelType: 'slack' as const,
+                  userId,
+                  orgId: orgId ?? 'default',
+                  queueMode: 'followup' as const,
+                  slackChannelId: slackChannel,
+                };
+                // 2-part: catches regular DM replies (no thread_ts)
+                await ensureChannelBinding(this.appDb, {
+                  ...base,
+                  channelId: dmChannelId,
+                  scopeKey: channelScopeKey(userId, 'slack', dmChannelId),
+                });
+                // 3-part: catches explicit "Reply in thread" (thread_ts = this message's ts)
+                if (threadChannelId) {
+                  await ensureChannelBinding(this.appDb, {
+                    ...base,
+                    channelId: threadChannelId,
+                    scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+                    slackThreadTs: slackTs,
+                  });
+                }
+                // Pre-register the channel→thread mapping so Slack replies route
+                // to the existing orchestrator thread rather than spawning a new one.
+                if (currentThreadId && slackTs) {
+                  await registerChannelThread(this.env.DB, {
+                    channelType: 'slack',
+                    channelId: slackChannel,
+                    externalThreadId: slackTs,
+                    userId,
+                    sessionId,
+                    threadId: currentThreadId,
+                  });
+                }
+              });
+            })
+            .catch((err) => {
+              console.warn('[SessionAgentDO] Failed to create Slack DM binding:', err instanceof Error ? err.message : String(err));
+            });
+        }
+      }
+    }
+
     // Send result to runner — include images so the agent can post them
     // out-of-band via /api/image for vision context.
     if (!result.success) {
@@ -6675,12 +7297,22 @@ export class SessionAgentDO {
       }
 
       if (requestId) {
-        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" approval expired` } as any);
+        const wfCtx = this.promptQueue.getProcessingWorkflowContext();
+        const isUnattended =
+          wfCtx?.queueType === 'workflow_execute' ||
+          !!this._activeWorkflowExecutionId ||
+          this.promptQueue.getProcessingAuthorEmail() === 'scheduled-task@valet.local';
+        const expiryError = isUnattended
+          ? `Action "${toolId}" approval request expired without a response. ` +
+            `This likely means the session was running unattended (scheduled task or automation) and no one saw the approval prompt. ` +
+            `Do not retry this action automatically — instead, let the user know that approval is needed and ask them to re-run or approve it manually.`
+          : `Action "${toolId}" approval request expired without a response.`;
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: expiryError } as any);
       } else {
         console.warn(`[SessionAgentDO] Approval prompt ${promptId} expired with no request_id — runner may be stuck`);
       }
 
-      this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId });
+      this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId }, toolId);
     } else if (promptType === 'question') {
       this.runnerLink.send({
         type: 'answer',
@@ -6868,7 +7500,7 @@ export class SessionAgentDO {
 
       if (resolutionAction !== 'cancel') {
         try {
-          const orgPolicy = await resolveOrgPolicyMatch(this.appDb, String(service), String(actionId), String(context.riskLevel || 'medium'));
+          const orgPolicy = await resolveAdminPolicyMatch(this.appDb, String(service), String(actionId), String(context.riskLevel || 'medium'));
           if (orgPolicy?.mode === 'deny') {
             const error = `Action "${toolId}" is denied by organization policy and cannot be allowed.`;
             return failAndDeletePrompt(error, 403);
@@ -6879,46 +7511,49 @@ export class SessionAgentDO {
           return { ok: false, status: 500, error };
         }
 
-        let approval;
+        // Map the user's resolution choice to an approval scope. The
+        // helper persists the grant (when scope > 'once'), resolves the
+        // originating invocation, and sweeps any matching pending sibling
+        // invocations in the same session — fixing the parallel-pending-
+        // tools case where firing multiple tools at once and clicking
+        // "Allow session" used to only resolve the one the user clicked.
+        const scope: ApprovalScope = resolutionAction === 'allow_session'
+          ? 'session'
+          : resolutionAction === 'allow_always'
+            ? 'durable_policy'
+            : 'once';
+
+        let scopedResult;
         try {
-          approval = await approveInvocation(this.appDb, promptId, userId);
+          scopedResult = await resolveInvocationWithScope(this.appDb, {
+            invocationId: promptId,
+            decision: 'approved',
+            userId,
+            scope,
+          });
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
           restorePrompt();
           return { ok: false, status: 500, error };
         }
-        if (!approval.ok) {
-          const error = 'This action approval is no longer pending.';
+
+        if (scopedResult.kind === 'not_found' || scopedResult.kind === 'already_resolved' || scopedResult.kind === 'expired') {
+          const error = scopedResult.kind === 'expired'
+            ? 'This action approval has expired.'
+            : 'This action approval is no longer pending.';
           deleteNoLongerPendingPrompt(error);
           return { ok: false, status: 409, error };
         }
 
-        if (resolutionAction === 'allow_session' || resolutionAction === 'allow_always') {
-          try {
-            const lifetime = resolutionAction === 'allow_session' ? 'session' : 'persistent';
-            await upsertUserActionPolicyOverride(this.appDb, {
-              id: `${promptId}:${lifetime}`,
-              userId,
-              service: String(service),
-              actionId: String(actionId),
-              mode: 'allow',
-              lifetime,
-              sessionId: lifetime === 'session' ? sessionId : null,
-              source: 'approval_prompt',
-              sourceInvocationId: promptId,
-            });
-          } catch (err) {
-            const error = `Failed to save approval override: ${err instanceof Error ? err.message : String(err)}`;
-            await markFailed(this.appDb, promptId, error).catch((markErr) => {
-              console.error('[session-agent] Failed to mark invocation failed after override save error:', markErr);
-            });
-            if (requestId) {
-              this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
-            }
-            broadcastPromptExpired();
-            deletePrompt();
-            return { ok: false, status: 500, error };
-          }
+        // resolved — dispatch siblings (if any) before the original's
+        // dispatch below. Each sibling has its own interactive_prompts
+        // row in this DO; claim + run + clean each one independently.
+        // Best-effort: a sibling dispatch failure doesn't roll back the
+        // originating approval. The runner-side MCP timeout is the
+        // eventual safety net for any sibling whose tool never ran.
+        const sweptSiblings = scopedResult.resolved.filter((r) => r.id !== promptId);
+        if (sweptSiblings.length > 0) {
+          this.ctx.waitUntil(this.dispatchSweptApprovalSiblings(sweptSiblings.map((s) => s.id), userId));
         }
 
         const orgId = await this.resolveOrgId() ?? 'default';
@@ -6927,7 +7562,8 @@ export class SessionAgentDO {
         let executionResult: { success: boolean; error?: string } = { success: true };
         if (requestId) {
           try {
-            executionResult = await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId, orgId);
+            const ocSession = typeof context.opencodeSessionId === 'string' ? context.opencodeSessionId : undefined;
+            executionResult = await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId, orgId, ocSession);
           } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
             await markFailed(this.appDb, promptId, error).catch((markErr) => {
@@ -6970,6 +7606,7 @@ export class SessionAgentDO {
             : `Action ${toolId} approved but execution failed: ${executionResult.error || 'Action failed'}`,
           undefined,
           { invocationId: promptId },
+          toolId,
         );
         deletePrompt();
       } else {
@@ -7015,7 +7652,7 @@ export class SessionAgentDO {
           timestamp: new Date().toISOString(),
         });
 
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} cancelled${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} cancelled${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId }, toolId);
         deletePrompt();
       }
     } else if (promptType === 'question') {
@@ -7085,7 +7722,7 @@ export class SessionAgentDO {
       // 1. Origin target: the channel stored in the approval context at creation time
       //    (captured from the originating prompt when the approval was created)
       const originTarget = this.getPromptOriginTarget(prompt.context);
-      if (originTarget && originTarget.channelType !== 'web') {
+      if (originTarget && originTarget.channelType !== 'web' && originTarget.channelType !== 'thread') {
         const key = `${originTarget.channelType}:${originTarget.channelId}`;
         seen.add(key);
         targets.push(originTarget);
@@ -7095,7 +7732,9 @@ export class SessionAgentDO {
       //    origin if a different Slack thread is subscribed to the same orchestrator
       //    thread). Read from the processing queue row, not a mutable cursor.
       const callerCh = this.promptQueue.getProcessingChannelTarget();
-      if (callerCh?.channelType && callerCh?.channelId && callerCh.channelType !== 'web') {
+      if (callerCh?.channelType && callerCh?.channelId
+          && callerCh.channelType !== 'web'
+          && callerCh.channelType !== 'thread') {
         const key = `${callerCh.channelType}:${callerCh.channelId}`;
         if (!seen.has(key)) {
           seen.add(key);
@@ -7103,20 +7742,115 @@ export class SessionAgentDO {
         }
       }
 
-      // Fail closed: if we have no non-web channel targets, check whether this
-      // session even has external channel bindings. If it does, something went
-      // wrong with channel context propagation — log loudly and surface an error
-      // to the web UI. If it doesn't (pure web-only session), this is expected
-      // and we return silently — the approval is already visible in the web UI
-      // via broadcastToClients (called before this method).
+      // Fail closed: if we have no non-web channel targets, attempt a Slack DM
+      // fallback for unattended runs (scheduled tasks, workflow executions).
+      // If the user has a Slack identity, we open a DM and send the prompt there.
+      // If no Slack identity or DM resolution fails, fall back to web UI error.
       if (targets.length === 0) {
+        const wfCtx = this.promptQueue.getProcessingWorkflowContext();
+        const isUnattended =
+          wfCtx?.queueType === 'workflow_execute' ||
+          !!this._activeWorkflowExecutionId ||
+          this.promptQueue.getProcessingAuthorEmail() === 'scheduled-task@valet.local';
+        if (!isUnattended) {
+          // Attended web-only session: approval is already visible in the web UI.
+          return;
+        }
+
+        // Attempt Slack DM fallback for unattended runs (scheduled tasks, workflow executions).
+        const slackLink = await getUserSlackIdentityLink(this.appDb, userId).catch((err) => {
+          console.warn('[SessionAgentDO] getUserSlackIdentityLink failed for DM fallback:', err instanceof Error ? err.message : String(err));
+          return null;
+        });
+        if (slackLink?.externalId) {
+          const dmTarget = await this.channelRouter
+            .resolveUserDmTarget('slack', userId, slackLink.externalId)
+            .catch(() => null);
+          if (dmTarget) {
+            const provenanceLabel = await this.buildApprovalProvenanceLabel(userId);
+            const dmPrompt: InteractivePrompt = {
+              ...prompt,
+              context: { ...(prompt.context ?? {}), provenanceLabel },
+            };
+            const refs = await this.channelRouter.sendInteractivePrompt({ userId, targets: [dmTarget], prompt: dmPrompt });
+            if (refs.length > 0) {
+              this.ctx.storage.sql.exec(
+                'UPDATE interactive_prompts SET channel_refs = ? WHERE id = ?',
+                JSON.stringify(refs),
+                promptId,
+              );
+
+              // Bind the DM channel so any Slack replies (not just button clicks) route
+              // back to this session instead of spawning a new one via the orchestrator.
+              // Mirrors the binding logic in executeActionAndSend for dm_owner/dm_user.
+              const dmRef = refs[0].ref;
+              if (dmRef.channelId && dmRef.messageId) {
+                const slackDmChannel = dmRef.channelId;
+                const slackDmTs = dmRef.messageId;
+                const sessionId = this.sessionState.sessionId;
+                const currentThreadId = this.promptQueue.getProcessingThreadId();
+                getOrgSlackInstallAny(this.appDb, this.env.ENCRYPTION_KEY)
+                  .then((install) => {
+                    if (!install?.teamId) return;
+                    const { teamId } = install;
+                    const dmChannelId = `${teamId}:${slackDmChannel}`;
+                    const threadChannelId = `${teamId}:${slackDmChannel}:${slackDmTs}`;
+                    return this.resolveOrgId().then(async (orgId) => {
+                      const base = {
+                        sessionId,
+                        channelType: 'slack' as const,
+                        userId,
+                        orgId: orgId ?? 'default',
+                        queueMode: 'followup' as const,
+                        slackChannelId: slackDmChannel,
+                      };
+                      // 2-part: regular DM replies (no thread_ts)
+                      await ensureChannelBinding(this.appDb, {
+                        ...base,
+                        channelId: dmChannelId,
+                        scopeKey: channelScopeKey(userId, 'slack', dmChannelId),
+                      });
+                      // 3-part: explicit "Reply in thread" on the approval message
+                      await ensureChannelBinding(this.appDb, {
+                        ...base,
+                        channelId: threadChannelId,
+                        scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+                        slackThreadTs: slackDmTs,
+                      });
+                      // Pre-register channel→thread so replies land in this
+                      // orchestrator thread, not a fresh one.
+                      if (currentThreadId) {
+                        await registerChannelThread(this.env.DB, {
+                          channelType: 'slack',
+                          channelId: slackDmChannel,
+                          externalThreadId: slackDmTs,
+                          userId,
+                          sessionId,
+                          threadId: currentThreadId,
+                        });
+                      }
+                    });
+                  })
+                  .catch((err) => {
+                    console.warn('[SessionAgentDO] Failed to create Slack DM binding after approval fallback:', err instanceof Error ? err.message : String(err));
+                  });
+              }
+
+              return;  // delivery succeeded — done
+            }
+            console.warn(`[SessionAgentDO] DM fallback delivery failed for prompt ${promptId} — falling through to web-UI error path`);
+            // fall through to hasExternalBindings error path below
+          }
+        }
+
+        // No Slack identity or DM resolution failed — fall back to web UI error
         const hasExternalBindings = (await listUserChannelBindings(this.appDb, userId))
-          .some(b => b.channelType !== 'web');
+          .some((b) => b.channelType !== 'web');
         if (hasExternalBindings) {
           console.error(
             `[SessionAgentDO] sendChannelInteractivePrompts: No origin or caller channel for prompt ${promptId} — refusing to broadcast. ` +
             `Session has external channel bindings but no channel context was propagated. ` +
-            `Approval is visible in web UI only. sessionId=${sessionId} userId=${userId}`
+            `Approval is visible in web UI only. sessionId=${sessionId} userId=${userId}`,
           );
           this.broadcastToClients({
             type: 'error',
@@ -7143,6 +7877,29 @@ export class SessionAgentDO {
       }
     } catch (err) {
       console.error('[SessionAgentDO] sendChannelInteractivePrompts failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async buildApprovalProvenanceLabel(userId: string): Promise<string> {
+    const wfCtx = this.promptQueue.getProcessingWorkflowContext();
+    const executionId = wfCtx?.workflowExecutionId ?? this._activeWorkflowExecutionId ?? null;
+    if ((wfCtx?.queueType === 'workflow_execute' || !!this._activeWorkflowExecutionId) && executionId) {
+      const workflowName = await getWorkflowNameByExecutionId(this.appDb, executionId).catch(() => null);
+      const agentName = await this.resolveAgentDisplayName(userId);
+      return workflowName
+        ? `${agentName} requested this while running workflow *${workflowName}*`
+        : `${agentName} requested this while running a workflow`;
+    }
+    const agentName = await this.resolveAgentDisplayName(userId);
+    return `${agentName} requested this while running a scheduled task (no active session was connected)`;
+  }
+
+  private async resolveAgentDisplayName(userId: string): Promise<string> {
+    try {
+      const identity = await getOrchestratorIdentity(this.appDb, userId);
+      return identity?.name ?? 'Your Valet assistant';
+    } catch {
+      return 'Your Valet assistant';
     }
   }
 
@@ -7254,14 +8011,6 @@ export class SessionAgentDO {
     if (envVars.ANTHROPIC_API_KEY) config.providerKeys!.anthropic = envVars.ANTHROPIC_API_KEY;
     if (envVars.OPENAI_API_KEY) config.providerKeys!.openai = envVars.OPENAI_API_KEY;
     if (envVars.GOOGLE_API_KEY) config.providerKeys!.google = envVars.GOOGLE_API_KEY;
-
-    // Disable parallel tools if no key
-    if (!envVars.PARALLEL_API_KEY) {
-      config.tools!.parallel_web_search = false;
-      config.tools!.parallel_web_extract = false;
-      config.tools!.parallel_deep_research = false;
-      config.tools!.parallel_data_enrichment = false;
-    }
 
     // Re-fetch custom providers from D1 so admin changes take effect immediately
     try {

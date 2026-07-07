@@ -1,6 +1,7 @@
 import { type SessionThread, TERMINAL_SESSION_STATUSES } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
+import type { ThreadOriginInput } from '../lib/db/threads.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
 import { buildDoWebSocketUrl } from '../lib/do-ws-url.js';
@@ -367,6 +368,7 @@ export async function updateOrchestratorIdentity(
 type OrchestratorPromptDispatchResult = {
   dispatched: boolean;
   sessionId: string;
+  threadId?: string;
   reason?: string;
   retryAfterMs?: number;
 };
@@ -383,21 +385,26 @@ export async function dispatchOrchestratorPrompt(
     channelType?: string;
     channelId?: string;
     threadId?: string;
-    /** Always create a new thread instead of reusing the active one (e.g. for scheduled triggers). */
+    /** Always create a new thread instead of reusing the active one (e.g. for automated triggers/workflows). */
     forceNewThread?: boolean;
+    threadOrigin?: ThreadOriginInput;
     attachments?: Array<{ type: string; mime: string; url: string; filename?: string }>;
     /** Explicit reply target. If present, the DO auto-replies to this channel on turn complete. */
     replyTo?: { channelType: string; channelId: string };
     /** Pre-computed scope key from the channel transport. Passed through to ensureChannelBinding
      *  so the binding's scope key matches the lookup path in the inbound event handler. */
     scopeKey?: string;
+    /** Per-turn model override. Threads created by scheduled triggers can pin a specific
+     *  model (e.g. "claude-sonnet-4-6") without changing the user's default. Absent = the
+     *  session's default model applies. */
+    model?: string;
   }
 ): Promise<OrchestratorPromptDispatchResult> {
   // When forcing a new thread, prepend a memory instruction so the agent knows
   // it has no prior conversation context and should lean on its memory system.
   let content = params.content.trim();
   if (params.forceNewThread && content) {
-    content = `[This is a scheduled task running in a fresh thread — you have no prior conversation context. Use mem_search and mem_read to recall any relevant context before proceeding, and mem_write to persist important findings or decisions.]\n\n${content}`;
+    content = `[This is an automated task running in a fresh thread — you have no prior conversation context. Use mem_search and mem_read to recall any relevant context before proceeding, and mem_write to persist important findings or decisions.]\n\n${content}`;
   }
   if (!content && (!params.attachments || params.attachments.length === 0)) {
     return { dispatched: false, sessionId: `orchestrator:${params.userId}`, reason: 'empty_prompt' };
@@ -448,7 +455,18 @@ export async function dispatchOrchestratorPrompt(
       }
       if (!thread) {
         const id = crypto.randomUUID();
-        thread = await db.createThread(env.DB, { id, sessionId });
+        thread = await db.createThread(env.DB, {
+          id,
+          sessionId,
+          ...(params.threadOrigin ?? {}),
+          ...(params.channelType && params.channelType !== 'thread' && !params.threadOrigin
+            ? {
+                originType: params.channelType,
+                originChannelType: params.channelType,
+                originChannelId: params.channelId,
+              }
+            : {}),
+        });
       }
       params.threadId = thread.id;
       console.log(`[OrchestratorDispatch] Auto-resolved threadId=${thread.id} for session=${sessionId} forceNew=${!!params.forceNewThread}`);
@@ -478,9 +496,14 @@ export async function dispatchOrchestratorPrompt(
     }
   }
 
+  const promptHeaders = new Headers({ 'Content-Type': 'application/json' });
+  if (params.forceNewThread) {
+    promptHeaders.set('X-Valet-Prompt-Queue-Policy', 'append');
+  }
+
   const doRes = await sessionDO.fetch(new Request('http://do/prompt', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: promptHeaders,
     body: JSON.stringify({
       content,
       contextPrefix: params.contextPrefix,
@@ -493,6 +516,7 @@ export async function dispatchOrchestratorPrompt(
       authorId: params.userId,
       replyTo: params.replyTo,
       queueMode: 'steer',
+      model: params.model,
     }),
   }));
 
@@ -507,5 +531,5 @@ export async function dispatchOrchestratorPrompt(
   }
 
   console.log(`[OrchestratorDispatch] Success: session=${sessionId}`);
-  return { dispatched: true, sessionId };
+  return { dispatched: true, sessionId, ...(params.threadId ? { threadId: params.threadId } : {}) };
 }

@@ -15,7 +15,6 @@ import {
   disabledActions,
   integrations,
   mcpToolCache,
-  userActionPolicyOverrides,
 } from '../lib/schema/index.js';
 import { adminMcpConnectorsRouter } from './admin-mcp-connectors.js';
 
@@ -256,15 +255,6 @@ describe('adminMcpConnectorsRouter', () => {
       mode: 'deny',
       createdBy: 'user-1',
     }).run();
-    db.insert(userActionPolicyOverrides).values({
-      id: 'override-1',
-      userId: 'user-1',
-      service: created.connector.serviceSlug,
-      actionId: null,
-      riskLevel: null,
-      mode: 'allow',
-    }).run();
-
     const res = await app.fetch(new Request(`http://localhost/${created.connector.id}`, { method: 'DELETE' }), env);
 
     expect(res.status).toBe(200);
@@ -275,7 +265,6 @@ describe('adminMcpConnectorsRouter', () => {
     expect(db.select().from(mcpToolCache).all()).toEqual([]);
     expect(db.select().from(disabledActions).all()).toEqual([]);
     expect(db.select().from(actionPolicies).all()).toEqual([]);
-    expect(db.select().from(userActionPolicyOverrides).all()).toEqual([]);
   });
 
   it('keeps owned runtime state intact when cascade batch fails', async () => {

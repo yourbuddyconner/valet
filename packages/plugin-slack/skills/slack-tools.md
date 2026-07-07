@@ -48,6 +48,14 @@ Use `slack.list_users` with `filter` when you need to find a Slack user ID by na
 
 Use `slack.get_reactions` when you need to know **who specifically** agreed or acknowledged something, not just the count.
 
+## User Groups
+
+Use `slack.list_usergroups` to find user group IDs and handles. Use `slack.list_usergroup_users` to inspect current membership.
+
+Prefer `slack.add_usergroup_users` and `slack.remove_usergroup_users` for membership changes. They are idempotent: existing users are skipped on add, missing users are skipped on remove, and Slack is only updated when membership actually changes. `remove_usergroup_users` refuses to remove the final member; disable the user group in Slack if it needs to become empty. Avoid running concurrent membership updates against the same user group because Slack's API replaces the full member list.
+
+Use `slack.update_usergroup` only for metadata changes such as name, handle, description, or default channels.
+
 ## Private Channels
 
 Access is scoped to channels the session owner is a member of. If access is denied, tell the user rather than guessing at content.

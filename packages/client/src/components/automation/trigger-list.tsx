@@ -14,7 +14,24 @@ import {
   useRunTrigger,
   useUpdateTrigger,
 } from '@/api/triggers';
-import { useWorkflows } from '@/api/workflows';
+import { useWorkflowDraft, useWorkflows } from '@/api/workflows';
+import {
+  ManualWorkflowDialog,
+  type ManualWorkflowPayload,
+} from '@/components/workflows/manual-workflow-dialog';
+import {
+  createWorkflowInputFields,
+  parseWorkflowInputFields,
+  type ManualWorkflowInputField,
+} from '@/components/workflows/manual-workflow-dialog-model';
+import { ScheduledWorkflowInputs } from '@/components/workflows/scheduled-workflow-inputs';
+import {
+  FriendlyScheduleFields,
+  OrchestratorModelSelector,
+  OrchestratorPromptEditor,
+} from '@/components/automation/trigger-schedule-controls';
+import { useAvailableModels } from '@/api/sessions';
+import { getSchedulePresetForCron } from '@/components/automation/trigger-schedule-model';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -31,6 +48,7 @@ import { SearchInput } from '@/components/ui/search-input';
 import { cn } from '@/lib/cn';
 import { toastError, toastSuccess } from '@/hooks/use-toast';
 import { formatRelativeTime } from '@/lib/format';
+import { WebhookTokenReveal } from './webhook-token-reveal';
 
 /* ─── Types ─── */
 
@@ -45,10 +63,19 @@ interface TriggerFormState {
   webhookPath: string;
   webhookMethod: 'GET' | 'POST';
   webhookSecret: string;
+  // Round-trip-only: no UI for rateLimit yet. PATCH replaces config
+  // wholesale, so we stash + re-emit to avoid wiping an API-set value.
+  webhookRateLimit?: number;
   scheduleCron: string;
   scheduleTimezone: string;
   scheduleTarget: ScheduleTarget;
   schedulePrompt: string;
+  // Optional per-thread model override, orchestrator-target only. Empty
+  // string means "use the session's default model."
+  scheduleModel: string;
+  // PATCH replaces config wholesale, so schedule run parameters are
+  // stashed here and emitted as config.triggerData on save.
+  scheduleTriggerData?: Record<string, unknown>;
 }
 
 const DEFAULT_FORM: TriggerFormState = {
@@ -59,10 +86,11 @@ const DEFAULT_FORM: TriggerFormState = {
   webhookPath: '',
   webhookMethod: 'POST',
   webhookSecret: '',
-  scheduleCron: '',
+  scheduleCron: '0 9 * * 1-5',
   scheduleTimezone: 'UTC',
   scheduleTarget: 'orchestrator',
   schedulePrompt: '',
+  scheduleModel: '',
 };
 
 /* ─── Helpers ─── */
@@ -87,6 +115,7 @@ function formFromTrigger(trigger: Trigger): TriggerFormState {
     scheduleTimezone: 'UTC',
     scheduleTarget: 'workflow' as ScheduleTarget,
     schedulePrompt: '',
+    scheduleModel: '',
   };
 
   if (trigger.type === 'webhook' && isWebhookConfig(trigger.config)) {
@@ -96,6 +125,7 @@ function formFromTrigger(trigger: Trigger): TriggerFormState {
       webhookPath: trigger.config.path,
       webhookMethod: trigger.config.method || 'POST',
       webhookSecret: trigger.config.secret || '',
+      webhookRateLimit: trigger.config.rateLimit,
     };
   }
 
@@ -107,6 +137,8 @@ function formFromTrigger(trigger: Trigger): TriggerFormState {
       scheduleTimezone: trigger.config.timezone || 'UTC',
       scheduleTarget: trigger.config.target || 'workflow',
       schedulePrompt: trigger.config.prompt || '',
+      scheduleModel: trigger.config.model || '',
+      scheduleTriggerData: trigger.config.triggerData,
     };
   }
 
@@ -120,6 +152,9 @@ function toConfig(form: TriggerFormState): TriggerConfig {
       path: form.webhookPath.trim(),
       method: form.webhookMethod,
       ...(form.webhookSecret.trim() ? { secret: form.webhookSecret.trim() } : {}),
+      // Round-trip an API-set rateLimit so editing the trigger doesn't
+      // silently wipe it.
+      ...(typeof form.webhookRateLimit === 'number' ? { rateLimit: form.webhookRateLimit } : {}),
     };
   }
 
@@ -130,10 +165,34 @@ function toConfig(form: TriggerFormState): TriggerConfig {
       timezone: form.scheduleTimezone.trim() || undefined,
       target: form.scheduleTarget,
       prompt: form.scheduleTarget === 'orchestrator' ? form.schedulePrompt.trim() : undefined,
+      // Model override only applies to orchestrator-target schedules; drop it otherwise.
+      model: form.scheduleTarget === 'orchestrator' && form.scheduleModel.trim()
+        ? form.scheduleModel.trim()
+        : undefined,
+      // Static trigger payload for every scheduled workflow run.
+      ...(form.scheduleTriggerData && Object.keys(form.scheduleTriggerData).length > 0
+        ? { triggerData: form.scheduleTriggerData }
+        : {}),
     };
   }
 
   return { type: 'manual' };
+}
+
+function getFormTarget(form: TriggerFormState): ScheduleTarget {
+  return form.type === 'schedule' ? form.scheduleTarget : 'workflow';
+}
+
+function canSelectOrchestratorTarget(type: TriggerType): boolean {
+  return type === 'schedule';
+}
+
+function shouldIncludeWorkflowId(form: TriggerFormState): boolean {
+  return getFormTarget(form) === 'workflow';
+}
+
+function shouldEditScheduleInputs(form: TriggerFormState): boolean {
+  return form.type === 'schedule' && getFormTarget(form) === 'workflow' && Boolean(form.workflowId);
 }
 
 function validateForm(form: TriggerFormState): string | null {
@@ -141,7 +200,7 @@ function validateForm(form: TriggerFormState): string | null {
   if (form.type === 'webhook' && !form.webhookPath.trim()) return 'Webhook path is required.';
   if (form.type === 'webhook' && !form.workflowId) return 'Webhook triggers must be linked to a workflow.';
   if (form.type === 'manual' && !form.workflowId) return 'Manual triggers must be linked to a workflow.';
-  if (form.type === 'schedule' && !form.scheduleCron.trim()) return 'Cron expression is required.';
+  if (form.type === 'schedule' && !form.scheduleCron.trim()) return 'Schedule is required.';
   if (form.type === 'schedule' && form.scheduleTarget === 'workflow' && !form.workflowId) {
     return 'Workflow schedule triggers must be linked to a workflow.';
   }
@@ -155,11 +214,13 @@ function describeTrigger(trigger: Trigger): string {
   if (trigger.type === 'manual') return 'Manual run only';
   if (trigger.type === 'webhook' && isWebhookConfig(trigger.config)) {
     const method = trigger.config.method || 'POST';
-    return `${method} /webhooks/${trigger.config.path}`;
+    return `${method} /api/triggers/${trigger.id}/webhook`;
   }
   if (trigger.type === 'schedule' && isScheduleConfig(trigger.config)) {
     const target = trigger.config.target || 'workflow';
-    return `${trigger.config.cron} · ${trigger.config.timezone || 'UTC'} · ${target}`;
+    const preset = getSchedulePresetForCron(trigger.config.cron);
+    const schedule = preset.id === 'custom' ? trigger.config.cron : preset.label;
+    return `${schedule} · ${trigger.config.timezone || 'UTC'} · ${target}`;
   }
   return trigger.type;
 }
@@ -193,9 +254,48 @@ export function TriggerList() {
   const [editingTrigger, setEditingTrigger] = React.useState<Trigger | null>(null);
   const [form, setForm] = React.useState<TriggerFormState>(DEFAULT_FORM);
   const [formError, setFormError] = React.useState<string | null>(null);
+  const { data: availableModels } = useAvailableModels();
+  const [scheduleInputFields, setScheduleInputFields] = React.useState<Record<string, ManualWorkflowInputField>>({});
+  const [scheduleInputErrors, setScheduleInputErrors] = React.useState<Record<string, string>>({});
+  const [manualTrigger, setManualTrigger] = React.useState<Trigger | null>(null);
+  // Webhook-token reveal state. Populated from the create/PATCH response
+  // when the server mints a token (new webhook trigger OR transition
+  // from manual/schedule → webhook). The token is shown ONCE and then
+  // discarded — the GET/PATCH endpoints never echo it.
+  const [revealedToken, setRevealedToken] = React.useState<{
+    token: string;
+    webhookUrl?: string;
+  } | null>(null);
 
   const triggers = data?.triggers ?? [];
   const workflows = workflowsData?.workflows ?? [];
+  const manualWorkflowId = manualTrigger?.workflowId ?? '';
+  const { data: manualDraftData, isLoading: manualDraftLoading } = useWorkflowDraft(manualWorkflowId);
+  const scheduleWorkflowId = open && shouldEditScheduleInputs(form) ? form.workflowId : '';
+  const { data: scheduleDraftData, isLoading: scheduleDraftLoading } = useWorkflowDraft(scheduleWorkflowId);
+  const scheduleInputFieldList = React.useMemo(
+    () => Object.values(scheduleInputFields),
+    [scheduleInputFields],
+  );
+
+  React.useEffect(() => {
+    if (!open || !shouldEditScheduleInputs(form)) {
+      setScheduleInputFields({});
+      setScheduleInputErrors({});
+      return;
+    }
+
+    const triggerNode = scheduleDraftData?.draft?.nodes.find((node) => node.type === 'trigger');
+    setScheduleInputFields(createWorkflowInputFields(triggerNode?.dataSchema, form.scheduleTriggerData));
+    setScheduleInputErrors({});
+  }, [
+    form.scheduleTriggerData,
+    form.scheduleTarget,
+    form.type,
+    form.workflowId,
+    open,
+    scheduleDraftData?.draft,
+  ]);
 
   const filtered = React.useMemo(() => {
     let result = triggers;
@@ -216,6 +316,8 @@ export function TriggerList() {
   const resetForm = React.useCallback(() => {
     setForm(DEFAULT_FORM);
     setFormError(null);
+    setScheduleInputFields({});
+    setScheduleInputErrors({});
     setEditingTrigger(null);
   }, []);
 
@@ -236,6 +338,36 @@ export function TriggerList() {
     setFormError(null);
   };
 
+  const onTypeChange = (type: TriggerType) => {
+    setForm((prev) => ({
+      ...prev,
+      type,
+      scheduleTarget: canSelectOrchestratorTarget(type) ? prev.scheduleTarget : 'workflow',
+      scheduleCron: type === 'schedule' && !prev.scheduleCron.trim() ? DEFAULT_FORM.scheduleCron : prev.scheduleCron,
+    }));
+    setFormError(null);
+  };
+
+  const onTargetChange = (target: ScheduleTarget) => {
+    setForm((prev) => ({ ...prev, scheduleTarget: target }));
+    setFormError(null);
+  };
+
+  const onScheduleInputChange = (name: string, value: string | boolean) => {
+    setScheduleInputFields((current) => ({
+      ...current,
+      [name]: {
+        ...current[name]!,
+        value,
+      },
+    }));
+    setScheduleInputErrors((current) => {
+      const next = { ...current };
+      delete next[name];
+      return next;
+    });
+  };
+
   const onSave = async (event: React.FormEvent) => {
     event.preventDefault();
     const validationError = validateForm(form);
@@ -245,25 +377,61 @@ export function TriggerList() {
     }
 
     try {
+      let formForSave = form;
+      if (shouldEditScheduleInputs(form)) {
+        if (scheduleDraftLoading) {
+          setFormError('Workflow parameters are still loading.');
+          return;
+        }
+
+        const parsedInputs = parseWorkflowInputFields(scheduleInputFields);
+        if (!parsedInputs.ok) {
+          setScheduleInputErrors(parsedInputs.fieldErrors);
+          return;
+        }
+        formForSave = { ...form, scheduleTriggerData: parsedInputs.inputs };
+      }
+
       const payload: CreateTriggerRequest = {
-        name: form.name.trim(),
-        enabled: form.enabled,
-        config: toConfig(form),
-        ...(form.workflowId ? { workflowId: form.workflowId } : {}),
+        name: formForSave.name.trim(),
+        enabled: formForSave.enabled,
+        config: toConfig(formForSave),
+        ...(shouldIncludeWorkflowId(formForSave) && formForSave.workflowId ? { workflowId: formForSave.workflowId } : {}),
       };
 
       if (editingTrigger) {
-        await updateTrigger.mutateAsync({
+        const result = await updateTrigger.mutateAsync({
           triggerId: editingTrigger.id,
           data: {
             ...payload,
-            workflowId: form.workflowId || null,
+            workflowId: shouldIncludeWorkflowId(formForSave) ? formForSave.workflowId || null : null,
           },
         });
-        toastSuccess('Trigger updated', `${form.name.trim()} was updated.`);
+        toastSuccess('Trigger updated', `${formForSave.name.trim()} was updated.`);
+        if (result.webhookToken) {
+          // Server minted a fresh token because PATCH transitioned the
+          // trigger to webhook. Show the reveal dialog INSTEAD of closing
+          // — the user needs to capture it before navigating away.
+          setRevealedToken({
+            token: result.webhookToken,
+            ...(result.webhookUrl ? { webhookUrl: result.webhookUrl } : {}),
+          });
+          setOpen(false);
+          resetForm();
+          return;
+        }
       } else {
-        await createTrigger.mutateAsync(payload);
-        toastSuccess('Trigger created', `${form.name.trim()} was created.`);
+        const result = await createTrigger.mutateAsync(payload);
+        toastSuccess('Trigger created', `${formForSave.name.trim()} was created.`);
+        if (result.webhookToken) {
+          setRevealedToken({
+            token: result.webhookToken,
+            ...(result.webhookUrl ? { webhookUrl: result.webhookUrl } : {}),
+          });
+          setOpen(false);
+          resetForm();
+          return;
+        }
       }
 
       setOpen(false);
@@ -287,9 +455,32 @@ export function TriggerList() {
     }
   };
 
-  const onRun = async (trigger: Trigger) => {
+  const runTriggerDirectly = async (trigger: Trigger) => {
     try {
       const result = await runTrigger.mutateAsync({ triggerId: trigger.id });
+      toastSuccess('Trigger dispatched', result.message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Run failed';
+      toastError('Failed to run trigger', message);
+    }
+  };
+
+  const onRun = (trigger: Trigger) => {
+    if (trigger.workflowId) {
+      setManualTrigger(trigger);
+      return;
+    }
+    void runTriggerDirectly(trigger);
+  };
+
+  const onRunManualTrigger = async (payload: ManualWorkflowPayload) => {
+    if (!manualTrigger) return;
+    try {
+      const result = await runTrigger.mutateAsync({
+        triggerId: manualTrigger.id,
+        triggerData: payload.triggerData,
+      });
+      setManualTrigger(null);
       toastSuccess('Trigger dispatched', result.message);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run failed';
@@ -336,13 +527,25 @@ export function TriggerList() {
 
   return (
     <div className="space-y-4">
+      <ManualWorkflowDialog
+        open={Boolean(manualTrigger)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setManualTrigger(null);
+        }}
+        definition={manualDraftData?.draft ?? null}
+        workflowName={manualTrigger?.workflowName}
+        isLoadingDefinition={Boolean(manualTrigger?.workflowId) && manualDraftLoading}
+        isSubmitting={runTrigger.isPending}
+        onSubmit={onRunManualTrigger}
+      />
+
       {/* Toolbar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
           <div className="w-full sm:w-64">
             <SearchInput value={search} onChange={setSearch} placeholder="Search triggers..." />
           </div>
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {TYPE_FILTERS.map((option) => (
               <button
                 key={option.value}
@@ -470,16 +673,16 @@ export function TriggerList() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1.5">
-                        <Button size="sm" variant="ghost" onClick={() => onRun(trigger)} disabled={busy}>
+                        <Button size="sm" variant="ghost" onClick={() => onRun(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0">
                           <PlayIcon className="size-3.5" />
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => onToggleEnabled(trigger)} disabled={busy}>
+                        <Button size="sm" variant="ghost" onClick={() => onToggleEnabled(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0">
                           {trigger.enabled ? <PauseIcon className="size-3.5" /> : <PlayCircleIcon className="size-3.5" />}
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => openEditDialog(trigger)} disabled={busy}>
+                        <Button size="sm" variant="ghost" onClick={() => openEditDialog(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0">
                           <EditIcon className="size-3.5" />
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => onDelete(trigger)} disabled={busy} className="text-red-500 hover:text-red-600">
+                        <Button size="sm" variant="ghost" onClick={() => onDelete(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] text-red-500 hover:text-red-600 md:min-h-0 md:min-w-0">
                           <TrashIcon className="size-3.5" />
                         </Button>
                       </div>
@@ -500,46 +703,70 @@ export function TriggerList() {
           if (!nextOpen) resetForm();
         }}
       >
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
           <form onSubmit={onSave}>
             <DialogHeader>
               <DialogTitle>{editingTrigger ? 'Edit Trigger' : 'Create Trigger'}</DialogTitle>
               <DialogDescription>
-                Configure trigger type and behavior. Schedule triggers can run a workflow or prompt your orchestrator directly.
+                Choose how this trigger starts, then choose what it runs.
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4 py-4">
-              {/* Name + Type */}
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                  Name
+                </label>
+                <Input
+                  value={form.name}
+                  onChange={(e) => onField('name', e.target.value)}
+                  placeholder="Nightly triage"
+                />
+              </div>
+
               <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    Name
-                  </label>
-                  <Input
-                    value={form.name}
-                    onChange={(e) => onField('name', e.target.value)}
-                    placeholder="Nightly triage"
-                  />
-                </div>
-                <div>
+                <div className="space-y-1.5">
                   <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
                     Type
                   </label>
                   <select
                     value={form.type}
-                    onChange={(e) => onField('type', e.target.value as TriggerType)}
+                    onChange={(e) => onTypeChange(e.target.value as TriggerType)}
                     className="h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:focus:ring-neutral-100"
                   >
-                    <option value="schedule">Schedule</option>
-                    <option value="webhook">Webhook</option>
                     <option value="manual">Manual</option>
+                    <option value="webhook">Webhook</option>
+                    <option value="schedule">Schedule</option>
                   </select>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                    {form.type === 'manual' && 'Run on demand from Valet.'}
+                    {form.type === 'webhook' && 'Run when an external request arrives.'}
+                    {form.type === 'schedule' && 'Run on a recurring schedule.'}
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    Target
+                  </label>
+                  <select
+                    value={getFormTarget(form)}
+                    onChange={(e) => onTargetChange(e.target.value as ScheduleTarget)}
+                    className="h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:focus:ring-neutral-100"
+                  >
+                    <option value="workflow">Run workflow</option>
+                    {canSelectOrchestratorTarget(form.type) && (
+                      <option value="orchestrator">Prompt orchestrator</option>
+                    )}
+                  </select>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                    {canSelectOrchestratorTarget(form.type)
+                      ? 'Schedules can run workflows or prompt your orchestrator.'
+                      : 'Manual and webhook triggers currently run workflows.'}
+                  </p>
                 </div>
               </div>
 
-              {/* Workflow selector (optional for orchestrator schedule triggers) */}
-              {!(form.type === 'schedule' && form.scheduleTarget === 'orchestrator') && (
+              {getFormTarget(form) === 'workflow' && (
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
                     Workflow
@@ -601,57 +828,33 @@ export function TriggerList() {
               {/* Schedule fields */}
               {form.type === 'schedule' && (
                 <div className="space-y-4">
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                        Cron Expression
-                      </label>
-                      <Input
-                        value={form.scheduleCron}
-                        onChange={(e) => onField('scheduleCron', e.target.value)}
-                        placeholder="0 9 * * 1-5"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                        Timezone
-                      </label>
-                      <Input
-                        value={form.scheduleTimezone}
-                        onChange={(e) => onField('scheduleTimezone', e.target.value)}
-                        placeholder="America/Los_Angeles"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                      Target
-                    </label>
-                    <select
-                      value={form.scheduleTarget}
-                      onChange={(e) => onField('scheduleTarget', e.target.value as ScheduleTarget)}
-                      className="h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:focus:ring-neutral-100"
-                    >
-                      <option value="workflow">Run workflow</option>
-                      <option value="orchestrator">Prompt orchestrator</option>
-                    </select>
-                  </div>
-                  {form.scheduleTarget === 'orchestrator' && (
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                        Orchestrator Prompt
-                      </label>
-                      <textarea
+                  <FriendlyScheduleFields
+                    cron={form.scheduleCron}
+                    timezone={form.scheduleTimezone}
+                    onCronChange={(value) => onField('scheduleCron', value)}
+                    onTimezoneChange={(value) => onField('scheduleTimezone', value)}
+                  />
+                  {shouldEditScheduleInputs(form) && (
+                    <ScheduledWorkflowInputs
+                      fields={scheduleInputFieldList}
+                      fieldErrors={scheduleInputErrors}
+                      isLoading={scheduleDraftLoading}
+                      onChange={onScheduleInputChange}
+                    />
+                  )}
+                  {getFormTarget(form) === 'orchestrator' && (
+                    <>
+                      <OrchestratorPromptEditor
                         value={form.schedulePrompt}
-                        onChange={(e) => onField('schedulePrompt', e.target.value)}
-                        rows={4}
-                        placeholder="Summarize open tasks and create a plan for today."
-                        className={cn(
-                          'w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:ring-neutral-100',
-                          formError && 'border-red-500'
-                        )}
+                        onChange={(value) => onField('schedulePrompt', value)}
+                        hasError={Boolean(formError)}
                       />
-                    </div>
+                      <OrchestratorModelSelector
+                        value={form.scheduleModel}
+                        onChange={(value) => onField('scheduleModel', value)}
+                        availableModels={availableModels}
+                      />
+                    </>
                   )}
                 </div>
               )}
@@ -699,6 +902,12 @@ export function TriggerList() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <WebhookTokenReveal
+        token={revealedToken?.token ?? null}
+        {...(revealedToken?.webhookUrl ? { webhookUrl: revealedToken.webhookUrl } : {})}
+        onClose={() => setRevealedToken(null)}
+      />
     </div>
   );
 }

@@ -1,0 +1,127 @@
+<h2>Triggers page — visual rethink</h2>
+<p class="subtitle">Using your real data (Trash Reminder + Tacoma Watch). Same page, same data model — clearer visual story.</p>
+
+<div class="section">
+  <div class="label">What changed</div>
+  <ul style="font-size: 14px; line-height: 1.6; color: #555;">
+    <li><strong>Page subtitle</strong> says what this page is, in plain words</li>
+    <li><strong>Type badge</strong> on every card — Schedule / Webhook / Manual — color-coded</li>
+    <li><strong>Cron humanized</strong> — "Every day at 9:00 AM Pacific" instead of <code>0 9 * * *</code> (raw cron kept as a hover/expand)</li>
+    <li><strong>Target line</strong> — "→ Sends prompt to your orchestrator" vs "→ Runs workflow: PR Summary"</li>
+    <li><strong>Last / next run</strong> — relative time so you can see at a glance what's about to fire</li>
+  </ul>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">Preview: /automation/triggers (redesigned)</div>
+  <div class="mockup-body" style="background:#fafafa; padding:0;">
+
+    <!-- Page header -->
+    <div style="padding: 20px 24px; background: white; border-bottom: 1px solid #eee;">
+      <div style="font-size: 12px; color: #999; margin-bottom: 4px;">AUTOMATION</div>
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <div>
+          <div style="font-size: 22px; font-weight: 600; color: #111;">Triggers</div>
+          <div style="font-size: 14px; color: #666; margin-top: 4px;">
+            Things that run on a schedule, fire from a webhook, or run on demand.
+          </div>
+        </div>
+        <button style="background:#111; color:#fff; border:0; padding:8px 16px; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer;">+ New trigger</button>
+      </div>
+    </div>
+
+    <!-- Filter pills -->
+    <div style="padding: 12px 24px; background:white; border-bottom: 1px solid #eee; display:flex; gap:8px;">
+      <span style="font-size:13px; background:#111; color:#fff; padding:4px 12px; border-radius:999px;">All · 2</span>
+      <span style="font-size:13px; background:#eef; color:#446; padding:4px 12px; border-radius:999px; cursor:pointer;">Schedules · 2</span>
+      <span style="font-size:13px; background:#f5f5f5; color:#666; padding:4px 12px; border-radius:999px; cursor:pointer;">Webhooks · 0</span>
+      <span style="font-size:13px; background:#f5f5f5; color:#666; padding:4px 12px; border-radius:999px; cursor:pointer;">Manual · 0</span>
+    </div>
+
+    <!-- Cards -->
+    <div style="padding: 16px 24px; display:flex; flex-direction:column; gap:12px;">
+
+      <!-- Card 1: Daily Trash Reminder -->
+      <div style="background:white; border:1px solid #e5e5e5; border-radius:12px; padding:16px 18px; display:flex; gap:14px;">
+        <div style="font-size:22px; color:#5a6fd8; padding-top:2px;">◷</div>
+        <div style="flex:1;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+            <span style="background:#eef; color:#446; font-size:11px; padding:2px 8px; border-radius:4px; font-weight:600; letter-spacing:0.3px;">SCHEDULE</span>
+            <span style="font-size:16px; font-weight:600; color:#111;">Daily Trash Reminder</span>
+            <span style="background:#e6f7ed; color:#1a7a3a; font-size:11px; padding:2px 8px; border-radius:4px; font-weight:500;">● Enabled</span>
+          </div>
+          <div style="font-size:13px; color:#555; margin-bottom:6px;">
+            Every day at <strong>9:00 AM Pacific</strong>
+            <span style="color:#aaa; font-family:monospace; margin-left:6px;">(0 9 * * *)</span>
+          </div>
+          <div style="font-size:13px; color:#5a6fd8; margin-bottom:8px;">
+            → Sends prompt to your <strong>orchestrator</strong>
+          </div>
+          <div style="font-size:12px; color:#888; display:flex; gap:14px;">
+            <span>Last run: <strong>yesterday at 9:00 AM</strong></span>
+            <span>Next: <strong>tomorrow at 9:00 AM</strong></span>
+          </div>
+        </div>
+        <div style="color:#aaa; cursor:pointer; padding:4px;">⋯</div>
+      </div>
+
+      <!-- Card 2: Tacoma Watch -->
+      <div style="background:white; border:1px solid #e5e5e5; border-radius:12px; padding:16px 18px; display:flex; gap:14px;">
+        <div style="font-size:22px; color:#5a6fd8; padding-top:2px;">◷</div>
+        <div style="flex:1;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+            <span style="background:#eef; color:#446; font-size:11px; padding:2px 8px; border-radius:4px; font-weight:600; letter-spacing:0.3px;">SCHEDULE</span>
+            <span style="font-size:16px; font-weight:600; color:#111;">Tacoma Hard Topper Craigslist Watch</span>
+            <span style="background:#e6f7ed; color:#1a7a3a; font-size:11px; padding:2px 8px; border-radius:4px; font-weight:500;">● Enabled</span>
+          </div>
+          <div style="font-size:13px; color:#555; margin-bottom:6px;">
+            Every day at <strong>9:00 AM and 6:00 PM Pacific</strong>
+            <span style="color:#aaa; font-family:monospace; margin-left:6px;">(0 9,18 * * *)</span>
+          </div>
+          <div style="font-size:13px; color:#5a6fd8; margin-bottom:8px;">
+            → Sends prompt to your <strong>orchestrator</strong>
+          </div>
+          <div style="font-size:12px; color:#888; display:flex; gap:14px;">
+            <span>Last run: <strong>3 hours ago</strong></span>
+            <span>Next: <strong>today at 6:00 PM</strong></span>
+          </div>
+        </div>
+        <div style="color:#aaa; cursor:pointer; padding:4px;">⋯</div>
+      </div>
+
+      <!-- Imagined: webhook card (for type reference) -->
+      <div style="background:white; border:1px solid #e5e5e5; border-radius:12px; padding:16px 18px; display:flex; gap:14px; opacity:0.6;">
+        <div style="font-size:22px; color:#c47a3a; padding-top:2px;">⚡</div>
+        <div style="flex:1;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+            <span style="background:#fef0e0; color:#8a4a14; font-size:11px; padding:2px 8px; border-radius:4px; font-weight:600; letter-spacing:0.3px;">WEBHOOK</span>
+            <span style="font-size:16px; font-weight:600; color:#111;">(example) GitHub PR Notifications</span>
+            <span style="background:#e6f7ed; color:#1a7a3a; font-size:11px; padding:2px 8px; border-radius:4px; font-weight:500;">● Enabled</span>
+          </div>
+          <div style="font-size:13px; color:#555; margin-bottom:6px; font-family:monospace;">
+            POST /webhooks/gh/prs
+          </div>
+          <div style="font-size:13px; color:#c47a3a; margin-bottom:8px;">
+            → Runs workflow: <strong>PR Summary</strong>
+          </div>
+          <div style="font-size:12px; color:#888; display:flex; gap:14px;">
+            <span>Last fired: <strong>2 hours ago</strong></span>
+            <span>This week: <strong>14 fires</strong></span>
+          </div>
+        </div>
+        <div style="color:#aaa; cursor:pointer; padding:4px;">⋯</div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 28px;">
+  <div class="label">Open questions for you</div>
+  <ol style="font-size: 14px; line-height: 1.7; color: #444;">
+    <li>Page title: keep <strong>"Triggers"</strong> with the subtitle, or rename to <strong>"Automations"</strong> / <strong>"Schedules &amp; Hooks"</strong>?</li>
+    <li>Show raw cron <code>(0 9 * * *)</code> next to the humanized version, or hide it behind a hover/expand?</li>
+    <li>Card layout (above) vs. compact table — which do you prefer for scanning?</li>
+    <li>Should disabled triggers be filtered out by default or grayed out in place?</li>
+  </ol>
+</div>

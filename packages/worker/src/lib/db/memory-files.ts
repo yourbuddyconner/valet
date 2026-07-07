@@ -1,11 +1,16 @@
-import type { D1Database } from '@cloudflare/workers-types';
-import type { MemoryFile, MemoryFileListing, MemoryFileSearchResult, PatchOperation, PatchResult } from '@valet/shared';
+import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
+import type { MemoryExportFile, MemoryFile, MemoryFileListing, MemoryFileSearchResult, MemoryImportResult, PatchOperation, PatchResult } from '@valet/shared';
 import { eq, and, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { orchestratorMemoryFiles } from '../schema/memory-files.js';
 import { extractTitle, buildFTS5Query, normalizeBM25, extractSnippet, pathBoost } from './memory-search-helpers.js';
 
 const MEMORY_CAP = 200;
+// Files written per D1 batch. One batch = one network round-trip, so a bulk
+// import costs ~ceil(N/IMPORT_CHUNK) round-trips instead of ~4N serial ones.
+// Kept under D1's 100-bound-param limit: the FTS-sync statements bind userId
+// plus one param per path (≈ IMPORT_CHUNK + 1).
+const IMPORT_CHUNK = 50;
 
 // ─── Path Normalization ─────────────────────────────────────────────────────
 
@@ -97,6 +102,10 @@ export async function writeMemoryFile(
   userId: string,
   path: string,
   content: string,
+  // Bulk callers (importMemoryFiles) set this false to defer cap enforcement to
+  // a single pass at the end, so files aren't pruned mid-batch and the prune
+  // count can be reported. Single writes (PUT/PATCH) keep the default.
+  enforceCap = true,
 ): Promise<MemoryFile> {
   const normalized = normalizePath(path);
   const error = validatePath(normalized);
@@ -165,7 +174,7 @@ export async function writeMemoryFile(
   }
 
   // Auto-prune if over cap (non-pinned files only)
-  await enforceMemoryCap(rawDb, userId);
+  if (enforceCap) await enforceMemoryCap(rawDb, userId);
 
   return {
     id,
@@ -447,6 +456,153 @@ export async function searchMemoryFiles(
   return scored;
 }
 
+// ─── Import / Export ────────────────────────────────────────────────────────
+
+/**
+ * Returns every memory file for a user as a portable list (path + full content).
+ * Ordered by path so exports are stable and diff-friendly. Scoped to the user.
+ */
+export async function exportMemoryFiles(db: AppDb, userId: string): Promise<MemoryExportFile[]> {
+  const rows = await db
+    .select({
+      path: orchestratorMemoryFiles.path,
+      content: orchestratorMemoryFiles.content,
+      pinned: orchestratorMemoryFiles.pinned,
+      updatedAt: orchestratorMemoryFiles.updatedAt,
+    })
+    .from(orchestratorMemoryFiles)
+    .where(eq(orchestratorMemoryFiles.userId, userId))
+    .orderBy(orchestratorMemoryFiles.path);
+
+  return rows.map((r) => ({
+    path: r.path,
+    content: r.content,
+    pinned: r.pinned === 1,
+    updatedAt: r.updatedAt,
+  }));
+}
+
+/**
+ * Writes a batch of memory files for a user (merge semantics — same-path files
+ * are overwritten, others are left untouched). Reuses `writeMemoryFile` so path
+ * normalization, FTS indexing, pinning, and cap enforcement stay consistent.
+ *
+ * One bad file never fails the whole import: empties and invalid paths are
+ * collected in `skipped` with a reason. The `pinned` flag is intentionally not
+ * honored on import — pinning is derived from the path (see `writeMemoryFile`).
+ */
+type ImportRow = { path: string; title: string; content: string; pinned: number };
+
+/**
+ * Statements for one import chunk, run together in a single db.batch(): upsert
+ * each row, then re-sync FTS for exactly those paths by reading the just-
+ * upserted base rows. Because a batch is one sequential transaction, the FTS
+ * statements see the upserts — so no per-row rowid round-trip is needed.
+ */
+function buildImportChunk(rawDb: D1Database, userId: string, chunk: ImportRow[]): D1PreparedStatement[] {
+  const stmts = chunk.map((r) =>
+    rawDb
+      .prepare(
+        `INSERT INTO orchestrator_memory_files (id, user_id, path, title, content, pinned)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, path) DO UPDATE SET
+           content = excluded.content, title = excluded.title, pinned = excluded.pinned,
+           version = version + 1, updated_at = datetime('now')`,
+      )
+      .bind(crypto.randomUUID(), userId, r.path, r.title, r.content, r.pinned),
+  );
+
+  const paths = chunk.map((r) => r.path);
+  const placeholders = paths.map(() => '?').join(',');
+  stmts.push(
+    rawDb
+      .prepare(
+        `DELETE FROM orchestrator_memory_files_fts WHERE rowid IN (
+           SELECT rowid FROM orchestrator_memory_files WHERE user_id = ? AND path IN (${placeholders}))`,
+      )
+      .bind(userId, ...paths),
+  );
+  stmts.push(
+    rawDb
+      .prepare(
+        `INSERT INTO orchestrator_memory_files_fts(rowid, path, title, content)
+         SELECT rowid, path, title, content FROM orchestrator_memory_files WHERE user_id = ? AND path IN (${placeholders})`,
+      )
+      .bind(userId, ...paths),
+  );
+
+  return stmts;
+}
+
+export async function importMemoryFiles(
+  rawDb: D1Database,
+  userId: string,
+  files: { path: string; content: string }[],
+): Promise<MemoryImportResult> {
+  const skipped: { path: string; reason: string }[] = [];
+
+  // Validate + dedup up front so each atomic batch holds only known-good rows
+  // (a deterministic bad row would otherwise roll back its whole batch). Dedup
+  // by normalized path, last wins — the same result a sequential import gives.
+  const byPath = new Map<string, ImportRow>();
+  for (const file of files) {
+    if (file.content.length === 0) {
+      skipped.push({ path: file.path, reason: 'empty content' });
+      continue;
+    }
+    const normalized = normalizePath(file.path);
+    const error = validatePath(normalized);
+    if (error) {
+      skipped.push({ path: file.path, reason: error });
+      continue;
+    }
+    byPath.set(normalized, {
+      path: normalized,
+      title: extractTitle(file.content, normalized),
+      content: file.content,
+      pinned: normalized.startsWith('preferences/') ? 1 : 0,
+    });
+  }
+  const rows = [...byPath.values()];
+
+  // Write each chunk in a single batch (one round-trip): upserts + FTS resync.
+  // The 200-file cap is enforced once at the end so chunks don't prune each other.
+  let imported = 0;
+  for (let i = 0; i < rows.length; i += IMPORT_CHUNK) {
+    const chunk = rows.slice(i, i + IMPORT_CHUNK);
+    try {
+      await rawDb.batch(buildImportChunk(rawDb, userId, chunk));
+      imported += chunk.length;
+    } catch (batchErr) {
+      // The atomic batch rolled back; replay per-file so one bad row (e.g. a
+      // value over D1's 2MB limit) doesn't sink its chunk-mates.
+      console.warn(
+        `importMemoryFiles: batch of ${chunk.length} failed, replaying per-file:`,
+        batchErr instanceof Error ? batchErr.message : batchErr,
+      );
+      for (const r of chunk) {
+        try {
+          await writeMemoryFile(rawDb, userId, r.path, r.content, false);
+          imported++;
+        } catch (err) {
+          skipped.push({ path: r.path, reason: err instanceof Error ? err.message : 'write failed' });
+        }
+      }
+    }
+  }
+
+  // Enforce the cap once and report what it pruned (imported counts writes;
+  // pruned counts what the cap then removed).
+  let pruned = 0;
+  try {
+    pruned = await enforceMemoryCap(rawDb, userId);
+  } catch {
+    // A prune failure must not lose the import tally; the cap self-heals on the next write.
+  }
+
+  return { imported, skipped, pruned };
+}
+
 // ─── Relevance Boost ────────────────────────────────────────────────────────
 
 export async function boostMemoryFileRelevance(db: AppDb, userId: string, path: string): Promise<void> {
@@ -516,13 +672,13 @@ export async function pruneEmptyJournals(rawDb: D1Database): Promise<number> {
 
 // ─── Cap Enforcement ────────────────────────────────────────────────────────
 
-async function enforceMemoryCap(rawDb: D1Database, userId: string): Promise<void> {
+async function enforceMemoryCap(rawDb: D1Database, userId: string): Promise<number> {
   const countResult = await rawDb
     .prepare('SELECT COUNT(*) as cnt FROM orchestrator_memory_files WHERE user_id = ? AND pinned = 0')
     .bind(userId)
     .first<{ cnt: number }>();
 
-  if (!countResult || countResult.cnt <= MEMORY_CAP) return;
+  if (!countResult || countResult.cnt <= MEMORY_CAP) return 0;
 
   const excess = countResult.cnt - MEMORY_CAP;
 
@@ -547,7 +703,10 @@ async function enforceMemoryCap(rawDb: D1Database, userId: string): Promise<void
     .bind(userId, excess)
     .run();
 
-  for (const row of toDelete.results || []) {
+  const prunedRows = toDelete.results || [];
+  for (const row of prunedRows) {
     await rawDb.prepare('DELETE FROM orchestrator_memory_files_fts WHERE rowid = ?').bind(row.rowid).run();
   }
+
+  return prunedRows.length;
 }

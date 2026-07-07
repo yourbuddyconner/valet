@@ -1,0 +1,221 @@
+<h2>Session chat during a workflow run</h2>
+<p class="subtitle">Original problem: prompts showed up, responses didn't. Beyond fixing that, here's a workflow-aware chat layout.</p>
+
+<style>
+  .frame { background:#0b0d12; border:1px solid #222; border-radius:10px; padding:0; min-height: 640px; display:flex; flex-direction:column; overflow:hidden; }
+
+  /* Workflow context bar */
+  .wf-bar { padding:10px 14px; background: linear-gradient(180deg, #0a1a14 0%, #0a1014 100%); border-bottom:1px solid #14532d; display:flex; align-items:center; gap:12px; }
+  .wf-icon { width:24px; height:24px; border-radius:6px; background:#10b981; display:flex; align-items:center; justify-content:center; font-size:13px; color:#000; font-weight:700; }
+  .wf-meta { flex:1; display:flex; flex-direction:column; gap:2px; }
+  .wf-title { font-size:12px; color:#e5e7eb; font-family:ui-monospace, monospace; font-weight:500; }
+  .wf-sub { font-size:10px; color:#6ee7b7; font-family:ui-monospace, monospace; }
+  .wf-progress { display:flex; gap:2px; align-items:center; }
+  .step-dot { width:10px; height:4px; border-radius:1px; background:#1f2937; }
+  .step-dot.ok { background:#10b981; }
+  .step-dot.run { background:#f59e0b; animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity:1; } 50% { opacity:0.4; } }
+  .open-exec-btn { font-family:ui-monospace, monospace; font-size:10px; padding:5px 10px; border:1px solid #14532d; background:rgba(16,185,129,0.08); color:#6ee7b7; border-radius:5px; cursor:pointer; }
+  .open-exec-btn:hover { background:rgba(16,185,129,0.16); }
+
+  /* Chat */
+  .chat { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:14px; background:#0b0d12; }
+
+  /* Workflow step group */
+  .step-group { display:flex; flex-direction:column; gap:6px; position:relative; }
+  .step-divider { display:flex; align-items:center; gap:8px; color:#6b7280; font-family:ui-monospace, monospace; font-size:10px; padding:6px 0; }
+  .step-divider::after { content:''; flex:1; height:1px; background:#1f2937; }
+  .step-divider .badge { background:#0c1018; border:1px solid #1f2937; padding:2px 7px; border-radius:99px; display:inline-flex; gap:5px; align-items:center; }
+  .step-divider.fail .badge { border-color:#7f1d1d; color:#fecaca; }
+  .step-divider.run .badge { border-color:#854d0e; color:#fde68a; }
+
+  /* Message bubble */
+  .msg { display:flex; gap:10px; align-items:flex-start; }
+  .msg.user { flex-direction:row-reverse; }
+  .avatar { width:24px; height:24px; border-radius:50%; background:#1e3a5f; display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff; font-family:ui-monospace, monospace; flex-shrink:0; }
+  .avatar.assistant { background:#1f2937; color:#a78bfa; }
+  .avatar.workflow { background:#064e3b; color:#6ee7b7; }
+  .bubble { max-width: 78%; padding:8px 12px; border-radius:10px; font-size:12px; line-height:1.55; color:#e5e7eb; }
+  .bubble.user { background:#1e3a5f; border-bottom-right-radius:3px; }
+  .bubble.workflow-prompt { background:#0d1320; border:1px solid #1e3a5f; color:#cbd5e1; font-style:italic; border-bottom-right-radius:3px; }
+  .bubble.assistant { background:#15171c; border:1px solid #1f2937; border-bottom-left-radius:3px; }
+  .bubble.assistant.structured { background:#0c1018; border-color:#1e293b; }
+  .author-line { font-size:10px; color:#6b7280; margin-bottom:2px; font-family:ui-monospace, monospace; display:flex; gap:6px; align-items:center; }
+  .author-pill { background:#0c1018; border:1px solid #1f2937; padding:1px 5px; border-radius:3px; }
+  .author-pill.persona { color:#c7d2fe; border-color:#4338ca; background:#1e1b4b; }
+
+  .kv { display:grid; grid-template-columns: max-content 1fr; gap:3px 12px; font-size:11px; font-family: ui-monospace, monospace; margin-top:4px; }
+  .kv-key { color:#94a3b8; }
+  .kv-val { color:#e2e8f0; }
+
+  /* System-line events (bash, notify, etc that aren't really chat) */
+  .sys-event { display:flex; gap:8px; align-items:center; padding:3px 10px; margin: 0 auto; max-width:80%; }
+  .sys-event .pill { font-family:ui-monospace, monospace; font-size:10px; padding:2px 7px; background:#0c1018; border:1px solid #1f2937; border-radius:99px; color:#9ca3af; display:inline-flex; gap:5px; align-items:center; }
+  .sys-event .pill.fail { color:#fecaca; border-color:#7f1d1d; }
+  .sys-event a { color:#60a5fa; text-decoration:none; font-size:10px; }
+
+  .input-area { padding:10px 14px; border-top:1px solid #222; background:#0a0b0f; display:flex; gap:8px; align-items:center; }
+  .input-area input { flex:1; background:#0c1018; border:1px solid #1f2937; border-radius:6px; padding:7px 10px; color:#e5e7eb; font-size:12px; font-family:ui-monospace, monospace; }
+  .send { background:#3b82f6; color:#fff; border:none; padding:7px 14px; border-radius:6px; font-size:11px; cursor:pointer; }
+
+  .options { margin-top:14px; }
+</style>
+
+<div class="frame">
+  <!-- Workflow context bar -->
+  <div class="wf-bar">
+    <div class="wf-icon">⚡</div>
+    <div class="wf-meta">
+      <div class="wf-title">basic flow control test</div>
+      <div class="wf-sub">execution 77e5ab07 · running · step 3 of 7</div>
+    </div>
+    <div class="wf-progress">
+      <span class="step-dot ok"></span>
+      <span class="step-dot ok"></span>
+      <span class="step-dot run"></span>
+      <span class="step-dot"></span>
+      <span class="step-dot"></span>
+      <span class="step-dot"></span>
+      <span class="step-dot"></span>
+    </div>
+    <button class="open-exec-btn">Open execution ↗</button>
+  </div>
+
+  <!-- Chat -->
+  <div class="chat">
+
+    <!-- Step group: loop iteration 1 -->
+    <div class="step-group">
+      <div class="step-divider">
+        <span class="badge">▾ LOOP · personaShoutouts · iter 1 of 3</span>
+      </div>
+
+      <!-- Workflow prompt -->
+      <div class="msg user">
+        <div class="avatar workflow">⚡</div>
+        <div>
+          <div class="author-line" style="justify-content:flex-end;">
+            <span class="author-pill">via workflow</span>
+            <span class="author-pill persona">◐ Captain Chaos</span>
+          </div>
+          <div class="bubble workflow-prompt">
+            Tell me about your morning routine in one sentence, then say a quick hello to the team.
+          </div>
+        </div>
+      </div>
+
+      <!-- Assistant response -->
+      <div class="msg">
+        <div class="avatar assistant">A</div>
+        <div style="max-width:78%;">
+          <div class="author-line">
+            <span class="author-pill">claude-opus-4.6</span>
+            <span style="color:#6b7280;">420ms · 1.2k tok</span>
+          </div>
+          <div class="bubble assistant structured">
+            <div style="font-size:10px;color:#6b7280;font-family:ui-monospace;margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em;">structured · capability+greeting</div>
+            <div class="kv">
+              <div class="kv-key">capability</div>
+              <div class="kv-val">"Orchestrating spring raids on properly cobblers — I go in clean, unsplash every..."</div>
+              <div class="kv-key">greeting</div>
+              <div class="kv-val">"Alright team, Captain Chaos reporting for duty — three espressos deep and ready to roll"</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step group: loop iteration 2 -->
+    <div class="step-group">
+      <div class="step-divider">
+        <span class="badge">▾ LOOP · personaShoutouts · iter 2 of 3</span>
+      </div>
+
+      <div class="msg user">
+        <div class="avatar workflow">⚡</div>
+        <div>
+          <div class="author-line" style="justify-content:flex-end;">
+            <span class="author-pill">via workflow</span>
+            <span class="author-pill persona">◑ Captain Chaos</span>
+          </div>
+          <div class="bubble workflow-prompt">
+            Tell me about your morning routine in one sentence, then say a quick hello to the team.
+          </div>
+        </div>
+      </div>
+
+      <div class="msg">
+        <div class="avatar assistant">A</div>
+        <div style="max-width:78%;">
+          <div class="author-line">
+            <span class="author-pill">claude-opus-4.6</span>
+            <span style="color:#6b7280;">380ms</span>
+          </div>
+          <div class="bubble assistant structured">
+            <div class="kv">
+              <div class="kv-key">capability</div>
+              <div class="kv-val">"Orchestrating complex software engineering heists — I plan with a hand-drawn sketch on cocktail napkins..."</div>
+              <div class="kv-key">greeting</div>
+              <div class="kv-val">"Alright team, Captain Chaos reporting for duty — the musical sting just hit and we are ready to riff"</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Inline system event for non-chat step -->
+    <div class="sys-event">
+      <span class="pill">▸ BASH · envOutput · exit 0 · 120ms</span>
+      <a href="#">view ↗</a>
+    </div>
+
+    <div class="sys-event">
+      <span class="pill">▸ BASH · timestampOutput · exit 0 · 90ms</span>
+      <a href="#">view ↗</a>
+    </div>
+
+    <!-- Failed notify event -->
+    <div class="sys-event">
+      <span class="pill fail">✗ NOTIFY · loop_post_not_array</span>
+      <a href="#">view ↗</a>
+    </div>
+
+    <!-- User message during the workflow (mixed mode) -->
+    <div class="msg user">
+      <div class="avatar">CS</div>
+      <div>
+        <div class="author-line" style="justify-content:flex-end;">
+          <span class="author-pill">conner</span>
+        </div>
+        <div class="bubble user">Why did the notify fail?</div>
+      </div>
+    </div>
+
+    <div class="msg">
+      <div class="avatar assistant">A</div>
+      <div style="max-width:78%;">
+        <div class="bubble assistant">The notify step referenced <code>outputs.personaResult.capability</code> — but because <code>personaResult</code> is produced inside a loop, it's an array of objects, not a single object. You'd want <code>outputs.personaResult[0].capability</code>, or join across iterations.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <input placeholder="ask about this run, or take over...">
+    <button class="send">send</button>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option opt-block" data-choice="yes" onclick="toggleSelect(this)">
+    <div class="opt-title" style="font-weight:600;color:#f9fafb;">Yes — workflow context bar + grouped step rendering in chat</div>
+    <div class="opt-sub" style="font-size:11px;color:#9ca3af;">Chat shows agent steps with prompt+response as a unit. Non-chat steps (bash, notify) collapse to single system-event lines that deep-link to execution page. User can still chat normally.</div>
+  </div>
+  <div class="option opt-block" data-choice="lighter" onclick="toggleSelect(this)">
+    <div class="opt-title" style="font-weight:600;color:#f9fafb;">Lighter touch — just fix responses + add the context bar</div>
+    <div class="opt-sub" style="font-size:11px;color:#9ca3af;">Don't restructure chat. Bar at top + each workflow message gets a small step badge. Execution page is where you go for the full picture.</div>
+  </div>
+  <div class="option opt-block" data-choice="other" onclick="toggleSelect(this)">
+    <div class="opt-title" style="font-weight:600;color:#f9fafb;">Different direction</div>
+    <div class="opt-sub" style="font-size:11px;color:#9ca3af;">Tell me what's off.</div>
+  </div>
+</div>

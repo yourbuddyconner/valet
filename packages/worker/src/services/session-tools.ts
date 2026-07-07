@@ -1,6 +1,6 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
-import type { CredentialResult } from '../services/credentials.js';
+import { buildActionCredentials, type CredentialResult } from '../services/credentials.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { getUserIntegrations, getOrgIntegrations } from '../lib/db/integrations.js';
 import { invokeAction, markExecuted, markFailed } from '../services/actions.js';
@@ -77,6 +77,8 @@ export interface ExecuteActionResult {
   analyticsEvents: Array<{ eventType: string; durationMs?: number; properties?: Record<string, unknown> }>;
   durationMs: number;
 }
+
+const ALWAYS_ENABLED_SERVICES = new Set(['workflows']);
 
 // ─── Zod Schema Helpers ─────────────────────────────────────────────────────
 
@@ -171,6 +173,12 @@ export async function listTools(
   for (const svc of autoServices) {
     if (!serviceSourceMap.has(svc)) {
       serviceSourceMap.set(svc, [{ id: `auto:${svc}`, scope: 'user' as const, userId }]);
+    }
+  }
+
+  for (const svc of ALWAYS_ENABLED_SERVICES) {
+    if (!serviceSourceMap.has(svc)) {
+      serviceSourceMap.set(svc, [{ id: `builtin:${svc}`, scope: 'user' as const, userId }]);
     }
   }
 
@@ -276,6 +284,11 @@ export async function listTools(
           name: action.name,
           description: action.description,
           riskLevel: action.riskLevel,
+          // Pass the upstream MCP-advertised schemas straight through so
+          // the catalog endpoint can render them later without holding
+          // user credentials. Both fields are optional on the MCP side.
+          ...(action.inputSchema ? { inputSchema: action.inputSchema } : {}),
+          ...(action.outputSchema ? { outputSchema: action.outputSchema } : {}),
         });
       }
     }
@@ -369,9 +382,9 @@ export async function resolveActionPolicy(
   const hasActiveIntegration = [...userIntegrations, ...orgIntegrations].some(
     (i) => i.service === service && i.status === 'active',
   );
-  const customConnectorDoesNotNeedIntegration = !!customConnector && customConnector.authType !== 'oauth';
+  const customConnectorDoesNotNeedIntegration = !!customConnector && !customConnectorRequiresUserCredential(customConnector);
 
-  if (!hasActiveIntegration && !customConnectorDoesNotNeedIntegration) {
+  if (!hasActiveIntegration && !customConnectorDoesNotNeedIntegration && !ALWAYS_ENABLED_SERVICES.has(service)) {
     const autoServices = await getAutoEnabledServices(envDB, orgId);
     if (!autoServices.includes(service)) {
       throw new Error(`Integration "${service}" is not active. Configure it in Settings > Integrations.`);
@@ -485,7 +498,7 @@ export async function executeAction(
       return { success: false, error: `No credentials found for "${service}": ${credResult.error.message}. Connect it in Settings > Integrations.`, analyticsEvents: [], durationMs: 0 };
     }
 
-    credentials = buildCredentials(credResult);
+    credentials = buildActionCredentials(credResult);
     attribution = credResult.credential.attribution;
 
     // Inject service-specific extras
@@ -514,7 +527,17 @@ export async function executeAction(
   const toolExecStart = Date.now();
   let actionResult;
   try {
-    actionResult = await actionSource.execute(actionId, params, { credentials, userId, orgId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig });
+    actionResult = await actionSource.execute(actionId, params, {
+      credentials,
+      userId,
+      orgId,
+      attribution,
+      callerIdentity,
+      analytics: actionAnalytics,
+      guardConfig: opts.guardConfig,
+      appDb,
+      env,
+    } as any);
 
     // Auth failure retry — force-refresh on 401 and retry once (simple token-expired retry)
     // Note: 403 is excluded — GitHub 403s are permission problems (missing App permissions),
@@ -529,7 +552,7 @@ export async function executeAction(
         forceRefresh: true,
       });
       if (refreshed.ok) {
-        const refreshedCredentials = buildCredentials(refreshed);
+        const refreshedCredentials = buildActionCredentials(refreshed);
         attribution = refreshed.credential.attribution;
         if (service === 'slack' && credentials.owner_slack_user_id) {
           refreshedCredentials.owner_slack_user_id = credentials.owner_slack_user_id;
@@ -537,7 +560,9 @@ export async function executeAction(
         actionResult = await actionSource.execute(actionId, params, {
           credentials: refreshedCredentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig,
           orgId,
-        });
+          appDb,
+          env,
+        } as any);
       }
     }
   } catch (err) {
@@ -569,23 +594,17 @@ export async function executeAction(
   };
 }
 
-/** Build the credentials object from a successful CredentialResult. */
-function buildCredentials(credResult: CredentialResult & { ok: true }): Record<string, string> {
-  const token = credResult.credential.accessToken;
-  const credentials: Record<string, string> = credResult.credential.credentialType === 'bot_token'
-    ? { bot_token: token }
-    : { access_token: token };
-  if (credResult.credential.credentialType) {
-    credentials._credential_type = credResult.credential.credentialType;
-  }
-  return credentials;
-}
-
-function requiresUserCredential(provider?: { authType?: string; isCustomConnector?: boolean }): boolean {
+function requiresUserCredential(provider?: { authType?: string; isCustomConnector?: boolean; credentialScope?: 'org' | 'user' }): boolean {
   if (!provider) return false;
   if (provider.authType === 'none') return false;
-  if (provider.isCustomConnector && provider.authType === 'api_key') return false;
+  if (provider.isCustomConnector && provider.authType === 'api_key') return provider.credentialScope === 'user';
   return true;
+}
+
+function customConnectorRequiresUserCredential(connector: { authType: string; credentialScope?: 'org' | 'user' }): boolean {
+  if (connector.authType === 'none') return false;
+  if (connector.authType === 'oauth') return true;
+  return connector.credentialScope === 'user';
 }
 
 function matchesServiceFilter(

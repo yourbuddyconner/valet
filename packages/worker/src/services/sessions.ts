@@ -1,4 +1,5 @@
 import { ForbiddenError, NotFoundError, ValidationError, webManualScopeKey } from '@valet/shared';
+import type { SessionPurpose } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
 import type { AppDb } from '../lib/drizzle.js';
@@ -195,6 +196,30 @@ export interface CreateSessionParams {
   initialPrompt?: string;
   initialModel?: string;
   personaId?: string;
+  /**
+   * Pre-allocated session id. The workflow-runtime session.start
+   * executor uses this to thread the cached id from an outer step.do
+   * into the createSession call: a retry of the step.do that wraps
+   * createSession then collides on the existing sessions PK (caught
+   * via onConflictDoNothing inside db.createSession) instead of
+   * generating a fresh UUID and spawning a second sandbox.
+   */
+  presetSessionId?: string;
+  /**
+   * Durable link back to the workflow_executions row that spawned this
+   * session. Set only for workflow-spawned sessions; powers per-workflow
+   * usage attribution independent of workflow_spawned_sessions (which is
+   * pruned on successful terminal cleanup).
+   */
+  workflowExecutionId?: string;
+  /**
+   * Session origin bucket used by usage analytics. Workflow spawns must
+   * pass 'workflow' so per-origin (interactive vs automated vs
+   * orchestrator) attribution is correct — without this, workflow
+   * sessions get the default 'interactive' bucket and disappear from the
+   * automated panel.
+   */
+  purpose?: SessionPurpose;
 }
 
 export interface CreateSessionRequestContext {
@@ -212,7 +237,7 @@ export async function createSession(
   requestContext: CreateSessionRequestContext,
 ): Promise<CreateSessionResult> {
   const appDb = getDb(env.DB);
-  const sessionId = crypto.randomUUID();
+  const sessionId = params.presetSessionId ?? crypto.randomUUID();
   const runnerToken = generateRunnerToken();
 
   // Ensure user exists in DB
@@ -265,6 +290,8 @@ export async function createSession(
     parentSessionId: params.parentSessionId,
     metadata: params.config,
     personaId: params.personaId,
+    ...(params.workflowExecutionId ? { workflowExecutionId: params.workflowExecutionId } : {}),
+    ...(params.purpose ? { purpose: params.purpose } : {}),
   });
 
   // Create git state record
@@ -594,14 +621,28 @@ export async function terminateSession(
 ): Promise<void> {
   const appDb = getDb(env.DB);
   await db.assertSessionAccess(appDb, sessionId, userId, 'owner');
+  await terminateSessionUnchecked(env, sessionId, 'user_stopped');
+}
 
+/**
+ * Terminate a session WITHOUT an access check. For internal callers
+ * (workflow cancellation, cron sweeps) where the access check is
+ * either implicit in the caller's context or doesn't apply because
+ * the system itself is the actor. Do NOT expose via HTTP routes.
+ */
+export async function terminateSessionUnchecked(
+  env: Env,
+  sessionId: string,
+  reason: string,
+): Promise<void> {
+  const appDb = getDb(env.DB);
   const doId = env.SESSIONS.idFromName(sessionId);
   const sessionDO = env.SESSIONS.get(doId);
 
   await sessionDO.fetch(new Request('http://do/stop', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reason: 'user_stopped' }),
+    body: JSON.stringify({ reason }),
   }));
 
   await db.updateSessionStatus(appDb, sessionId, 'terminated');

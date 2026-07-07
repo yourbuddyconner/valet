@@ -1,27 +1,105 @@
 ---
 title: Customer Workflows
-description: Use Valet for research, account details, support follow-up, and connected customer work.
+description: Playbook for support, success, and GTM teams — ticket enrichment, escalation triage, account research, billing lookups, and follow-up drafting with approval gates on anything customer-facing.
 ---
 
-Valet can help with customer-facing work when the task needs information from multiple systems and a clear handoff back to a human. It can gather details, prepare drafts, summarize state, and run approved actions through connected tools.
+This playbook is for customer-facing teams — support, success, and go-to-market — that want Valet to do the gathering, drafting, and filing around customer work while people keep the final say. After reading it you can set up concrete plays: enriched tickets, drafted replies held for review, escalations filed with full context, and pre-call briefings that arrive before you need them.
 
-Typical work includes:
-
-- Researching account details before a customer conversation.
-- Summarizing open issues, recent messages, and relevant workspace activity.
-- Drafting follow-up responses or internal notes.
-- Creating tasks in Linear, Notion, GitHub, or another connected system.
-- Running repeatable workflows after a form submission or connected-system update.
-- Escalating approval-sensitive steps to the right person.
-
-## Product surfaces involved
-
-- [Connect tools](/product/tools) connects the tools and data Valet can use.
-- [Skills and personas](/product/skills-and-personas) shape the behavior for a customer-facing workflow.
-- [Access and sharing](/product/access) controls who can connect accounts and share tasks.
-- [Approvals](/product/approvals) protect changes and external actions.
-- [Channels](/product/channels) send customer-workflow updates back to the right place.
+Customer work is a good fit for Valet because it usually means pulling information from several systems (support tool, billing, meeting notes, issue tracker) and producing something a human reviews before it goes out. Valet handles the pulling and producing; [approvals](/product/approvals) handle the handoff. The rule that makes all of these plays safe is simple: **anything a customer can see, and anything that touches money, sits behind an approval gate.** Reads run freely; sends, edits, and refunds wait for a person.
 
 <Warning>
-  Treat customer-facing actions as approval-sensitive until your team rules say otherwise.
+  Treat customer-facing actions as approval-sensitive until your team rules say otherwise. Start strict and loosen deliberately — see [how to tune approvals](/product/approvals).
 </Warning>
+
+Each play below names its trigger, the steps Valet runs, the integrations involved, and where a human approves. Build them as [workflows](/product/workflows) so the process is written once and runs the same way every time.
+
+## Play: enrich support tickets and draft the first reply
+
+**Trigger:** a webhook from your support tool when a new ticket arrives, or a schedule that sweeps the queue every hour. Workflows accept [webhook, schedule, and manual triggers](/product/triggers).
+
+When a ticket comes in, Valet:
+
+1. Reads the ticket, account, and contact from [Pylon](/product/integrations/pylon).
+2. Checks [memory](/product/memory) for anything your team has saved about the account — past incidents, known configuration, tone preferences.
+3. Looks up related engineering work in [Linear](/product/integrations/linear) — is this a known bug, and what state is the fix in?
+4. Posts an internal note on the ticket summarizing what it found.
+5. Drafts a suggested reply and **pauses at an approval gate**. The workflow does not continue until someone reviews the draft.
+
+The agent replies to nobody. A support engineer opens the approval — in the web app or in Slack — reads the draft against the enrichment note, edits or approves, and only then does anything reach the customer. Reading tickets and Linear issues never needs approval; the gate sits exactly on the customer-visible step.
+
+## Play: triage escalations into Linear with full context
+
+**Trigger:** manual — a support engineer tells Valet "escalate this" in Slack or the web app — or a webhook rule for tickets tagged as escalations.
+
+Half the cost of an escalation is the context that gets lost between support and engineering. Valet closes that gap:
+
+1. Pulls the full ticket thread and account details from Pylon.
+2. Gathers what the customer already tried, error messages, and timeline into a reproduction summary.
+3. Searches Linear for duplicates. If one exists, it adds a comment linking the new report and stops.
+4. If it is new, files a Linear issue with the summary, severity assessment, and a link back to the ticket, then posts the issue link back on the support ticket as an internal note.
+
+Filing and commenting on Linear issues are medium-risk actions, so by default they prompt for approval. Once the workflow has run cleanly a few times, "Always allow" on the specific create-issue action lets escalations file without prompting — the [approval recipes](/product/approvals) page covers this pattern. Nothing in this play is customer-visible, so it is a good candidate for running end-to-end once you trust it.
+
+## Play: brief yourself before a customer call
+
+**Trigger:** a schedule each morning that checks your calendar for customer calls that day, or a manual run — "prep me for the Acme call."
+
+For each upcoming call, Valet assembles one briefing:
+
+1. Pulls notes from your last few meetings with the account from [Granola](/product/integrations/granola).
+2. Reads current account state from [Stripe](/product/integrations/stripe) — plan, subscription status, recent invoices, any failed payments.
+3. Lists open and recently closed tickets from Pylon.
+4. Checks memory for saved account context and past decisions.
+5. Delivers the briefing to whichever [channel](/product/channels) you prefer — a Slack DM twenty minutes before the call works well.
+
+This play is entirely read-only, so it needs no approval gates at all. It is the easiest place to start: connect the tools, write the workflow, and the worst failure mode is a briefing you ignore.
+
+## Play: billing lookups with gated Stripe actions
+
+**Trigger:** manual — someone asks Valet in Slack "what's the billing state for Acme?" or "extend their trial by two weeks."
+
+Lookups are free: Valet reads the customer, subscription, invoice history, and payment status from Stripe and answers in the channel where you asked. The interesting part is the write path. When the request is an action — apply a credit, cancel a subscription, adjust a trial — Valet prepares the exact change, states what it is about to do, and waits for approval before touching Stripe.
+
+Stripe actions default to medium risk in Valet, and money-touching actions are precisely the kind your admin should force to always require approval, regardless of anyone's personal "Always allow" rules — an [organization rule always wins](/product/approvals). The result is a clean split: anyone on the team can get a billing answer in seconds, and every billing change has a named human who approved it.
+
+## Play: draft follow-ups after customer meetings
+
+**Trigger:** a schedule that runs at the end of the day, or a manual "send follow-ups for today's calls."
+
+After customer meetings, Valet:
+
+1. Pulls the day's meeting notes from Granola.
+2. Extracts commitments, action items, and open questions for each customer meeting.
+3. Files internal action items in Linear where they belong to engineering or product.
+4. Creates a follow-up email as a [Gmail](/product/integrations/gmail) draft — recap, commitments, next steps — threaded onto the existing conversation where one exists.
+5. Stops. The draft sits in your Drafts folder; sending is a separate, high-risk action.
+
+Gmail's action design fits this play exactly: creating a draft is medium risk and safe to auto-approve (nothing leaves your account), while sending is high risk and stays gated. Approve drafting once with "Always allow," keep sending manual, and you review each follow-up in Gmail before it goes out — or ask Valet to send it and approve that single action.
+
+## What Valet remembers between plays
+
+These plays compound because of [memory](/product/memory). Save the things that should shape future customer work: account quirks ("Acme is on a legacy plan — always check with finance before billing changes"), your team's escalation criteria, and how you like follow-up emails written. Team procedures and hard rules belong in preferences or clearly named project notes so they persist; one-off details can stay inside their session.
+
+<Note>
+  Team-owned workflows, memory, and channel bindings are rolling out with teams — a shared team orchestrator that everyone in a bound Slack channel can work with. Until your org has teams enabled, these plays run against personal orchestrators and personal integrations.
+</Note>
+
+## Set this up
+
+<Steps>
+  <Step title="Connect your customer stack">
+    From [Connect tools](/product/tools), connect [Pylon](/product/integrations/pylon), [Stripe](/product/integrations/stripe), [Gmail](/product/integrations/gmail), [Linear](/product/integrations/linear), and [Granola](/product/integrations/granola) — or the subset a play needs.
+  </Step>
+  <Step title="Run one play manually first">
+    Ask Valet to do the work once as a normal [session](/product/sessions) — "prep me for tomorrow's Acme call." Fix what's missing before automating.
+  </Step>
+  <Step title="Turn it into a workflow">
+    Write the process as a [workflow](/product/workflows) with the right [trigger](/product/triggers): webhook for ticket events, schedule for briefings and sweeps, manual for escalations.
+  </Step>
+  <Step title="Place the approval gates">
+    Gate every customer-visible send and every Stripe write. Use the [approval recipes](/product/approvals) to auto-allow safe reads and drafts while keeping sends manual.
+  </Step>
+  <Step title="Route results to the right channel">
+    Decide where briefings, drafts, and approval prompts land — see [Channels](/product/channels). Approvals can be answered from the web app, Slack, or Telegram.
+  </Step>
+</Steps>

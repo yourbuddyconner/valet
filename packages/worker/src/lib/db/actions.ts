@@ -1,9 +1,54 @@
-import { eq, and, or, isNull, desc, sql } from 'drizzle-orm';
+import { eq, and, or, isNull, gt, desc, sql, inArray } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
-import { actionPolicies, actionInvocations, userActionPolicyOverrides } from '../schema/index.js';
+import {
+  actionPolicies,
+  actionInvocations,
+  runtimeGrants,
+  sessions,
+  workflowSpawnedSessions,
+} from '../schema/index.js';
 import type { ActionMode } from '@valet/shared';
+import { evaluateMatchers, parseStoredMatchers } from '../action-policy-matchers.js';
 
-// ─── System Defaults ─────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+export type ActionPolicyManagedBy = 'admin' | 'user' | 'system';
+export type ActionPolicyPrincipalType = 'org' | 'user';
+export type ActionPolicySubjectType =
+  | 'tool_action'
+  | 'workflow_node_action'
+  | 'workflow_node'
+  | 'session_tool';
+export type ActionPolicyOrigin =
+  | 'settings'
+  | 'approval_prompt'
+  | 'workflow_editor'
+  | 'admin'
+  | 'migration';
+export type UserGrantBehavior = 'allowed' | 'blocked';
+
+export type PolicyScope = 'action' | 'service' | 'risk_level' | 'none';
+export type PolicySource = 'system_default' | 'admin_policy' | 'user_policy' | 'runtime_grant';
+
+export type ActionPolicyRow = typeof actionPolicies.$inferSelect;
+export type RuntimeGrantRow = typeof runtimeGrants.$inferSelect;
+export type ActionInvocationRow = typeof actionInvocations.$inferSelect;
+
+export interface EffectivePolicyResult {
+  mode: ActionMode;
+  outcome: 'allowed' | 'pending_approval' | 'denied';
+  riskLevel: string;
+  baseMode: ActionMode;
+  baseSource: 'admin_policy' | 'system_default';
+  /** action_policies row that produced the decision (admin policy or durable user grant). */
+  matchedPolicyId: string | null;
+  /** runtime_grants row that auto-approved, when applicable. */
+  matchedGrantId: string | null;
+  source: PolicySource;
+  scope: PolicyScope;
+}
+
+// ─── Constants ───────────────────────────────────────────────────────────────
 
 const SYSTEM_DEFAULTS: Record<string, ActionMode> = {
   low: 'allow',
@@ -12,23 +57,14 @@ const SYSTEM_DEFAULTS: Record<string, ActionMode> = {
   critical: 'deny',
 };
 
-export type ActionPolicyLifetime = 'persistent' | 'session' | 'timed';
-export type ActionPolicySource = 'settings' | 'approval_prompt';
-export type EffectivePolicySource = 'system_default' | 'org_policy' | 'user_override' | 'session_override';
-export type PolicyScope = 'action' | 'service' | 'risk_level' | 'none';
-export type ActionPolicyOverrideRow = typeof userActionPolicyOverrides.$inferSelect;
+/**
+ * Cap depth of the parent-session walk used during runtime-grant resolution.
+ * Guards against pathological depth and a corrupted `parent_session_id` cycle.
+ */
+const LINEAGE_DEPTH_CAP = 16;
 
-export interface EffectivePolicyResult {
-  mode: ActionMode;
-  outcome: 'allowed' | 'pending_approval' | 'denied';
-  riskLevel: string;
-  baseMode: ActionMode;
-  baseSource: 'org_policy' | 'system_default';
-  orgPolicyId: string | null;
-  userOverrideId: string | null;
-  source: EffectivePolicySource;
-  lifetime: ActionPolicyLifetime | null;
-  scope: PolicyScope;
+function systemDefaultForRisk(risk: string): ActionMode {
+  return SYSTEM_DEFAULTS[risk] ?? 'require_approval';
 }
 
 function modeToOutcome(mode: ActionMode): EffectivePolicyResult['outcome'] {
@@ -37,71 +73,157 @@ function modeToOutcome(mode: ActionMode): EffectivePolicyResult['outcome'] {
   return 'pending_approval';
 }
 
-function systemDefaultForRisk(riskLevel: string): ActionMode {
-  return SYSTEM_DEFAULTS[riskLevel] || 'require_approval';
+function nowIso(): string {
+  return new Date().toISOString();
 }
 
-function timestampMs(value: string | null): number {
-  if (!value) return 0;
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
-    ? `${value.replace(' ', 'T')}Z`
-    : value;
-  return new Date(normalized).getTime();
-}
+// ─── Action policies — queries ───────────────────────────────────────────────
 
-// ─── Policies ────────────────────────────────────────────────────────────────
-
+/**
+ * Lists active admin/org policies for the admin settings UI.
+ *
+ * User durable grants and runtime grants are listed separately.
+ */
 export async function listActionPolicies(db: AppDb) {
   return db
     .select()
     .from(actionPolicies)
+    .where(
+      and(
+        eq(actionPolicies.managedBy, 'admin'),
+        isNull(actionPolicies.revokedAt),
+      ),
+    )
     .orderBy(actionPolicies.createdAt)
     .all();
 }
 
+/**
+ * Lists active durable user grants for a specific user.
+ * Used by the user-facing override/grants settings UI.
+ */
+export async function listUserDurableActionPolicies(
+  db: AppDb,
+  userId: string,
+  opts?: { orgId?: string },
+) {
+  const now = nowIso();
+  const orgId = opts?.orgId ?? 'default';
+  return db
+    .select()
+    .from(actionPolicies)
+    .where(
+      and(
+        eq(actionPolicies.orgId, orgId),
+        eq(actionPolicies.managedBy, 'user'),
+        eq(actionPolicies.principalType, 'user'),
+        eq(actionPolicies.principalId, userId),
+        isNull(actionPolicies.revokedAt),
+        or(isNull(actionPolicies.expiresAt), gt(actionPolicies.expiresAt, now)),
+      ),
+    )
+    .orderBy(desc(actionPolicies.updatedAt))
+    .all();
+}
+
+export async function getActionPolicy(db: AppDb, id: string) {
+  return db
+    .select()
+    .from(actionPolicies)
+    .where(eq(actionPolicies.id, id))
+    .get();
+}
+
+// ─── Action policies — upsert / delete ───────────────────────────────────────
+
+export interface UpsertActionPolicyInput {
+  id: string;
+  service?: string | null;
+  actionId?: string | null;
+  riskLevel?: string | null;
+  mode: ActionMode;
+  createdBy?: string | null;
+  // New ownership / target / matcher fields. All have safe defaults so legacy
+  // admin-route callers continue to work without changes.
+  orgId?: string;
+  managedBy?: ActionPolicyManagedBy;
+  principalType?: ActionPolicyPrincipalType;
+  principalId?: string;
+  subjectType?: ActionPolicySubjectType;
+  subjectLabel?: string | null;
+  workflowId?: string | null;
+  workflowVersionId?: string | null;
+  nodeId?: string | null;
+  paramMatchers?: unknown[];
+  matcherSummary?: string | null;
+  /** Context conditional: 'any' (default), 'workflow', or 'session'.
+   *  Filters the resolver candidate set by where the invocation lives. */
+  appliesIn?: 'any' | 'workflow' | 'session';
+  userGrantBehavior?: UserGrantBehavior;
+  origin?: ActionPolicyOrigin;
+  sourceApprovalId?: string | null;
+  expiresAt?: string | null;
+}
+
+/**
+ * Idempotent upsert for `action_policies`. Reuses an existing row's id when
+ * one already matches the scope+target+matcher fingerprint, so the row's
+ * stable identity survives repeated writes from the same logical source.
+ */
 export async function upsertActionPolicy(
   db: AppDb,
-  data: {
-    id: string;
-    service?: string | null;
-    actionId?: string | null;
-    riskLevel?: string | null;
-    mode: ActionMode;
-    createdBy: string;
-  },
-) {
-  const now = new Date().toISOString();
+  data: UpsertActionPolicyInput,
+): Promise<string> {
+  const now = nowIso();
   const svc = data.service ?? null;
   const act = data.actionId ?? null;
   const risk = data.riskLevel ?? null;
 
-  // Check for an existing policy with the same scope to avoid partial-index conflicts.
-  // The partial unique indexes enforce uniqueness on (service, action_id), (service), and (risk_level),
-  // but onConflictDoUpdate only targets the PK. Find and reuse the existing ID if a scope match exists.
-  let existingId: string | null = null;
+  const orgId = data.orgId ?? 'default';
+  const managedBy: ActionPolicyManagedBy = data.managedBy ?? 'admin';
+  const principalType: ActionPolicyPrincipalType =
+    data.principalType ?? (managedBy === 'user' ? 'user' : 'org');
+  const principalId =
+    data.principalId ?? (principalType === 'org' ? orgId : 'default');
+  const subjectType: ActionPolicySubjectType = data.subjectType ?? 'tool_action';
+  const subjectLabel = data.subjectLabel ?? null;
+  const workflowId = data.workflowId ?? null;
+  const workflowVersionId = data.workflowVersionId ?? null;
+  const nodeId = data.nodeId ?? null;
+  const paramMatchersJson = JSON.stringify(data.paramMatchers ?? []);
+  const matcherSummary = data.matcherSummary ?? null;
+  const userGrantBehavior: UserGrantBehavior = data.userGrantBehavior ?? 'allowed';
+  const origin: ActionPolicyOrigin = data.origin ?? 'settings';
+  const sourceApprovalId = data.sourceApprovalId ?? null;
+  const expiresAt = data.expiresAt ?? null;
 
-  if (svc && act) {
-    // Action-level scope
-    const existing = await db.select({ id: actionPolicies.id }).from(actionPolicies)
-      .where(and(eq(actionPolicies.service, svc), eq(actionPolicies.actionId, act)))
-      .get();
-    existingId = existing?.id ?? null;
-  } else if (svc && !act && !risk) {
-    // Service-level scope
-    const existing = await db.select({ id: actionPolicies.id }).from(actionPolicies)
-      .where(and(eq(actionPolicies.service, svc), isNull(actionPolicies.actionId), isNull(actionPolicies.riskLevel)))
-      .get();
-    existingId = existing?.id ?? null;
-  } else if (!svc && !act && risk) {
-    // Risk-level scope
-    const existing = await db.select({ id: actionPolicies.id }).from(actionPolicies)
-      .where(and(isNull(actionPolicies.service), isNull(actionPolicies.actionId), eq(actionPolicies.riskLevel, risk)))
-      .get();
-    existingId = existing?.id ?? null;
-  }
+  const existing = await db
+    .select({ id: actionPolicies.id })
+    .from(actionPolicies)
+    .where(
+      and(
+        eq(actionPolicies.orgId, orgId),
+        eq(actionPolicies.managedBy, managedBy),
+        eq(actionPolicies.principalType, principalType),
+        eq(actionPolicies.principalId, principalId),
+        eq(actionPolicies.subjectType, subjectType),
+        svc === null ? isNull(actionPolicies.service) : eq(actionPolicies.service, svc),
+        act === null ? isNull(actionPolicies.actionId) : eq(actionPolicies.actionId, act),
+        risk === null ? isNull(actionPolicies.riskLevel) : eq(actionPolicies.riskLevel, risk),
+        workflowId === null
+          ? isNull(actionPolicies.workflowId)
+          : eq(actionPolicies.workflowId, workflowId),
+        workflowVersionId === null
+          ? isNull(actionPolicies.workflowVersionId)
+          : eq(actionPolicies.workflowVersionId, workflowVersionId),
+        nodeId === null ? isNull(actionPolicies.nodeId) : eq(actionPolicies.nodeId, nodeId),
+        eq(actionPolicies.paramMatchers, paramMatchersJson),
+        isNull(actionPolicies.revokedAt),
+      ),
+    )
+    .get();
 
-  // Use the existing policy's ID if one was found for the same scope, otherwise use the provided ID
-  const effectiveId = existingId ?? data.id;
+  const effectiveId = existing?.id ?? data.id;
 
   await db
     .insert(actionPolicies)
@@ -111,208 +233,43 @@ export async function upsertActionPolicy(
       actionId: act,
       riskLevel: risk,
       mode: data.mode,
-      createdBy: data.createdBy,
+      createdBy: data.createdBy ?? null,
       createdAt: now,
       updatedAt: now,
+      orgId,
+      managedBy,
+      principalType,
+      principalId,
+      subjectType,
+      subjectLabel,
+      workflowId,
+      workflowVersionId,
+      nodeId,
+      paramMatchers: paramMatchersJson,
+      matcherSummary,
+      appliesIn: data.appliesIn ?? 'any',
+      userGrantBehavior,
+      origin,
+      sourceApprovalId,
+      expiresAt,
     })
     .onConflictDoUpdate({
       target: actionPolicies.id,
       set: {
-        service: svc,
-        actionId: act,
-        riskLevel: risk,
+        // Target identity fields are updatable: a user editing an
+        // existing rule via /api/action-policy-overrides PUT expects
+        // the new (service, actionId, riskLevel) to overwrite, not
+        // silently fall back to the row's previous values.
+        service: data.service ?? null,
+        actionId: data.actionId ?? null,
+        riskLevel: data.riskLevel ?? null,
         mode: data.mode,
-        updatedAt: now,
-      },
-    });
-}
-
-export async function deleteActionPolicy(db: AppDb, id: string) {
-  await db.delete(actionPolicies).where(eq(actionPolicies.id, id));
-}
-
-export async function resolveOrgPolicyMatch(
-  db: AppDb,
-  service: string,
-  actionId: string,
-  riskLevel: string,
-): Promise<{ mode: ActionMode; policyId: string; scope: PolicyScope } | null> {
-  const rows = await db
-    .select()
-    .from(actionPolicies)
-    .where(
-      or(
-        and(eq(actionPolicies.service, service), eq(actionPolicies.actionId, actionId)),
-        and(eq(actionPolicies.service, service), isNull(actionPolicies.actionId), isNull(actionPolicies.riskLevel)),
-        and(isNull(actionPolicies.service), isNull(actionPolicies.actionId), eq(actionPolicies.riskLevel, riskLevel)),
-      ),
-    )
-    .all();
-
-  type PolicyRow = typeof rows[number];
-
-  const actionMatch = rows.find((r: PolicyRow) => r.service === service && r.actionId === actionId);
-  if (actionMatch) {
-    return { mode: actionMatch.mode as ActionMode, policyId: actionMatch.id, scope: 'action' };
-  }
-
-  const serviceMatch = rows.find((r: PolicyRow) => r.service === service && !r.actionId && !r.riskLevel);
-  if (serviceMatch) {
-    return { mode: serviceMatch.mode as ActionMode, policyId: serviceMatch.id, scope: 'service' };
-  }
-
-  const riskMatch = rows.find((r: PolicyRow) => !r.service && !r.actionId && r.riskLevel === riskLevel);
-  if (riskMatch) {
-    return { mode: riskMatch.mode as ActionMode, policyId: riskMatch.id, scope: 'risk_level' };
-  }
-
-  return null;
-}
-
-/**
- * Cascade resolution: fetch all potentially matching policies, then pick the
- * most specific match.
- *
- * Priority order:
- *   1. Exact action match (service + actionId)
- *   2. Service-level match (service only)
- *   3. Risk-level match
- *   4. System default based on risk level
- */
-export async function resolvePolicy(
-  db: AppDb,
-  service: string,
-  actionId: string,
-  riskLevel: string,
-): Promise<{ mode: ActionMode; policyId: string | null }> {
-  const explicit = await resolveOrgPolicyMatch(db, service, actionId, riskLevel);
-  if (explicit) {
-    return { mode: explicit.mode, policyId: explicit.policyId };
-  }
-
-  return { mode: systemDefaultForRisk(riskLevel), policyId: null };
-}
-
-// ─── User Overrides ─────────────────────────────────────────────────────────
-
-export async function listUserActionPolicyOverrides(db: AppDb, userId: string) {
-  return db
-    .select()
-    .from(userActionPolicyOverrides)
-    .where(eq(userActionPolicyOverrides.userId, userId))
-    .orderBy(desc(userActionPolicyOverrides.updatedAt))
-    .all();
-}
-
-export async function getUserActionPolicyOverride(db: AppDb, id: string) {
-  return db
-    .select()
-    .from(userActionPolicyOverrides)
-    .where(eq(userActionPolicyOverrides.id, id))
-    .get();
-}
-
-export async function upsertUserActionPolicyOverride(
-  db: AppDb,
-  data: {
-    id: string;
-    userId: string;
-    service?: string | null;
-    actionId?: string | null;
-    riskLevel?: string | null;
-    mode: ActionMode;
-    lifetime?: ActionPolicyLifetime;
-    sessionId?: string | null;
-    expiresAt?: string | null;
-    source?: ActionPolicySource;
-    sourceInvocationId?: string | null;
-  },
-): Promise<string> {
-  const now = new Date().toISOString();
-  const svc = data.service ?? null;
-  const act = data.actionId ?? null;
-  const risk = data.riskLevel ?? null;
-  const lifetime = data.lifetime ?? 'persistent';
-  const sessionId = lifetime === 'session' ? data.sessionId ?? null : null;
-  const expiresAt = data.expiresAt ?? null;
-  const source = data.source ?? 'settings';
-  const sourceInvocationId = data.sourceInvocationId ?? null;
-
-  const idOwner = await db
-    .select({ userId: userActionPolicyOverrides.userId })
-    .from(userActionPolicyOverrides)
-    .where(eq(userActionPolicyOverrides.id, data.id))
-    .get();
-  if (idOwner && idOwner.userId !== data.userId) {
-    throw new Error('Action policy override not found');
-  }
-
-  if (lifetime === 'session' && !sessionId) {
-    throw new Error('sessionId is required for session-scoped action policy overrides');
-  }
-
-  let existingId: string | null = null;
-
-  function buildScopeConditions() {
-    const base = [
-      eq(userActionPolicyOverrides.userId, data.userId),
-      eq(userActionPolicyOverrides.lifetime, lifetime),
-    ];
-    if (lifetime === 'session') {
-      base.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
-    }
-
-    if (svc && act) {
-      return [...base, eq(userActionPolicyOverrides.service, svc), eq(userActionPolicyOverrides.actionId, act)];
-    } else if (svc && !act && !risk) {
-      return [...base, eq(userActionPolicyOverrides.service, svc), isNull(userActionPolicyOverrides.actionId), isNull(userActionPolicyOverrides.riskLevel)];
-    } else if (!svc && !act && risk) {
-      return [...base, isNull(userActionPolicyOverrides.service), isNull(userActionPolicyOverrides.actionId), eq(userActionPolicyOverrides.riskLevel, risk)];
-    }
-    return null;
-  }
-
-  const scopeConditions = buildScopeConditions();
-  if (scopeConditions) {
-    const existing = await db
-      .select({ id: userActionPolicyOverrides.id })
-      .from(userActionPolicyOverrides)
-      .where(and(...scopeConditions))
-      .get();
-    existingId = existing?.id ?? null;
-  }
-
-  const effectiveId = existingId ?? data.id;
-
-  await db
-    .insert(userActionPolicyOverrides)
-    .values({
-      id: effectiveId,
-      userId: data.userId,
-      service: svc,
-      actionId: act,
-      riskLevel: risk,
-      mode: data.mode,
-      lifetime,
-      sessionId,
-      expiresAt,
-      source,
-      sourceInvocationId,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: userActionPolicyOverrides.id,
-      set: {
-        service: svc,
-        actionId: act,
-        riskLevel: risk,
-        mode: data.mode,
-        lifetime,
-        sessionId,
+        paramMatchers: paramMatchersJson,
+        matcherSummary,
+        appliesIn: data.appliesIn ?? 'any',
+        userGrantBehavior,
+        sourceApprovalId,
         expiresAt,
-        source,
-        sourceInvocationId,
         updatedAt: now,
       },
     });
@@ -320,147 +277,611 @@ export async function upsertUserActionPolicyOverride(
   return effectiveId;
 }
 
-export async function deleteUserActionPolicyOverride(db: AppDb, id: string, userId: string) {
-  await db
-    .delete(userActionPolicyOverrides)
-    .where(and(eq(userActionPolicyOverrides.id, id), eq(userActionPolicyOverrides.userId, userId)));
+/** Hard-deletes a policy. Use {@link revokeActionPolicy} when audit history matters. */
+export async function deleteActionPolicy(db: AppDb, id: string) {
+  await db.delete(actionPolicies).where(eq(actionPolicies.id, id));
 }
 
-export async function deleteSessionActionPolicyOverrides(
+/** Soft-deletes a policy (sets `revoked_at`). Audit references in `action_invocations` survive. */
+export async function revokeActionPolicy(db: AppDb, id: string) {
+  await db
+    .update(actionPolicies)
+    .set({ revokedAt: nowIso(), updatedAt: nowIso() })
+    .where(eq(actionPolicies.id, id));
+}
+
+// ─── Runtime grants ──────────────────────────────────────────────────────────
+
+export interface UpsertRuntimeGrantInput {
+  id: string;
+  userId: string;
+  orgId?: string;
+  sessionId?: string | null;
+  workflowExecutionId?: string | null;
+  subjectType: ActionPolicySubjectType;
+  service?: string | null;
+  actionId?: string | null;
+  riskLevel?: string | null;
+  workflowId?: string | null;
+  nodeId?: string | null;
+  paramMatchers?: unknown[];
+  /**
+   * Deterministic idempotency key derived from scope id + subject + node id +
+   * matcher fingerprint. Two approvals of the same logical request collapse
+   * to one grant.
+   */
+  policyKey: string;
+  matcherSummary?: string | null;
+}
+
+/**
+ * Idempotent upsert for a `runtime_grants` row, keyed on the per-scope unique
+ * index `(scope_id, subject_type, policy_key)`.
+ */
+export async function upsertRuntimeGrant(
+  db: AppDb,
+  data: UpsertRuntimeGrantInput,
+): Promise<string> {
+  const now = nowIso();
+  const orgId = data.orgId ?? 'default';
+  const sessionId = data.sessionId ?? null;
+  const workflowExecutionId = data.workflowExecutionId ?? null;
+  if ((sessionId === null) === (workflowExecutionId === null)) {
+    throw new Error('runtime_grants requires exactly one of sessionId or workflowExecutionId');
+  }
+
+  const paramMatchersJson = JSON.stringify(data.paramMatchers ?? []);
+
+  const scopeMatch = sessionId !== null
+    ? and(
+        eq(runtimeGrants.sessionId, sessionId),
+        eq(runtimeGrants.subjectType, data.subjectType),
+        eq(runtimeGrants.policyKey, data.policyKey),
+        isNull(runtimeGrants.revokedAt),
+      )
+    : and(
+        eq(runtimeGrants.workflowExecutionId, workflowExecutionId as string),
+        eq(runtimeGrants.subjectType, data.subjectType),
+        eq(runtimeGrants.policyKey, data.policyKey),
+        isNull(runtimeGrants.revokedAt),
+      );
+
+  const existing = await db
+    .select({ id: runtimeGrants.id })
+    .from(runtimeGrants)
+    .where(scopeMatch)
+    .get();
+
+  const effectiveId = existing?.id ?? data.id;
+
+  await db
+    .insert(runtimeGrants)
+    .values({
+      id: effectiveId,
+      orgId,
+      userId: data.userId,
+      sessionId,
+      workflowExecutionId,
+      subjectType: data.subjectType,
+      service: data.service ?? null,
+      actionId: data.actionId ?? null,
+      riskLevel: data.riskLevel ?? null,
+      workflowId: data.workflowId ?? null,
+      nodeId: data.nodeId ?? null,
+      paramMatchers: paramMatchersJson,
+      policyKey: data.policyKey,
+      matcherSummary: data.matcherSummary ?? null,
+      createdAt: now,
+    })
+    .onConflictDoUpdate({
+      target: runtimeGrants.id,
+      set: {
+        paramMatchers: paramMatchersJson,
+        matcherSummary: data.matcherSummary ?? null,
+      },
+    });
+
+  return effectiveId;
+}
+
+export async function getRuntimeGrant(db: AppDb, id: string) {
+  return db.select().from(runtimeGrants).where(eq(runtimeGrants.id, id)).get();
+}
+
+/** Soft-deletes a runtime grant. Used by user-facing revoke flows. */
+export async function revokeRuntimeGrant(db: AppDb, id: string, userId: string) {
+  await db
+    .update(runtimeGrants)
+    .set({ revokedAt: nowIso() })
+    .where(and(eq(runtimeGrants.id, id), eq(runtimeGrants.userId, userId)));
+}
+
+/** Hard-deletes a runtime grant. Used by terminal-state cleanup. */
+export async function deleteRuntimeGrant(db: AppDb, id: string) {
+  await db.delete(runtimeGrants).where(eq(runtimeGrants.id, id));
+}
+
+/**
+ * Lists active runtime grants tied to sessions / executions the user owns.
+ * Used by the user-facing settings UI to show "active grants for this session".
+ *
+ * Access scoping (only grants on sessions/executions the caller can read)
+ * happens at the route layer.
+ */
+export async function listActiveRuntimeGrantsForUser(db: AppDb, userId: string) {
+  return db
+    .select()
+    .from(runtimeGrants)
+    .where(and(eq(runtimeGrants.userId, userId), isNull(runtimeGrants.revokedAt)))
+    .orderBy(desc(runtimeGrants.createdAt))
+    .all();
+}
+
+/**
+ * Cleanup hook called on a parent context's terminal-state transition.
+ * Replaces the legacy `deleteSessionActionPolicyOverrides`; generalizes to
+ * workflow-execution scope as well.
+ */
+export async function deleteRuntimeGrantsByScope(
+  db: AppDb,
+  scope: { sessionId?: string; workflowExecutionId?: string },
+): Promise<void> {
+  if (scope.sessionId) {
+    await db
+      .delete(runtimeGrants)
+      .where(eq(runtimeGrants.sessionId, scope.sessionId));
+  }
+  if (scope.workflowExecutionId) {
+    await db
+      .delete(runtimeGrants)
+      .where(eq(runtimeGrants.workflowExecutionId, scope.workflowExecutionId));
+  }
+}
+
+// ─── Session lineage walk ────────────────────────────────────────────────────
+
+export interface SessionLineage {
+  /** The starting session plus its `parent_session_id` ancestor chain, in order. */
+  sessionIds: string[];
+  /** Workflow executions recovered from `workflow_spawned_sessions` for any lineage member. */
+  executionIds: string[];
+}
+
+/**
+ * Walks `parent_session_id` from the starting session, capped at
+ * {@link LINEAGE_DEPTH_CAP} and guarded against cycles. For each session in
+ * the resulting chain, looks up `workflow_spawned_sessions` to recover any
+ * parent workflow execution — so a workflow-spawned session and its own
+ * spawned children both surface the same execution scope.
+ */
+export async function expandSessionLineage(
   db: AppDb,
   sessionId: string,
-): Promise<void> {
-  await db
-    .delete(userActionPolicyOverrides)
-    .where(and(
-      eq(userActionPolicyOverrides.lifetime, 'session'),
-      eq(userActionPolicyOverrides.sessionId, sessionId),
-    ));
+): Promise<SessionLineage> {
+  const sessionIds: string[] = [];
+  const seen = new Set<string>();
+  let current: string | null = sessionId;
+
+  while (current && !seen.has(current) && sessionIds.length < LINEAGE_DEPTH_CAP) {
+    seen.add(current);
+    sessionIds.push(current);
+    const row = await db
+      .select({ parentSessionId: sessions.parentSessionId })
+      .from(sessions)
+      .where(eq(sessions.id, current))
+      .get();
+    current = row?.parentSessionId ?? null;
+  }
+
+  let executionIds: string[] = [];
+  if (sessionIds.length > 0) {
+    const spawnedRows: Array<{ executionId: string }> = await db
+      .select({ executionId: workflowSpawnedSessions.executionId })
+      .from(workflowSpawnedSessions)
+      .where(inArray(workflowSpawnedSessions.sessionId, sessionIds))
+      .all();
+    executionIds = [...new Set(spawnedRows.map((r) => r.executionId))];
+  }
+
+  return { sessionIds, executionIds };
 }
 
-export async function resolveUserActionPolicyOverride(
+// ─── Most-specific match helper ──────────────────────────────────────────────
+
+type TargetedRow = {
+  id: string;
+  service: string | null;
+  actionId: string | null;
+  riskLevel: string | null;
+};
+
+/**
+ * Phase 2 filter: drop a policy whose applies_in disagrees with the
+ * invocation's context, or whose param_matchers don't all evaluate true
+ * against the invocation's actual params. Applied uniformly to admin
+ * and user candidate sets before pickMostSpecific.
+ */
+function policyMatchesContextAndParams(
+  row: ActionPolicyRow,
+  context: 'workflow' | 'session',
+  params: unknown,
+): boolean {
+  const appliesIn = row.appliesIn ?? 'any';
+  if (appliesIn !== 'any' && appliesIn !== context) return false;
+  const matchers = parseStoredMatchers(row.paramMatchers);
+  return evaluateMatchers(matchers, params);
+}
+
+function pickMostSpecific<T extends TargetedRow>(
+  rows: readonly T[],
+  service: string,
+  actionId: string,
+  riskLevel: string,
+): { row: T; scope: Exclude<PolicyScope, 'none'> } | null {
+  const actionMatch = rows.find((r) => r.service === service && r.actionId === actionId);
+  if (actionMatch) return { row: actionMatch, scope: 'action' };
+  const serviceMatch = rows.find((r) => r.service === service && !r.actionId && !r.riskLevel);
+  if (serviceMatch) return { row: serviceMatch, scope: 'service' };
+  const riskMatch = rows.find((r) => !r.service && !r.actionId && r.riskLevel === riskLevel);
+  if (riskMatch) return { row: riskMatch, scope: 'risk_level' };
+  return null;
+}
+
+// ─── Resolver ────────────────────────────────────────────────────────────────
+
+export interface ResolveActionPolicyInput {
+  orgId?: string;
+  userId: string;
+  /** Resolver expands this to the lineage (self + parent chain) for grant matching. */
+  sessionId?: string | null;
+  workflowExecutionId?: string | null;
+  service: string;
+  actionId: string;
+  riskLevel: string;
+  /** When resolving for a workflow node, the node id of the current invocation.
+   *  Runtime grants with their own nodeId only match invocations from that node. */
+  workflowId?: string | null;
+  nodeId?: string | null;
+  /** The actual params the action is being invoked with. Evaluated
+   *  against policy/grant paramMatchers — a candidate whose matchers
+   *  don't all pass is dropped from the candidate set. Pass an empty
+   *  object when there's nothing meaningful to match against; matchers
+   *  with `op='exists'` etc. still evaluate against `undefined` paths
+   *  correctly. */
+  params?: unknown;
+}
+
+/**
+ * Unified resolver. Replaces the previous split between admin policy and
+ * UAPO. Flow:
+ *
+ *   1. Admin deny → deny.
+ *   2. Pick base admin/system decision by specificity.
+ *   3. Base allow → allow.
+ *   4. Base require_approval + userGrantBehavior='blocked' → require approval.
+ *   5. Check runtime grants over the session lineage and recovered executions.
+ *   6. Check durable user grants.
+ *   7. Otherwise → require approval.
+ */
+export async function resolveEffectiveActionPolicy(
   db: AppDb,
-  input: { userId: string; sessionId?: string; service: string; actionId: string; riskLevel: string },
-): Promise<{ override: ActionPolicyOverrideRow; scope: PolicyScope } | null> {
-  const rows = await db
+  input: ResolveActionPolicyInput,
+): Promise<EffectivePolicyResult> {
+  const orgId = input.orgId ?? 'default';
+  const { service, actionId, riskLevel } = input;
+
+  // 1-2. Admin candidate set, filtered by org + subject + target match.
+  // Defensive expires_at check: admin rows don't have an expiry UX today,
+  // but the column exists and a CLI / direct DB write could set one.
+  // Symmetric with the user policy lookup further down.
+  const nowForAdmin = nowIso();
+  const adminRows: ActionPolicyRow[] = await db
     .select()
-    .from(userActionPolicyOverrides)
+    .from(actionPolicies)
     .where(
       and(
-        eq(userActionPolicyOverrides.userId, input.userId),
+        eq(actionPolicies.orgId, orgId),
+        eq(actionPolicies.managedBy, 'admin'),
+        eq(actionPolicies.subjectType, 'tool_action'),
+        isNull(actionPolicies.revokedAt),
+        or(isNull(actionPolicies.expiresAt), gt(actionPolicies.expiresAt, nowForAdmin)),
         or(
-          and(eq(userActionPolicyOverrides.service, input.service), eq(userActionPolicyOverrides.actionId, input.actionId)),
-          and(eq(userActionPolicyOverrides.service, input.service), isNull(userActionPolicyOverrides.actionId), isNull(userActionPolicyOverrides.riskLevel)),
-          and(isNull(userActionPolicyOverrides.service), isNull(userActionPolicyOverrides.actionId), eq(userActionPolicyOverrides.riskLevel, input.riskLevel)),
+          and(eq(actionPolicies.service, service), eq(actionPolicies.actionId, actionId)),
+          and(
+            eq(actionPolicies.service, service),
+            isNull(actionPolicies.actionId),
+            isNull(actionPolicies.riskLevel),
+          ),
+          and(
+            isNull(actionPolicies.service),
+            isNull(actionPolicies.actionId),
+            eq(actionPolicies.riskLevel, riskLevel),
+          ),
         ),
       ),
     )
     .all();
 
-  type OverrideCandidate = { override: ActionPolicyOverrideRow; scope: Exclude<PolicyScope, 'none'> };
-  const typedRows = rows as ActionPolicyOverrideRow[];
-  const candidates = typedRows
-    .map((override: ActionPolicyOverrideRow): OverrideCandidate | null => {
-      let scope: OverrideCandidate['scope'] | null = null;
-      if (override.service === input.service && override.actionId === input.actionId) {
-        scope = 'action';
-      } else if (override.service === input.service && !override.actionId && !override.riskLevel) {
-        scope = 'service';
-      } else if (!override.service && !override.actionId && override.riskLevel === input.riskLevel) {
-        scope = 'risk_level';
-      }
+  // Phase 2: context + matcher filtering. A policy with applies_in='workflow'
+  // is dropped when the invocation came from a session (and vice versa);
+  // a policy whose param_matchers don't all evaluate true against the
+  // invocation's actual params is dropped too. Empty matchers means
+  // "matches any params" — the Phase-1 behavior is the default.
+  const invocationContext: 'workflow' | 'session' = input.workflowExecutionId
+    ? 'workflow'
+    : 'session';
+  const filteredAdminRows = adminRows.filter((r) =>
+    policyMatchesContextAndParams(r, invocationContext, input.params),
+  );
 
-      if (!scope) return null;
-
-      // Session overrides only apply to the matching session
-      if (override.lifetime === 'session') {
-        if (!input.sessionId || override.sessionId !== input.sessionId) return null;
-      }
-
-      // Timed overrides use expiresAt as "valid until" — check at resolution time
-      if (override.lifetime === 'timed') {
-        if (!override.expiresAt || override.expiresAt <= new Date().toISOString()) return null;
-      }
-
-      return { override, scope };
-    })
-    .filter((candidate): candidate is OverrideCandidate => candidate !== null);
-
-  const scopeRank: Record<PolicyScope, number> = {
-    action: 3,
-    service: 2,
-    risk_level: 1,
-    none: 0,
-  };
-  const lifetimeRank = (lifetime: string) => lifetime === 'persistent' ? 0 : 1;
-
-  candidates.sort((a, b) => {
-    const scopeDelta = scopeRank[b.scope] - scopeRank[a.scope];
-    if (scopeDelta !== 0) return scopeDelta;
-
-    const lifetimeDelta = lifetimeRank(b.override.lifetime) - lifetimeRank(a.override.lifetime);
-    if (lifetimeDelta !== 0) return lifetimeDelta;
-
-    return timestampMs(b.override.updatedAt) - timestampMs(a.override.updatedAt);
-  });
-
-  return candidates[0] ?? null;
-}
-
-export async function resolveEffectiveActionPolicy(
-  db: AppDb,
-  input: { userId: string; sessionId: string; service: string; actionId: string; riskLevel: string },
-): Promise<EffectivePolicyResult> {
-  const orgPolicy = await resolveOrgPolicyMatch(db, input.service, input.actionId, input.riskLevel);
-
-  if (orgPolicy?.mode === 'deny') {
+  const adminDeny = pickMostSpecific(
+    filteredAdminRows.filter((r) => r.mode === 'deny'),
+    service,
+    actionId,
+    riskLevel,
+  );
+  if (adminDeny) {
     return {
       mode: 'deny',
       outcome: 'denied',
-      riskLevel: input.riskLevel,
+      riskLevel,
       baseMode: 'deny',
-      baseSource: 'org_policy',
-      orgPolicyId: orgPolicy.policyId,
-      userOverrideId: null,
-      source: 'org_policy',
-      lifetime: null,
-      scope: orgPolicy.scope,
+      baseSource: 'admin_policy',
+      matchedPolicyId: adminDeny.row.id,
+      matchedGrantId: null,
+      source: 'admin_policy',
+      scope: adminDeny.scope,
     };
   }
 
-  const baseMode = orgPolicy?.mode ?? systemDefaultForRisk(input.riskLevel);
-  const baseSource = orgPolicy ? 'org_policy' : 'system_default';
-  const userOverride = await resolveUserActionPolicyOverride(db, input);
+  const adminBase = pickMostSpecific(
+    filteredAdminRows.filter((r) => r.mode === 'allow' || r.mode === 'require_approval'),
+    service,
+    actionId,
+    riskLevel,
+  );
+  const baseMode: ActionMode = (adminBase?.row.mode as ActionMode) ?? systemDefaultForRisk(riskLevel);
+  const baseSource: 'admin_policy' | 'system_default' = adminBase ? 'admin_policy' : 'system_default';
+  const baseScope: PolicyScope = adminBase?.scope ?? 'none';
 
-  if (userOverride) {
-    const mode = userOverride.override.mode as ActionMode;
-    const lifetime = userOverride.override.lifetime as ActionPolicyLifetime;
+  // 3. Allow short-circuits.
+  if (baseMode === 'allow') {
     return {
-      mode,
-      outcome: modeToOutcome(mode),
-      riskLevel: input.riskLevel,
+      mode: 'allow',
+      outcome: 'allowed',
+      riskLevel,
       baseMode,
       baseSource,
-      orgPolicyId: orgPolicy?.policyId ?? null,
-      userOverrideId: userOverride.override.id,
-      source: lifetime === 'session' ? 'session_override' : 'user_override',
-      lifetime,
-      scope: userOverride.scope,
+      matchedPolicyId: adminBase?.row.id ?? null,
+      matchedGrantId: null,
+      source: baseSource,
+      scope: baseScope,
     };
   }
 
+  // (System-default deny — baseMode 'deny' from systemDefaultForRisk — falls
+  // through. Unlike admin deny, system-default deny is a conservative default
+  // that user grants and runtime grants are allowed to override; admin deny
+  // is already handled by step 2.)
+
+  // 4. Blocked require_approval — user grants cannot quiet this.
+  if (baseMode === 'require_approval' && adminBase?.row.userGrantBehavior === 'blocked') {
+    return {
+      mode: 'require_approval',
+      outcome: 'pending_approval',
+      riskLevel,
+      baseMode,
+      baseSource,
+      matchedPolicyId: adminBase.row.id,
+      matchedGrantId: null,
+      source: 'admin_policy',
+      scope: baseScope,
+    };
+  }
+
+  // 5. Runtime grants over the lineage.
+  if (input.sessionId || input.workflowExecutionId) {
+    const lineage = input.sessionId
+      ? await expandSessionLineage(db, input.sessionId)
+      : { sessionIds: [], executionIds: [] };
+    const executionIds = input.workflowExecutionId
+      ? [...new Set([input.workflowExecutionId, ...lineage.executionIds])]
+      : lineage.executionIds;
+
+    if (lineage.sessionIds.length > 0 || executionIds.length > 0) {
+      const scopeMatchers = [];
+      if (lineage.sessionIds.length > 0) {
+        scopeMatchers.push(inArray(runtimeGrants.sessionId, lineage.sessionIds));
+      }
+      if (executionIds.length > 0) {
+        scopeMatchers.push(inArray(runtimeGrants.workflowExecutionId, executionIds));
+      }
+
+      const grants: RuntimeGrantRow[] = await db
+        .select()
+        .from(runtimeGrants)
+        .where(
+          and(
+            isNull(runtimeGrants.revokedAt),
+            eq(runtimeGrants.subjectType, 'tool_action'),
+            or(...scopeMatchers),
+            or(
+              and(eq(runtimeGrants.service, service), eq(runtimeGrants.actionId, actionId)),
+              and(
+                eq(runtimeGrants.service, service),
+                isNull(runtimeGrants.actionId),
+                isNull(runtimeGrants.riskLevel),
+              ),
+              and(
+                isNull(runtimeGrants.service),
+                isNull(runtimeGrants.actionId),
+                eq(runtimeGrants.riskLevel, riskLevel),
+              ),
+            ),
+          ),
+        )
+        .all();
+
+      // nodeId-aware matching: when a runtime grant carries a nodeId, it
+      // only applies to invocations from that exact workflow node. Without
+      // this, a "Approve remaining rows" grant on a foreach body would
+      // silently auto-approve every other workflow approval node in the
+      // same execution (all of which invoke the same workflows.request_approval
+      // service+actionId). Grants without a nodeId apply broadly (e.g. "Approve
+      // for this run" covers all nodes in the execution).
+      const nodeFilteredGrants = grants.filter((g) => {
+        if (g.nodeId && (g.nodeId !== input.nodeId || (g.workflowId && g.workflowId !== input.workflowId))) {
+          return false;
+        }
+        // Phase 2: matcher evaluation against invocation params.
+        const matchers = parseStoredMatchers(g.paramMatchers);
+        return evaluateMatchers(matchers, input.params);
+      });
+      const grantMatch = pickMostSpecific(nodeFilteredGrants, service, actionId, riskLevel);
+      if (grantMatch) {
+        return {
+          mode: 'allow',
+          outcome: 'allowed',
+          riskLevel,
+          baseMode,
+          baseSource,
+          matchedPolicyId: adminBase?.row.id ?? null,
+          matchedGrantId: grantMatch.row.id,
+          source: 'runtime_grant',
+          scope: grantMatch.scope,
+        };
+      }
+    }
+  }
+
+  // 6. Durable user grants.
+  const now = nowIso();
+  const userRows: ActionPolicyRow[] = await db
+    .select()
+    .from(actionPolicies)
+    .where(
+      and(
+        eq(actionPolicies.orgId, orgId),
+        eq(actionPolicies.managedBy, 'user'),
+        eq(actionPolicies.principalType, 'user'),
+        eq(actionPolicies.principalId, input.userId),
+        eq(actionPolicies.subjectType, 'tool_action'),
+        isNull(actionPolicies.revokedAt),
+        or(isNull(actionPolicies.expiresAt), gt(actionPolicies.expiresAt, now)),
+        or(
+          and(eq(actionPolicies.service, service), eq(actionPolicies.actionId, actionId)),
+          and(
+            eq(actionPolicies.service, service),
+            isNull(actionPolicies.actionId),
+            isNull(actionPolicies.riskLevel),
+          ),
+          and(
+            isNull(actionPolicies.service),
+            isNull(actionPolicies.actionId),
+            eq(actionPolicies.riskLevel, riskLevel),
+          ),
+        ),
+      ),
+    )
+    .all();
+
+  // Phase 2: same context + matcher filter applied to user rows.
+  const filteredUserRows = userRows.filter((r) =>
+    policyMatchesContextAndParams(r, invocationContext, input.params),
+  );
+
+  const userMatch = pickMostSpecific(
+    filteredUserRows.filter((r) => r.mode === 'allow'),
+    service,
+    actionId,
+    riskLevel,
+  );
+  if (userMatch) {
+    return {
+      mode: 'allow',
+      outcome: 'allowed',
+      riskLevel,
+      baseMode,
+      baseSource,
+      matchedPolicyId: userMatch.row.id,
+      matchedGrantId: null,
+      source: 'user_policy',
+      scope: userMatch.scope,
+    };
+  }
+
+  // 7. Nothing matched. Fall back to baseMode — `require_approval` becomes
+  // pending; system-default `deny` becomes denied (no grant flipped it).
   return {
     mode: baseMode,
     outcome: modeToOutcome(baseMode),
-    riskLevel: input.riskLevel,
+    riskLevel,
     baseMode,
     baseSource,
-    orgPolicyId: orgPolicy?.policyId ?? null,
-    userOverrideId: null,
+    matchedPolicyId: adminBase?.row.id ?? null,
+    matchedGrantId: null,
     source: baseSource,
-    lifetime: null,
-    scope: orgPolicy?.scope ?? 'none',
+    scope: baseScope,
   };
+}
+
+/**
+ * Admin-only resolver. Used by the override route to confirm that a user
+ * grant request doesn't cross an admin deny.
+ */
+export async function resolveAdminPolicyMatch(
+  db: AppDb,
+  service: string,
+  actionId: string,
+  riskLevel: string,
+  opts?: { orgId?: string },
+): Promise<{ mode: ActionMode; policyId: string; scope: PolicyScope } | null> {
+  const orgId = opts?.orgId ?? 'default';
+  const rows: ActionPolicyRow[] = await db
+    .select()
+    .from(actionPolicies)
+    .where(
+      and(
+        eq(actionPolicies.orgId, orgId),
+        eq(actionPolicies.managedBy, 'admin'),
+        eq(actionPolicies.subjectType, 'tool_action'),
+        isNull(actionPolicies.revokedAt),
+        or(
+          and(eq(actionPolicies.service, service), eq(actionPolicies.actionId, actionId)),
+          and(
+            eq(actionPolicies.service, service),
+            isNull(actionPolicies.actionId),
+            isNull(actionPolicies.riskLevel),
+          ),
+          and(
+            isNull(actionPolicies.service),
+            isNull(actionPolicies.actionId),
+            eq(actionPolicies.riskLevel, riskLevel),
+          ),
+        ),
+      ),
+    )
+    .all();
+
+  const match = pickMostSpecific(rows, service, actionId, riskLevel);
+  if (!match) return null;
+  return { mode: match.row.mode as ActionMode, policyId: match.row.id, scope: match.scope };
+}
+
+/**
+ * System default + admin policy mode lookup. Used where the caller wants
+ * just the mode (no grant check, no audit). Preserved as `resolvePolicy`
+ * for back-compat with existing tests.
+ */
+export async function resolvePolicy(
+  db: AppDb,
+  service: string,
+  actionId: string,
+  riskLevel: string,
+): Promise<{ mode: ActionMode; policyId: string | null }> {
+  const explicit = await resolveAdminPolicyMatch(db, service, actionId, riskLevel);
+  if (explicit) return { mode: explicit.mode, policyId: explicit.policyId };
+  return { mode: systemDefaultForRisk(riskLevel), policyId: null };
 }
 
 // ─── Invocations ─────────────────────────────────────────────────────────────
@@ -469,7 +890,9 @@ export async function createInvocation(
   db: AppDb,
   data: {
     id: string;
-    sessionId: string;
+    /** Exactly one of sessionId or workflowExecutionId must be set. */
+    sessionId?: string | null;
+    workflowExecutionId?: string | null;
     userId: string;
     service: string;
     actionId: string;
@@ -477,21 +900,25 @@ export async function createInvocation(
     resolvedMode: ActionMode;
     params?: string;
     expiresAt?: string;
-    policyId?: string | null;
-    orgPolicyId?: string | null;
+    /** Audit metadata from the unified resolver. */
+    matchedPolicyId?: string | null;
+    matchedGrantId?: string | null;
     baseMode?: ActionMode | null;
-    baseSource?: 'org_policy' | 'system_default' | null;
-    userOverrideId?: string | null;
-    policySource?: EffectivePolicySource | null;
-    policyLifetime?: ActionPolicyLifetime | null;
+    baseSource?: 'admin_policy' | 'system_default' | null;
+    policySource?: PolicySource | null;
     policyScope?: PolicyScope | null;
     status?: string;
+    /** Workflow-runtime context captured for the resume hook and
+     *  nodeId-aware grant matching. */
+    nodeId?: string | null;
+    iterationIndex?: number | null;
   },
 ) {
-  const now = new Date().toISOString();
+  const now = nowIso();
   await db.insert(actionInvocations).values({
     id: data.id,
-    sessionId: data.sessionId,
+    sessionId: data.sessionId ?? null,
+    workflowExecutionId: data.workflowExecutionId ?? null,
     userId: data.userId,
     service: data.service,
     actionId: data.actionId,
@@ -499,14 +926,14 @@ export async function createInvocation(
     resolvedMode: data.resolvedMode,
     params: data.params,
     expiresAt: data.expiresAt,
-    policyId: data.policyId ?? data.orgPolicyId ?? null,
-    orgPolicyId: data.orgPolicyId ?? data.policyId ?? null,
+    matchedPolicyId: data.matchedPolicyId ?? null,
+    matchedGrantId: data.matchedGrantId ?? null,
     baseMode: data.baseMode ?? null,
     baseSource: data.baseSource ?? null,
-    userOverrideId: data.userOverrideId ?? null,
     policySource: data.policySource ?? null,
-    policyLifetime: data.policyLifetime ?? null,
     policyScope: data.policyScope ?? null,
+    nodeId: data.nodeId ?? null,
+    iterationIndex: data.iterationIndex ?? null,
     status: data.status || 'pending',
     createdAt: now,
     updatedAt: now,
@@ -514,11 +941,7 @@ export async function createInvocation(
 }
 
 export async function getInvocation(db: AppDb, id: string) {
-  return db
-    .select()
-    .from(actionInvocations)
-    .where(eq(actionInvocations.id, id))
-    .get();
+  return db.select().from(actionInvocations).where(eq(actionInvocations.id, id)).get();
 }
 
 export async function updateInvocationStatus(
@@ -534,8 +957,7 @@ export async function updateInvocationStatus(
     expectedStatus?: string;
   },
 ) {
-  const now = new Date().toISOString();
-  // Only include fields that are explicitly provided to avoid overwriting existing values
+  const now = nowIso();
   const setFields: Record<string, unknown> = {
     status: update.status,
     updatedAt: now,
@@ -580,8 +1002,229 @@ export async function listInvocationsBySession(
   return query.all();
 }
 
+// ─── Workflow-attributed invocation helpers ─────────────────────────────────
+// Replace the legacy workflow_approvals listing/sweep functions. The audit
+// row IS the action_invocation now; these are thin query helpers.
+
+/**
+ * Lists pending workflow-attributed invocations for an execution. Used by
+ * cancel cleanup to dispatch `cancelled` events for every Workflow step
+ * waiting on `approval_<nodeId>`.
+ */
+export async function listPendingWorkflowApprovalsForExecution(
+  db: AppDb,
+  executionId: string,
+): Promise<Array<Pick<ActionInvocationRow, 'id' | 'nodeId' | 'iterationIndex'>>> {
+  return db
+    .select({
+      id: actionInvocations.id,
+      nodeId: actionInvocations.nodeId,
+      iterationIndex: actionInvocations.iterationIndex,
+    })
+    .from(actionInvocations)
+    .where(
+      and(
+        eq(actionInvocations.workflowExecutionId, executionId),
+        eq(actionInvocations.status, 'pending'),
+      ),
+    )
+    .all();
+}
+
+/**
+ * Cancellation helper: transitions every pending workflow-attributed
+ * invocation for an execution to 'failed' with error='workflow execution
+ * cancelled'. Replaces the legacy `cancelAllPendingApprovalsForExecution`
+ * which operated on the retired `workflow_approvals` table.
+ */
+export async function cancelPendingWorkflowApprovalsForExecution(
+  db: AppDb,
+  executionId: string,
+): Promise<void> {
+  const now = nowIso();
+  await db
+    .update(actionInvocations)
+    .set({
+      status: 'failed',
+      error: 'workflow execution cancelled',
+      executedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(actionInvocations.workflowExecutionId, executionId),
+        eq(actionInvocations.status, 'pending'),
+      ),
+    );
+}
+
+/**
+ * Stuck-approval sweep helper: finds workflow-attributed invocations whose
+ * status transitioned to a terminal value but where the resume event
+ * dispatch may have failed (CF API blip, etc.). Caller re-dispatches.
+ */
+export async function listStuckWorkflowApprovalsForResume(
+  db: AppDb,
+  opts: { cutoffIso: string; ageFloorIso: string; limit: number },
+): Promise<
+  Array<Pick<ActionInvocationRow,
+    'id' | 'workflowExecutionId' | 'nodeId' | 'iterationIndex' | 'status' | 'resolvedBy'>>
+> {
+  return db
+    .select({
+      id: actionInvocations.id,
+      workflowExecutionId: actionInvocations.workflowExecutionId,
+      nodeId: actionInvocations.nodeId,
+      iterationIndex: actionInvocations.iterationIndex,
+      status: actionInvocations.status,
+      resolvedBy: actionInvocations.resolvedBy,
+    })
+    .from(actionInvocations)
+    .where(
+      and(
+        or(
+          eq(actionInvocations.status, 'approved'),
+          eq(actionInvocations.status, 'denied'),
+        ),
+        sql`${actionInvocations.workflowExecutionId} IS NOT NULL`,
+        sql`${actionInvocations.resolvedAt} IS NOT NULL`,
+        sql`${actionInvocations.resolvedAt} < ${opts.cutoffIso}`,
+        sql`${actionInvocations.resolvedAt} > ${opts.ageFloorIso}`,
+      ),
+    )
+    .limit(opts.limit)
+    .all();
+}
+
+// ─── Propagation: descendant fan-out ─────────────────────────────────────────
+// Surfacing a parent session / workflow execution's "pending approvals" view
+// requires walking DOWN the provenance tree — `parent_session_id` for
+// sessions, plus `workflow_spawned_sessions` for executions. Recursive CTE
+// is the natural fit; the query builder doesn't compose recursive CTEs
+// cleanly, so we drop to raw SQL here.
+
+type DescendantPendingInvocationRow = {
+  id: string;
+  session_id: string | null;
+  workflow_execution_id: string | null;
+  service: string;
+  action_id: string;
+  risk_level: string;
+  resolved_mode: string;
+  status: string;
+  params: string | null;
+  expires_at: string | null;
+  node_id: string | null;
+  iteration_index: number | null;
+  created_at: string;
+};
+
+const DESCENDANT_DEPTH_CAP = 32;
+
+/**
+ * Returns pending action_invocations rooted at a session — both the
+ * session's own and every descendant in the `parent_session_id` tree.
+ * Used by the session-context "pending approvals" view so a parent
+ * session (incl. an orchestrator session) surfaces approval gates from
+ * its spawned children.
+ */
+export async function listDescendantPendingApprovalsForSession(
+  db: AppDb,
+  sessionId: string,
+  opts?: { now?: string },
+): Promise<DescendantPendingInvocationRow[]> {
+  const now = opts?.now ?? nowIso();
+  // SQLite caps recursive CTE iterations at the PRAGMA limit; depth cap
+  // here guards against cycles and pathological trees on top of that.
+  return db.all<DescendantPendingInvocationRow>(sql`
+    WITH RECURSIVE session_tree(id, depth) AS (
+      SELECT id, 0 FROM sessions WHERE id = ${sessionId}
+      UNION ALL
+      SELECT s.id, t.depth + 1
+        FROM sessions s
+        INNER JOIN session_tree t ON s.parent_session_id = t.id
+        WHERE t.depth < ${DESCENDANT_DEPTH_CAP}
+    )
+    SELECT
+      ai.id, ai.session_id, ai.workflow_execution_id, ai.service, ai.action_id,
+      ai.risk_level, ai.resolved_mode, ai.status, ai.params, ai.expires_at,
+      ai.node_id, ai.iteration_index, ai.created_at
+    FROM action_invocations ai
+    WHERE ai.session_id IN (SELECT id FROM session_tree)
+      AND ai.status = 'pending'
+      AND (ai.expires_at IS NULL OR ai.expires_at > ${now})
+    ORDER BY ai.created_at ASC
+  `);
+}
+
+/**
+ * Returns pending action_invocations rooted at a workflow execution —
+ * the execution's own (tool-policy holds + explicit approval gates) plus
+ * every pending invocation in any session this execution spawned and
+ * their descendants. Used by the workflow execution "pending approvals"
+ * view.
+ */
+export async function listDescendantPendingApprovalsForExecution(
+  db: AppDb,
+  executionId: string,
+  opts?: { now?: string },
+): Promise<DescendantPendingInvocationRow[]> {
+  const now = opts?.now ?? nowIso();
+  return db.all<DescendantPendingInvocationRow>(sql`
+    WITH RECURSIVE spawned_tree(id, depth) AS (
+      SELECT session_id AS id, 0
+        FROM workflow_spawned_sessions
+        WHERE execution_id = ${executionId}
+      UNION ALL
+      SELECT s.id, t.depth + 1
+        FROM sessions s
+        INNER JOIN spawned_tree t ON s.parent_session_id = t.id
+        WHERE t.depth < ${DESCENDANT_DEPTH_CAP}
+    )
+    SELECT
+      ai.id, ai.session_id, ai.workflow_execution_id, ai.service, ai.action_id,
+      ai.risk_level, ai.resolved_mode, ai.status, ai.params, ai.expires_at,
+      ai.node_id, ai.iteration_index, ai.created_at
+    FROM action_invocations ai
+    WHERE (
+      ai.workflow_execution_id = ${executionId}
+      OR ai.session_id IN (SELECT id FROM spawned_tree)
+    )
+      AND ai.status = 'pending'
+      AND (ai.expires_at IS NULL OR ai.expires_at > ${now})
+    ORDER BY ai.created_at ASC
+  `);
+}
+
+/**
+ * Walks the same spawned + descendant tree as the propagation surface
+ * to confirm whether a session belongs to (or descends from) a workflow
+ * execution. Used by the approve route to authorize cross-context
+ * resolution of session-attributed invocations from the workflow UI.
+ */
+export async function isSessionDescendantOfExecution(
+  db: AppDb,
+  executionId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const rows = await db.all<{ id: string }>(sql`
+    WITH RECURSIVE spawned_tree(id, depth) AS (
+      SELECT session_id AS id, 0
+        FROM workflow_spawned_sessions
+        WHERE execution_id = ${executionId}
+      UNION ALL
+      SELECT s.id, t.depth + 1
+        FROM sessions s
+        INNER JOIN spawned_tree t ON s.parent_session_id = t.id
+        WHERE t.depth < ${DESCENDANT_DEPTH_CAP}
+    )
+    SELECT id FROM spawned_tree WHERE id = ${sessionId} LIMIT 1
+  `);
+  return rows.length > 0;
+}
+
 export async function listPendingInvocationsByUser(db: AppDb, userId: string) {
-  const now = new Date().toISOString();
+  const now = nowIso();
   return db
     .select()
     .from(actionInvocations)
@@ -589,10 +1232,7 @@ export async function listPendingInvocationsByUser(db: AppDb, userId: string) {
       and(
         eq(actionInvocations.userId, userId),
         eq(actionInvocations.status, 'pending'),
-        or(
-          isNull(actionInvocations.expiresAt),
-          sql`${actionInvocations.expiresAt} > ${now}`,
-        ),
+        or(isNull(actionInvocations.expiresAt), sql`${actionInvocations.expiresAt} > ${now}`),
       ),
     )
     .orderBy(desc(actionInvocations.createdAt))

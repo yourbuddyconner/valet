@@ -38,8 +38,10 @@ export interface McpClientOptions {
   url: string;
   serviceName: string;
   authQueryParam?: string;
+  tokenAuthHeader?: { name: string; prefix?: string | null };
   additionalHeaders?: Record<string, string>;
   staticAuthHeader?: { name: string; value: string };
+  staticAuthQueryParam?: { name: string; value: string };
   fetch?: typeof fetch;
 }
 
@@ -59,8 +61,10 @@ export class McpClient {
   private nextId = 1;
   /** When set, token is sent as a URL query parameter instead of Authorization header. */
   private authQueryParam?: string;
+  private tokenAuthHeader?: { name: string; prefix?: string | null };
   private additionalHeaders?: Record<string, string>;
   private staticAuthHeader?: { name: string; value: string };
+  private staticAuthQueryParam?: { name: string; value: string };
   private fetchFn: typeof fetch;
 
   /** Per-service session IDs to avoid re-initializing on every call. */
@@ -71,8 +75,10 @@ export class McpClient {
     this.url = opts.url;
     this.serviceName = opts.serviceName;
     this.authQueryParam = opts.authQueryParam;
+    this.tokenAuthHeader = opts.tokenAuthHeader;
     this.additionalHeaders = opts.additionalHeaders;
     this.staticAuthHeader = opts.staticAuthHeader;
+    this.staticAuthQueryParam = opts.staticAuthQueryParam;
     this.fetchFn = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
   }
 
@@ -84,19 +90,35 @@ export class McpClient {
       Accept: 'application/json, text/event-stream',
     };
 
+    const tokenAuthSources = [this.authQueryParam, this.tokenAuthHeader].filter(Boolean).length;
+    if (token && tokenAuthSources > 1) {
+      throw new Error(`MCP ${this.serviceName}: ambiguous token auth placement`);
+    }
+    const staticAuthSources = [this.staticAuthHeader, this.staticAuthQueryParam].filter(Boolean).length;
+    if (staticAuthSources > 1) {
+      throw new Error(`MCP ${this.serviceName}: ambiguous static auth placement`);
+    }
     let url = this.url;
     if (token && this.staticAuthHeader) {
       throw new Error(`MCP ${this.serviceName}: ambiguous auth sources; cannot send both access token and static auth header`);
     }
+    if (token && this.staticAuthQueryParam) {
+      throw new Error(`MCP ${this.serviceName}: ambiguous auth sources; cannot send both access token and static auth query parameter`);
+    }
 
     if (token && this.authQueryParam) {
-      const sep = this.url.includes('?') ? '&' : '?';
-      url = `${this.url}${sep}${this.authQueryParam}=${encodeURIComponent(token)}`;
+      url = this.withQueryParam(this.url, this.authQueryParam, token);
+    } else if (token && this.tokenAuthHeader) {
+      const header = this.validateTokenAuthHeader(this.tokenAuthHeader, token);
+      headers[header.name] = header.value;
     } else if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     } else if (this.staticAuthHeader) {
       const header = this.validateStaticAuthHeader(this.staticAuthHeader);
       headers[header.name] = header.value;
+    } else if (this.staticAuthQueryParam) {
+      const param = this.validateStaticAuthQueryParam(this.staticAuthQueryParam);
+      url = this.withQueryParam(this.url, param.name, param.value);
     }
 
     const protocolVersion = this.protocolVersions.get(this.serviceName);
@@ -323,6 +345,24 @@ export class McpClient {
     return header;
   }
 
+  private validateTokenAuthHeader(header: { name: string; prefix?: string | null }, token: string): { name: string; value: string } {
+    const lowerName = this.validateHeaderName(header.name);
+    if (
+      lowerName !== 'authorization'
+      && (PROTECTED_ADDITIONAL_HEADERS.has(lowerName) || lowerName.startsWith('proxy-') || lowerName.startsWith('sec-'))
+    ) {
+      throw new Error(`MCP ${this.serviceName}: protected header "${header.name}" cannot be used as a token auth header`);
+    }
+    const value = header.prefix ? `${header.prefix} ${token}` : token;
+    this.validateHeaderValue(header.name, value);
+    return { name: header.name, value };
+  }
+
+  private validateStaticAuthQueryParam(param: { name: string; value: string }): { name: string; value: string } {
+    this.validateQueryParamName(param.name);
+    return param;
+  }
+
   private validateHeaderName(name: string): string {
     if (!HTTP_FIELD_NAME_RE.test(name)) {
       throw new Error(`MCP ${this.serviceName}: invalid header name "${name}"`);
@@ -334,6 +374,18 @@ export class McpClient {
     if (/[\r\n\0]/.test(value)) {
       throw new Error(`MCP ${this.serviceName}: invalid value for header "${name}"`);
     }
+  }
+
+  private validateQueryParamName(name: string): void {
+    if (!/^[A-Za-z0-9._~-]{1,128}$/.test(name)) {
+      throw new Error(`MCP ${this.serviceName}: invalid auth query parameter name "${name}"`);
+    }
+  }
+
+  private withQueryParam(baseUrl: string, name: string, value: string): string {
+    this.validateQueryParamName(name);
+    const sep = baseUrl.includes('?') ? '&' : '?';
+    return `${baseUrl}${sep}${name}=${encodeURIComponent(value)}`;
   }
 }
 

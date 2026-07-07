@@ -5,6 +5,11 @@ export interface McpTool {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
+  /**
+   * Optional output JSON Schema. Added in MCP spec 2025-03-26; older
+   * servers don't include it, so consumers must handle the missing case.
+   */
+  outputSchema?: Record<string, unknown>;
   annotations?: {
     destructiveHint?: boolean;
     readOnlyHint?: boolean;

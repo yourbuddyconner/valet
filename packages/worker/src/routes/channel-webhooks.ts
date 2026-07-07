@@ -6,7 +6,7 @@ import { channelRegistry } from '../channels/registry.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
 import { getCredential } from '../services/credentials.js';
-import { dispatchOrchestratorPrompt } from '../lib/workflow-runtime.js';
+import { dispatchOrchestratorPrompt } from '../services/orchestrator.js';
 
 export const channelWebhooksRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -223,13 +223,38 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
   const scopeKey = channelScopeKey(userId, parts.channelType, parts.channelId);
   let binding = await db.getChannelBindingByScopeKey(c.get('db'), scopeKey);
 
-  // Evict stale bindings that point to terminated/archived/error sessions
+  // Evict stale bindings that point to terminated/archived/error sessions.
+  // If the dead session has a parent, try to hand off to the parent before
+  // falling through to the orchestrator.
   if (binding) {
     const boundSession = await db.getSession(c.get('db'), binding.sessionId);
     if (boundSession && ['terminated', 'archived', 'error'].includes(boundSession.status)) {
       console.log(`[Channel:${channelType}] Evicting stale binding: session=${binding.sessionId} status=${boundSession.status}`);
-      await db.deleteChannelBinding(c.get('db'), binding.id);
-      binding = null;
+      if (boundSession.parentSessionId) {
+        const parentSession = await db.getSession(c.get('db'), boundSession.parentSessionId);
+        if (parentSession && !['terminated', 'archived', 'error'].includes(parentSession.status)) {
+          console.log(`[Channel:${channelType}] Rebinding thread to parent session: ${parentSession.id}`);
+          await db.ensureChannelBinding(c.get('db'), {
+            sessionId: parentSession.id,
+            channelType: binding.channelType,
+            channelId: binding.channelId,
+            userId: binding.userId ?? userId,
+            orgId: binding.orgId,
+            scopeKey,
+            // Inherit the dead child's queueMode — no better signal available at eviction time.
+            queueMode: binding.queueMode,
+            slackChannelId: binding.slackChannelId,
+            slackThreadTs: binding.slackThreadTs,
+          });
+          binding = { ...binding, sessionId: parentSession.id };
+        } else {
+          await db.deleteChannelBinding(c.get('db'), binding.id);
+          binding = null;
+        }
+      } else {
+        await db.deleteChannelBinding(c.get('db'), binding.id);
+        binding = null;
+      }
     }
   }
 

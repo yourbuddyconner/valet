@@ -1,105 +1,82 @@
 ---
-title: Create Workflows
-description: Create repeatable Valet workflows for scheduled work, manual runs, and events from connected systems.
+title: Workflows
+description: Build repeatable multi-step automations with a visual editor, triggers, approval gates, and versioned publishing.
 ---
 
-import { FeatureCard } from '/snippets/feature-card.mdx';
 import { MascotNote } from '/snippets/mascot-note.mdx';
 
-A workflow is a repeatable way to ask Valet to do work. Use one when the same kind of task should happen more than once, follow a consistent process, or start automatically.
+This page is for anyone who wants Valet to run the same process the same way every time. After reading it you can build a workflow in the visual editor, wire it to a trigger, gate the risky steps behind approvals, and watch each run as it happens.
+
+A workflow is a repeatable, multi-step automation with a defined shape. That is what separates it from a one-off [session](/product/sessions): a session is a conversation where Valet figures out the steps as it goes, while a workflow is a graph you author once — these steps, in this order, with these checkpoints — and then run on demand, on a schedule, or in response to an event. Every run follows the published definition and leaves a complete, inspectable record.
+
+The use-case guides in [Use cases](/use-cases/overview) are built as plays on top of workflows — if you want worked examples before the mechanics, start there.
+
+## When to reach for a workflow
+
+Use a workflow when the process is known and should not drift: a weekly summary that always pulls the same sources, triage that follows the same rubric, follow-up that fires whenever a form is submitted. If the work is exploratory or one-off, start with a session and promote it to a workflow once the pattern repeats.
+
+## Where workflows live
+
+Everything is under **Automation** in the sidebar, which has three tabs: **Triggers**, **Workflows**, and **Runs**. The Automation landing page is a copilot: describe the automation in plain language ("When someone posts in #alerts, summarize the thread and email me every morning") and click **Build workflow** — it drafts the workflow for you to iterate on. Or go to the **Workflows** tab and click **New workflow** to start from a blank canvas. Either way you land in the editor described below, and the same **Copilot** button stays available in the editor toolbar for follow-up edits.
+
+![The Automation page: a copilot prompt for describing a workflow in plain language, above cards for the Triggers, Workflows, and Runs tabs.](/images/product/automation-copilot.png)
+
+## The visual editor
+
+Each workflow opens as a full-canvas editor, in the style of node-based automation tools. Nodes are compact cards connected by edges; an add-node control opens a searchable palette grouped by category, and selecting a node opens an inspector panel where you edit its parameters. Editor, executions, and tests are peer tabs on the same page.
+
+![The workflow editor canvas showing a published workflow as connected nodes — set-values, a session step, an if branch, an approval gate, and stop nodes — with the Copilot, Save draft, Test, and Publish controls in the toolbar.](/images/product/workflow-editor.png)
+
+Steps pass data to each other through template expressions like `{{trigger.data.email}}` or `{{nodes.summarize.data.response}}`. Typing `{{` in a parameter field opens a typeahead listing the outputs available from upstream steps, and the editor flags unknown or malformed references inline before you save. Selecting an edge opens a data-flow inspector that shows what the source step produces, what the target expects, and any mismatch between them.
+
+The editor separates drafts from what's live. **Save draft** stores your work in progress; triggers keep running the last published version untouched. **Publish** validates the draft and makes it the active version. Validation is strict — structural errors, broken template references, and unavailable models block publishing, so a workflow that publishes is a workflow that can run.
+
+## What a step can do
+
+A workflow is assembled from a small set of step types:
+
+- **Tool steps** call actions from your connected [integrations](/product/integrations/overview) — create a Linear issue, post to Slack, send a Gmail draft — through the same pipeline agents use, so [approval policies](/product/approvals) apply identically. A step whose action requires approval pauses the run just like an explicit approval gate.
+- **Agent steps** hand a prompt to an agent and can wait for the result. An **orchestrator** step sends a prompt to your orchestrator in a fresh thread; a **session** step spawns (or resumes) a full sandboxed session — code, browser, terminal — for heavier work. Either can wait until the agent finishes and expose its reply to downstream steps, optionally parsed into structured data against a schema you define.
+- **LLM steps** run a single model completion — classify, summarize, extract — returning plain text or schema-validated JSON. You pick the model from the same catalog as sessions.
+- **Control steps** shape the flow: **if** branches on conditions, **for-each** repeats one step over an array of items, **wait** pauses for a duration, **set** computes intermediate values, **approval** pauses for a human, and **stop** ends the run with an outcome.
+
+Every workflow starts from a trigger node, which defines the run's input. You can give it a typed schema — fields like `email` or `priority` — and manual and scheduled runs render a form from that schema, so runs can't start with malformed input.
+
+## Starting a workflow
+
+Workflows start three ways: **manually** (a Run button, or ask Valet), on a **schedule** (a cron cadence with timezone support), or from a **webhook** (an external system calls a tokened URL — a form submission, a GitHub event, a monitoring alert — and the payload becomes the run's input). Duplicate deliveries and double-clicks are deduplicated, so a retried webhook doesn't start a second run.
+
+Triggers are covered in depth — including how workflow triggers differ from orchestrator schedules — on the [triggers page](/product/triggers).
+
+## Approval gates
+
+An approval gate pauses the run until a human decides. Place one before anything irreversible or externally visible: sending mail, merging code, changing customer records. When a run reaches a gate, it parks durably — for hours or days if it has to — until someone approves or denies. Approvals surface in the workflow's run view and reach you wherever your [approval notifications](/product/approvals) do — web, Slack, or Telegram. Each request carries a deadline (24 hours by default), so an unanswered gate expires rather than hanging forever, and you choose whether a denial fails the run or skips the gated steps and continues.
+
+Tool steps get the same treatment implicitly: if your org's policy marks an action as requiring approval, the run pauses at that step even without an explicit gate.
 
 <MascotNote
-  title="Reference"
-  heading="Write the process once"
+  title="Design tip"
+  heading="Gate the send, not the draft"
   image="/images/characters/writing.png"
   alt="Valet writing notes"
 >
-  Write a workflow like a checklist for a coworker: what starts it, what information to gather, what to produce, and when to stop for review.
+  Let the workflow gather, draft, and prepare freely — put the approval gate immediately before the step that makes it real. One well-placed gate beats five noisy ones.
 </MascotNote>
 
-## When to create a workflow
+## Versions and history
 
-Create a workflow for recurring work such as:
+Publishing appends an immutable version to the workflow's history rather than overwriting it. The Versions dialog lists every published revision with the active one marked; restoring an older revision copies it into your draft for review, and triggers keep using the active version until you publish again. Each run snapshots the exact definition it executed, so a run from last month is still explainable after the workflow has changed — and you can retry any past run against its original definition and input.
 
-- Daily queue triage.
-- Weekly team summaries.
-- Customer follow-up after a form or support event.
-- Release-prep checklists.
-- Issue or pull-request review.
-- Research that always needs the same inputs.
+## Watching a run
 
-If the task is one-off or still unclear, start with a normal [task](/product/tasks). Turn it into a workflow after the pattern repeats.
+The **Executions** tab on the workflow page is where you watch runs. It shows a run list, the workflow graph with live per-step status overlaid — running, waiting for approval, completed, failed, skipped — and a detail panel for whichever step you select, with its inputs, outputs, and errors. Active runs update every couple of seconds without a refresh. Pending approvals render approve/deny actions right in the panel, and a Retry button re-runs any execution.
 
-## Create a workflow
+Runs are not sessions, but they can create them: when a session step spawns a sandbox, the run view links straight to that live session so you can watch the agent work. Spawned sessions belong to the workflow — when the run finishes, they are cleaned up automatically. Runs the agent kicked off for you (Valet can create, edit, and run workflows through its own tools) appear in the same history as everything else.
 
-<Steps>
-  <Step title="Name the job">
-    Use a name that describes the outcome, such as "Weekly support summary" or "Triage new pull requests."
-  </Step>
-  <Step title="Choose how it starts">
-    Decide whether a person runs it, a schedule runs it, or another system sends Valet an event.
-  </Step>
-  <Step title="Write the instructions">
-    Tell Valet what to check, which tools to use, what good output looks like, and what should be ignored.
-  </Step>
-  <Step title="Add review points">
-    Mark the steps that need approval before Valet writes, sends, deletes, merges, or changes something important.
-  </Step>
-  <Step title="Run it once">
-    Test the workflow on a small, real example. Review what Valet did and adjust the instructions.
-  </Step>
-</Steps>
+The **Tests** tab runs your current draft against sample input without publishing — the fastest loop while you're still shaping the graph.
 
-## Ways a workflow can start
+<Note>
+Workflows are personal today. Team-owned workflows — shared with a [team](/product/teams) and run by its orchestrator — are rolling out.
+</Note>
 
-<div className="valet-doc-grid">
-  <FeatureCard
-    eyebrow="Manual"
-    title="Run when needed"
-    description="A person chooses when Valet should run the workflow."
-    href="/product/tasks"
-  />
-  <FeatureCard
-    eyebrow="Schedule"
-    title="Run on a cadence"
-    description="Use schedules for daily checks, weekly summaries, and other recurring work."
-    href="/use-cases/operations"
-  />
-  <FeatureCard
-    eyebrow="Event"
-    title="Run when something happens"
-    description="A connected system can hand Valet work after a form, message, issue, or similar update."
-    href="/product/tools"
-  />
-  <FeatureCard
-    eyebrow="Approval"
-    title="Pause for review"
-    description="Sensitive steps wait for a person before Valet continues."
-    href="/product/approvals"
-  />
-</div>
-
-## A simple example
-
-```text
-Workflow: Weekly customer follow-up
-
-Start: every Friday morning
-
-Instructions:
-- Review open customer issues in Linear.
-- Find accounts with stale follow-up.
-- Draft a short update for each account.
-- Ask for approval before sending anything externally.
-- Post a summary in Slack when finished.
-```
-
-## Improve the workflow
-
-After a few runs, review:
-
-- Which steps were unclear.
-- Which approvals were useful or noisy.
-- Which connected tools were missing.
-- Whether the output was easy to use.
-- Whether the workflow should be split into smaller workflows.
+For the underlying record model, execution lifecycle, and API routes, see [workflow execution](/engineering/workflow-execution).

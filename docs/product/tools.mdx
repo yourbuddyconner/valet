@@ -5,6 +5,12 @@ description: Connect the systems Valet should read from or act in.
 
 Integrations are the tools Valet can use. Connect them when Valet needs to gather information, prepare updates, create tasks, send messages, or complete work across systems.
 
+## Where to connect
+
+Everything happens on the **Integrations** page in the sidebar. Click **Connect Integration**, pick a service, and approve the sign-in screen — for most tools that's the whole flow. Each card shows the connection's status (active, error, pending, disconnected), and disconnecting is a button on the same card.
+
+A few integrations have an org-level half that an admin sets up first in **Settings → Organization** — the Slack workspace app and the GitHub App. Once those are installed, each person links their own account from the Integrations page.
+
 ## What to connect
 
 Common tool categories include:
@@ -18,7 +24,7 @@ Common tool categories include:
 - Monitoring and incident tools.
 - Finance or billing systems.
 
-The exact list depends on what your organization enables.
+The exact list depends on what your organization enables — admins turn integrations (and individual actions) on or off under **Settings → Organization → Plugins & Connectors**, and can add remote MCP servers under **Custom MCP Connectors**.
 
 ## Before connecting a tool
 
@@ -33,7 +39,7 @@ Decide:
 
 ## Good first integrations
 
-Start with the tools that hold the information for your first real tasks:
+Start with the tools that hold the information for your first real sessions:
 
 - Use GitHub or Linear for engineering triage.
 - Use Slack for team requests and updates.
@@ -44,7 +50,7 @@ Add more tools after the first workflows are clear.
 
 ## Tool safety
 
-Valet should not need passwords, keys, or other secrets in the conversation. Connect tools through approved setup screens, then control actions with [approvals](/product/approvals).
+Valet should not need passwords, keys, or other secrets in the conversation. Connect tools only through the Integrations page's sign-in flows, then control actions with [approvals](/product/approvals).
 
 ## Reference
 

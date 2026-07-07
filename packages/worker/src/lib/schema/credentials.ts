@@ -11,6 +11,10 @@ export const credentials = sqliteTable('credentials', {
   metadata: text(),
   scopes: text(),
   expiresAt: text(),
+  // Last known failure state (NULL = healthy). Written only on state
+  // transitions so getCredential can log edges instead of every attempt.
+  lastFailureReason: text(),
+  lastFailureAt: text(),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
   updatedAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [

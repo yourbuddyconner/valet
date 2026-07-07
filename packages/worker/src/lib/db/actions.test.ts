@@ -2,16 +2,19 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestDb } from '../../test-utils/db.js';
 import { sessions } from '../schema/sessions.js';
 import { users } from '../schema/users.js';
+import { workflows, workflowExecutions } from '../schema/workflows.js';
 import {
   createInvocation,
+  expandSessionLineage,
+  getActionPolicy,
   getInvocation,
-  getUserActionPolicyOverride,
+  getRuntimeGrant,
+  listUserDurableActionPolicies,
+  resolveAdminPolicyMatch,
   resolveEffectiveActionPolicy,
-  resolveOrgPolicyMatch,
   resolvePolicy,
-  resolveUserActionPolicyOverride,
   upsertActionPolicy,
-  upsertUserActionPolicyOverride,
+  upsertRuntimeGrant,
 } from './actions.js';
 import { updateSessionStatus } from './sessions.js';
 import { invokeAction } from '../../services/actions.js';
@@ -21,7 +24,7 @@ const OTHER_USER_ID = 'user-action-policy-other';
 const SESSION_ID = 'session-action-policy';
 const OTHER_SESSION_ID = 'session-action-policy-other';
 
-describe('action policy DB helpers', () => {
+describe('unified action policy resolver', () => {
   let db: ReturnType<typeof createTestDb>['db'];
 
   beforeEach(() => {
@@ -38,8 +41,10 @@ describe('action policy DB helpers', () => {
     ]).run();
   });
 
-  it('distinguishes explicit org matches from system defaults', async () => {
-    await expect(resolveOrgPolicyMatch(db as any, 'gmail', 'draft.create', 'medium')).resolves.toBeNull();
+  // ── Admin policy resolution ─────────────────────────────────────────────
+
+  it('distinguishes explicit admin matches from system defaults', async () => {
+    await expect(resolveAdminPolicyMatch(db as any, 'gmail', 'draft.create', 'medium')).resolves.toBeNull();
 
     await upsertActionPolicy(db as any, {
       id: 'org-gmail-service',
@@ -48,7 +53,7 @@ describe('action policy DB helpers', () => {
       createdBy: USER_ID,
     });
 
-    const explicit = await resolveOrgPolicyMatch(db as any, 'gmail', 'draft.create', 'medium');
+    const explicit = await resolveAdminPolicyMatch(db as any, 'gmail', 'draft.create', 'medium');
     expect(explicit).toMatchObject({
       mode: 'require_approval',
       policyId: 'org-gmail-service',
@@ -61,7 +66,7 @@ describe('action policy DB helpers', () => {
     });
   });
 
-  it('treats explicit org exact deny as a hard ceiling over user exact allow', async () => {
+  it('admin exact deny beats a user exact-allow grant (deny wins)', async () => {
     await upsertActionPolicy(db as any, {
       id: 'org-exact-deny',
       service: 'gmail',
@@ -69,17 +74,19 @@ describe('action policy DB helpers', () => {
       mode: 'deny',
       createdBy: USER_ID,
     });
-    await upsertUserActionPolicyOverride(db as any, {
+    await upsertActionPolicy(db as any, {
       id: 'user-exact-allow',
-      userId: USER_ID,
       service: 'gmail',
       actionId: 'draft.create',
       mode: 'allow',
-      lifetime: 'persistent',
-      source: 'settings',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: USER_ID,
+      subjectType: 'tool_action',
+      createdBy: USER_ID,
     });
 
-    const result = await resolveEffectiveActionPolicy(db as any, {
+    const policy = await resolveEffectiveActionPolicy(db as any, {
       userId: USER_ID,
       sessionId: SESSION_ID,
       service: 'gmail',
@@ -87,37 +94,31 @@ describe('action policy DB helpers', () => {
       riskLevel: 'medium',
     });
 
-    expect(result).toMatchObject({
-      mode: 'deny',
-      outcome: 'denied',
-      baseMode: 'deny',
-      baseSource: 'org_policy',
-      orgPolicyId: 'org-exact-deny',
-      userOverrideId: null,
-      source: 'org_policy',
-      lifetime: null,
-      scope: 'action',
-    });
+    expect(policy.outcome).toBe('denied');
+    expect(policy.matchedPolicyId).toBe('org-exact-deny');
+    expect(policy.source).toBe('admin_policy');
   });
 
-  it('treats explicit org service deny as a hard ceiling over user exact allow', async () => {
+  it('admin service deny beats a user exact-allow grant', async () => {
     await upsertActionPolicy(db as any, {
       id: 'org-service-deny',
       service: 'gmail',
       mode: 'deny',
       createdBy: USER_ID,
     });
-    await upsertUserActionPolicyOverride(db as any, {
+    await upsertActionPolicy(db as any, {
       id: 'user-exact-allow',
-      userId: USER_ID,
       service: 'gmail',
       actionId: 'draft.create',
       mode: 'allow',
-      lifetime: 'persistent',
-      source: 'settings',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: USER_ID,
+      subjectType: 'tool_action',
+      createdBy: USER_ID,
     });
 
-    const result = await resolveEffectiveActionPolicy(db as any, {
+    const policy = await resolveEffectiveActionPolicy(db as any, {
       userId: USER_ID,
       sessionId: SESSION_ID,
       service: 'gmail',
@@ -125,62 +126,78 @@ describe('action policy DB helpers', () => {
       riskLevel: 'medium',
     });
 
-    expect(result).toMatchObject({
-      mode: 'deny',
-      outcome: 'denied',
-      orgPolicyId: 'org-service-deny',
-      userOverrideId: null,
-      source: 'org_policy',
-      scope: 'service',
-    });
+    expect(policy.outcome).toBe('denied');
+    expect(policy.matchedPolicyId).toBe('org-service-deny');
   });
 
-  it('treats explicit org risk deny as a hard ceiling over user service allow', async () => {
+  it('admin risk deny beats a user service-allow grant', async () => {
     await upsertActionPolicy(db as any, {
       id: 'org-risk-deny',
-      riskLevel: 'medium',
+      riskLevel: 'high',
       mode: 'deny',
       createdBy: USER_ID,
     });
-    await upsertUserActionPolicyOverride(db as any, {
+    await upsertActionPolicy(db as any, {
       id: 'user-service-allow',
-      userId: USER_ID,
-      service: 'gmail',
+      service: 'github',
       mode: 'allow',
-      lifetime: 'persistent',
-      source: 'settings',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: USER_ID,
+      subjectType: 'tool_action',
+      createdBy: USER_ID,
     });
 
-    const result = await resolveEffectiveActionPolicy(db as any, {
+    const policy = await resolveEffectiveActionPolicy(db as any, {
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      service: 'github',
+      actionId: 'create_repository',
+      riskLevel: 'high',
+    });
+
+    expect(policy.outcome).toBe('denied');
+    expect(policy.matchedPolicyId).toBe('org-risk-deny');
+  });
+
+  it('admin/system allow returns allow without consulting grants', async () => {
+    await upsertActionPolicy(db as any, {
+      id: 'org-service-allow',
+      service: 'gmail',
+      mode: 'allow',
+      createdBy: USER_ID,
+    });
+
+    const policy = await resolveEffectiveActionPolicy(db as any, {
       userId: USER_ID,
       sessionId: SESSION_ID,
       service: 'gmail',
-      actionId: 'draft.create',
+      actionId: 'send_email',
       riskLevel: 'medium',
     });
 
-    expect(result).toMatchObject({
-      mode: 'deny',
-      outcome: 'denied',
-      orgPolicyId: 'org-risk-deny',
-      userOverrideId: null,
-      source: 'org_policy',
-      scope: 'risk_level',
-    });
+    expect(policy.outcome).toBe('allowed');
+    expect(policy.source).toBe('admin_policy');
+    expect(policy.matchedPolicyId).toBe('org-service-allow');
+    expect(policy.matchedGrantId).toBeNull();
   });
 
-  it('allows a user exact override to loosen critical system default deny', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
+  // ── Durable user grants ────────────────────────────────────────────────
+
+  it('user exact grant loosens a critical system default deny', async () => {
+    await upsertActionPolicy(db as any, {
       id: 'user-critical-allow',
-      userId: USER_ID,
       service: 'linear',
       actionId: 'issue.delete',
       mode: 'allow',
-      lifetime: 'persistent',
-      source: 'settings',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: USER_ID,
+      subjectType: 'tool_action',
+      createdBy: USER_ID,
     });
 
-    const result = await resolveEffectiveActionPolicy(db as any, {
+    const policy = await resolveEffectiveActionPolicy(db as any, {
       userId: USER_ID,
       sessionId: SESSION_ID,
       service: 'linear',
@@ -188,118 +205,144 @@ describe('action policy DB helpers', () => {
       riskLevel: 'critical',
     });
 
-    expect(result).toMatchObject({
-      mode: 'allow',
-      outcome: 'allowed',
-      baseMode: 'deny',
-      baseSource: 'system_default',
-      orgPolicyId: null,
-      userOverrideId: 'user-critical-allow',
-      source: 'user_override',
-      lifetime: 'persistent',
-      scope: 'action',
-    });
+    expect(policy.outcome).toBe('allowed');
+    expect(policy.source).toBe('user_policy');
+    expect(policy.matchedPolicyId).toBe('user-critical-allow');
+    expect(policy.scope).toBe('action');
   });
 
-  it('prefers user exact override over service and risk overrides', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'user-risk-deny',
-      userId: USER_ID,
-      riskLevel: 'medium',
-      mode: 'deny',
-      lifetime: 'persistent',
-      source: 'settings',
-    });
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'user-service-ask',
-      userId: USER_ID,
-      service: 'gmail',
-      mode: 'require_approval',
-      lifetime: 'persistent',
-      source: 'settings',
-    });
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'user-exact-allow',
-      userId: USER_ID,
-      service: 'gmail',
-      actionId: 'draft.create',
+  it('prefers a user exact grant over service and risk grants', async () => {
+    await upsertActionPolicy(db as any, {
+      id: 'user-action-allow',
+      service: 'linear',
+      actionId: 'issue.delete',
       mode: 'allow',
-      lifetime: 'persistent',
-      source: 'settings',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: USER_ID,
+      subjectType: 'tool_action',
+      createdBy: USER_ID,
     });
-
-    const result = await resolveEffectiveActionPolicy(db as any, {
-      userId: USER_ID,
-      sessionId: SESSION_ID,
-      service: 'gmail',
-      actionId: 'draft.create',
-      riskLevel: 'medium',
-    });
-
-    expect(result).toMatchObject({
+    await upsertActionPolicy(db as any, {
+      id: 'user-service-allow',
+      service: 'linear',
       mode: 'allow',
-      outcome: 'allowed',
-      userOverrideId: 'user-exact-allow',
-      source: 'user_override',
-      scope: 'action',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: USER_ID,
+      subjectType: 'tool_action',
+      createdBy: USER_ID,
     });
-  });
-
-  it('prefers user service override over risk override', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
+    await upsertActionPolicy(db as any, {
       id: 'user-risk-allow',
-      userId: USER_ID,
-      riskLevel: 'medium',
+      riskLevel: 'critical',
       mode: 'allow',
-      lifetime: 'persistent',
-      source: 'settings',
-    });
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'user-service-deny',
-      userId: USER_ID,
-      service: 'gmail',
-      mode: 'deny',
-      lifetime: 'persistent',
-      source: 'settings',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: USER_ID,
+      subjectType: 'tool_action',
+      createdBy: USER_ID,
     });
 
-    const result = await resolveEffectiveActionPolicy(db as any, {
+    const policy = await resolveEffectiveActionPolicy(db as any, {
       userId: USER_ID,
       sessionId: SESSION_ID,
-      service: 'gmail',
-      actionId: 'draft.create',
-      riskLevel: 'medium',
+      service: 'linear',
+      actionId: 'issue.delete',
+      riskLevel: 'critical',
     });
 
-    expect(result).toMatchObject({
-      mode: 'deny',
-      outcome: 'denied',
-      userOverrideId: 'user-service-deny',
-      source: 'user_override',
-      scope: 'service',
-    });
+    expect(policy.matchedPolicyId).toBe('user-action-allow');
+    expect(policy.scope).toBe('action');
   });
 
-  it('only applies session overrides to the matching session', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'user-session-allow',
-      userId: USER_ID,
-      service: 'gmail',
-      actionId: 'draft.create',
+  it('a user durable grant from one user does not apply to another user', async () => {
+    await upsertActionPolicy(db as any, {
+      id: 'other-user-allow',
+      service: 'linear',
+      actionId: 'issue.delete',
       mode: 'allow',
-      lifetime: 'session',
-      sessionId: SESSION_ID,
-      source: 'approval_prompt',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: OTHER_USER_ID,
+      subjectType: 'tool_action',
+      createdBy: OTHER_USER_ID,
     });
 
-    const matchingSession = await resolveEffectiveActionPolicy(db as any, {
+    const policy = await resolveEffectiveActionPolicy(db as any, {
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      service: 'linear',
+      actionId: 'issue.delete',
+      riskLevel: 'critical',
+    });
+
+    expect(policy.outcome).toBe('denied');
+  });
+
+  it('ignores expired durable user grants', async () => {
+    await upsertActionPolicy(db as any, {
+      id: 'expired-allow',
+      service: 'linear',
+      actionId: 'issue.delete',
+      mode: 'allow',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: USER_ID,
+      subjectType: 'tool_action',
+      createdBy: USER_ID,
+      expiresAt: '2000-01-01T00:00:00Z',
+    });
+
+    const policy = await resolveEffectiveActionPolicy(db as any, {
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      service: 'linear',
+      actionId: 'issue.delete',
+      riskLevel: 'critical',
+    });
+
+    expect(policy.outcome).toBe('denied');
+  });
+
+  // ── Runtime grants ─────────────────────────────────────────────────────
+
+  it('auto-approves matching calls on the session a runtime grant is bound to', async () => {
+    await upsertRuntimeGrant(db as any, {
+      id: 'session-grant',
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      subjectType: 'tool_action',
+      service: 'gmail',
+      actionId: 'draft.create',
+      policyKey: `session:${SESSION_ID}:gmail.draft.create:`,
+    });
+
+    const policy = await resolveEffectiveActionPolicy(db as any, {
       userId: USER_ID,
       sessionId: SESSION_ID,
       service: 'gmail',
       actionId: 'draft.create',
       riskLevel: 'medium',
     });
-    const otherSession = await resolveEffectiveActionPolicy(db as any, {
+
+    expect(policy.outcome).toBe('allowed');
+    expect(policy.source).toBe('runtime_grant');
+    expect(policy.matchedGrantId).toBe('session-grant');
+  });
+
+  it('a session-scoped runtime grant does not leak to a sibling session', async () => {
+    await upsertRuntimeGrant(db as any, {
+      id: 'session-grant',
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      subjectType: 'tool_action',
+      service: 'gmail',
+      actionId: 'draft.create',
+      policyKey: `session:${SESSION_ID}:gmail.draft.create:`,
+    });
+
+    const policy = await resolveEffectiveActionPolicy(db as any, {
       userId: USER_ID,
       sessionId: OTHER_SESSION_ID,
       service: 'gmail',
@@ -307,427 +350,257 @@ describe('action policy DB helpers', () => {
       riskLevel: 'medium',
     });
 
-    expect(matchingSession).toMatchObject({
-      mode: 'allow',
-      outcome: 'allowed',
-      userOverrideId: 'user-session-allow',
-      source: 'session_override',
-      lifetime: 'session',
-      scope: 'action',
+    expect(policy.outcome).toBe('pending_approval');
+    expect(policy.matchedGrantId).toBeNull();
+  });
+
+  // ── Lineage inheritance ────────────────────────────────────────────────
+
+  it('runtime grant on a parent session auto-approves a child session call', async () => {
+    const CHILD_SESSION_ID = 'session-child';
+    db.insert(sessions).values({
+      id: CHILD_SESSION_ID,
+      userId: USER_ID,
+      workspace: '/tmp/child',
+      status: 'running',
+      parentSessionId: SESSION_ID,
+    }).run();
+
+    await upsertRuntimeGrant(db as any, {
+      id: 'parent-grant',
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      subjectType: 'tool_action',
+      service: 'gmail',
+      actionId: 'draft.create',
+      policyKey: `session:${SESSION_ID}:gmail.draft.create:`,
     });
-    expect(otherSession).toMatchObject({
+
+    const policy = await resolveEffectiveActionPolicy(db as any, {
+      userId: USER_ID,
+      sessionId: CHILD_SESSION_ID,
+      service: 'gmail',
+      actionId: 'draft.create',
+      riskLevel: 'medium',
+    });
+
+    expect(policy.outcome).toBe('allowed');
+    expect(policy.matchedGrantId).toBe('parent-grant');
+  });
+
+  it('expandSessionLineage walks parentSessionId, capped and cycle-guarded', async () => {
+    const A = 'lineage-a';
+    const B = 'lineage-b';
+    const C = 'lineage-c';
+    db.insert(sessions).values([
+      { id: A, userId: USER_ID, workspace: '/a', status: 'running' },
+      { id: B, userId: USER_ID, workspace: '/b', status: 'running', parentSessionId: A },
+      { id: C, userId: USER_ID, workspace: '/c', status: 'running', parentSessionId: B },
+    ]).run();
+
+    const lineage = await expandSessionLineage(db as any, C);
+    expect(lineage.sessionIds).toEqual([C, B, A]);
+  });
+
+  // ── Workflow execution recovery ────────────────────────────────────────
+  // (Per-lineage-member workflow_spawned_sessions recovery is exercised in
+  // the workflow integration tests; here we cover the direct
+  // workflowExecutionId scope path.)
+
+  it('runtime grant scoped to a workflow execution auto-approves the same execution', async () => {
+    db.insert(workflows).values({
+      id: 'wf-1',
+      userId: USER_ID,
+      name: 'wf',
+      data: JSON.stringify({ version: 'dag/v1' }),
+    }).run();
+    db.insert(workflowExecutions).values({
+      id: 'exec-abc',
+      workflowId: 'wf-1',
+      userId: USER_ID,
+      status: 'running',
+      triggerType: 'manual',
+      startedAt: new Date().toISOString(),
+    }).run();
+
+    await upsertRuntimeGrant(db as any, {
+      id: 'exec-grant',
+      userId: USER_ID,
+      workflowExecutionId: 'exec-abc',
+      subjectType: 'tool_action',
+      service: 'gmail',
+      actionId: 'send_email',
+      policyKey: 'exec-abc:gmail.send_email',
+    });
+
+    const policy = await resolveEffectiveActionPolicy(db as any, {
+      userId: USER_ID,
+      workflowExecutionId: 'exec-abc',
+      service: 'gmail',
+      actionId: 'send_email',
+      riskLevel: 'medium',
+    });
+
+    expect(policy.outcome).toBe('allowed');
+    expect(policy.source).toBe('runtime_grant');
+    expect(policy.matchedGrantId).toBe('exec-grant');
+  });
+
+  // ── Audit metadata ─────────────────────────────────────────────────────
+
+  it('stores matched_policy_id / matched_grant_id and audit fields on invocations', async () => {
+    await upsertActionPolicy(db as any, {
+      id: 'org-require',
+      service: 'gmail',
       mode: 'require_approval',
-      outcome: 'pending_approval',
-      userOverrideId: null,
-      source: 'system_default',
-      lifetime: null,
-      scope: 'none',
-    });
-  });
-
-  it('keeps session-scoped service overrides isolated by session', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'session-service-allow',
-      userId: USER_ID,
-      service: 'gmail',
-      mode: 'allow',
-      lifetime: 'session',
-      sessionId: SESSION_ID,
-      source: 'approval_prompt',
-    });
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'other-session-service-deny',
-      userId: USER_ID,
-      service: 'gmail',
-      mode: 'deny',
-      lifetime: 'session',
-      sessionId: OTHER_SESSION_ID,
-      source: 'approval_prompt',
-    });
-
-    const matchingSession = await resolveEffectiveActionPolicy(db as any, {
-      userId: USER_ID,
-      sessionId: SESSION_ID,
-      service: 'gmail',
-      actionId: 'draft.create',
-      riskLevel: 'medium',
-    });
-    const otherSession = await resolveEffectiveActionPolicy(db as any, {
-      userId: USER_ID,
-      sessionId: OTHER_SESSION_ID,
-      service: 'gmail',
-      actionId: 'draft.create',
-      riskLevel: 'medium',
-    });
-
-    expect(matchingSession).toMatchObject({
-      mode: 'allow',
-      userOverrideId: 'session-service-allow',
-      source: 'session_override',
-      lifetime: 'session',
-      scope: 'service',
-    });
-    expect(otherSession).toMatchObject({
-      mode: 'deny',
-      userOverrideId: 'other-session-service-deny',
-      source: 'session_override',
-      lifetime: 'session',
-      scope: 'service',
-    });
-  });
-
-  it('keeps session-scoped risk overrides isolated by session', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'session-risk-allow',
-      userId: USER_ID,
-      riskLevel: 'high',
-      mode: 'allow',
-      lifetime: 'session',
-      sessionId: SESSION_ID,
-      source: 'approval_prompt',
-    });
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'other-session-risk-deny',
-      userId: USER_ID,
-      riskLevel: 'high',
-      mode: 'deny',
-      lifetime: 'session',
-      sessionId: OTHER_SESSION_ID,
-      source: 'approval_prompt',
-    });
-
-    const matchingSession = await resolveEffectiveActionPolicy(db as any, {
-      userId: USER_ID,
-      sessionId: SESSION_ID,
-      service: 'gmail',
-      actionId: 'draft.create',
-      riskLevel: 'high',
-    });
-    const otherSession = await resolveEffectiveActionPolicy(db as any, {
-      userId: USER_ID,
-      sessionId: OTHER_SESSION_ID,
-      service: 'linear',
-      actionId: 'issue.create',
-      riskLevel: 'high',
-    });
-
-    expect(matchingSession).toMatchObject({
-      mode: 'allow',
-      userOverrideId: 'session-risk-allow',
-      source: 'session_override',
-      lifetime: 'session',
-      scope: 'risk_level',
-    });
-    expect(otherSession).toMatchObject({
-      mode: 'deny',
-      userOverrideId: 'other-session-risk-deny',
-      source: 'session_override',
-      lifetime: 'session',
-      scope: 'risk_level',
-    });
-  });
-
-  it('ignores expired timed overrides', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'user-expired-allow',
-      userId: USER_ID,
-      service: 'linear',
-      actionId: 'issue.delete',
-      mode: 'allow',
-      lifetime: 'timed',
-      expiresAt: '2020-01-01T00:00:00.000Z',
-      source: 'settings',
-    });
-
-    const activeOverride = await resolveUserActionPolicyOverride(db as any, {
-      userId: USER_ID,
-      sessionId: SESSION_ID,
-      service: 'linear',
-      actionId: 'issue.delete',
-      riskLevel: 'critical',
-    });
-    const result = await resolveEffectiveActionPolicy(db as any, {
-      userId: USER_ID,
-      sessionId: SESSION_ID,
-      service: 'linear',
-      actionId: 'issue.delete',
-      riskLevel: 'critical',
-    });
-
-    expect(activeOverride).toBeNull();
-    expect(result).toMatchObject({
-      mode: 'deny',
-      outcome: 'denied',
-      baseMode: 'deny',
-      baseSource: 'system_default',
-      userOverrideId: null,
-      source: 'system_default',
-      lifetime: null,
-      scope: 'none',
-    });
-  });
-
-  it('allows persistent user deny to tighten org allow', async () => {
-    await upsertActionPolicy(db as any, {
-      id: 'org-service-allow',
-      service: 'gmail',
-      mode: 'allow',
       createdBy: USER_ID,
     });
-    await upsertUserActionPolicyOverride(db as any, {
-      id: 'user-exact-deny',
-      userId: USER_ID,
-      service: 'gmail',
-      actionId: 'draft.create',
-      mode: 'deny',
-      lifetime: 'persistent',
-      source: 'settings',
-    });
-
-    const result = await resolveEffectiveActionPolicy(db as any, {
+    await upsertRuntimeGrant(db as any, {
+      id: 'session-grant',
       userId: USER_ID,
       sessionId: SESSION_ID,
+      subjectType: 'tool_action',
       service: 'gmail',
       actionId: 'draft.create',
-      riskLevel: 'low',
+      policyKey: `session:${SESSION_ID}:gmail.draft.create:`,
     });
 
-    expect(result).toMatchObject({
-      mode: 'deny',
-      outcome: 'denied',
-      baseMode: 'allow',
-      baseSource: 'org_policy',
-      orgPolicyId: 'org-service-allow',
-      userOverrideId: 'user-exact-deny',
-      source: 'user_override',
-      lifetime: 'persistent',
-      scope: 'action',
-    });
-  });
-
-  it('stores effective policy audit fields on invocations', async () => {
-    await upsertActionPolicy(db as any, {
-      id: 'org-service-allow',
-      service: 'gmail',
-      mode: 'allow',
-      createdBy: USER_ID,
-    });
-
-    await createInvocation(db as any, {
-      id: 'invocation-with-audit',
+    const result = await invokeAction(db as any, {
       sessionId: SESSION_ID,
       userId: USER_ID,
       service: 'gmail',
       actionId: 'draft.create',
       riskLevel: 'medium',
+    });
+
+    expect(result.outcome).toBe('allowed');
+    expect(result.matchedGrantId).toBe('session-grant');
+
+    const invocation = await getInvocation(db as any, result.invocationId);
+    expect(invocation).toMatchObject({
+      matchedPolicyId: 'org-require',
+      matchedGrantId: 'session-grant',
+      baseMode: 'require_approval',
+      baseSource: 'admin_policy',
+      policySource: 'runtime_grant',
+      policyScope: 'action',
       resolvedMode: 'allow',
       status: 'executed',
-      orgPolicyId: 'org-service-allow',
-      policyId: 'org-service-allow',
-      baseMode: 'require_approval',
-      baseSource: 'org_policy',
-      userOverrideId: null,
-      policySource: 'user_override',
-      policyLifetime: 'persistent',
-      policyScope: 'service',
+    });
+  });
+
+  it('invokeAction surfaces system-default require_approval as pending_approval when no grant matches', async () => {
+    const result = await invokeAction(db as any, {
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      service: 'gmail',
+      actionId: 'draft.create',
+      riskLevel: 'medium',
     });
 
-    const invocation = await getInvocation(db as any, 'invocation-with-audit');
+    expect(result.outcome).toBe('pending_approval');
+    expect(result.matchedGrantId).toBeNull();
 
+    const invocation = await getInvocation(db as any, result.invocationId);
     expect(invocation).toMatchObject({
-      id: 'invocation-with-audit',
-      orgPolicyId: 'org-service-allow',
-      policyId: 'org-service-allow',
       baseMode: 'require_approval',
-      baseSource: 'org_policy',
-      userOverrideId: null,
-      policySource: 'user_override',
-      policyLifetime: 'persistent',
-      policyScope: 'service',
+      baseSource: 'system_default',
+      policySource: 'system_default',
+      status: 'pending',
     });
   });
 
-  describe('invokeAction effective policy integration', () => {
-    it('auto-allows from a user override and stores base policy audit fields', async () => {
-      await upsertUserActionPolicyOverride(db as any, {
-        id: 'user-exact-allow',
-        userId: USER_ID,
-        service: 'gmail',
-        actionId: 'draft.create',
-        mode: 'allow',
-        lifetime: 'persistent',
-        source: 'settings',
-      });
+  // ── Terminal cleanup ───────────────────────────────────────────────────
 
-      const result = await invokeAction(db as any, {
+  describe('runtime grant cleanup on session terminal transition', () => {
+    it('removes only the matching session’s grants', async () => {
+      await upsertRuntimeGrant(db as any, {
+        id: 'session-grant',
+        userId: USER_ID,
         sessionId: SESSION_ID,
-        userId: USER_ID,
+        subjectType: 'tool_action',
         service: 'gmail',
         actionId: 'draft.create',
-        riskLevel: 'medium',
-        params: { to: 'customer@example.com' },
+        policyKey: `session:${SESSION_ID}:gmail.draft.create:`,
       });
-      const invocation = await getInvocation(db as any, result.invocationId);
-
-      expect(result).toMatchObject({
-        outcome: 'allowed',
-        mode: 'allow',
-        policyId: null,
-      });
-      expect(invocation).toMatchObject({
-        status: 'executed',
-        resolvedMode: 'allow',
-        baseMode: 'require_approval',
-        baseSource: 'system_default',
-        orgPolicyId: null,
-        userOverrideId: 'user-exact-allow',
-        policySource: 'user_override',
-        policyLifetime: 'persistent',
-        policyScope: 'action',
-      });
-    });
-
-    it('keeps explicit org deny effective even when user allow exists', async () => {
-      await upsertActionPolicy(db as any, {
-        id: 'org-exact-deny',
-        service: 'gmail',
-        actionId: 'draft.create',
-        mode: 'deny',
-        createdBy: USER_ID,
-      });
-      await upsertUserActionPolicyOverride(db as any, {
-        id: 'user-exact-allow',
+      await upsertRuntimeGrant(db as any, {
+        id: 'other-session-grant',
         userId: USER_ID,
-        service: 'gmail',
-        actionId: 'draft.create',
-        mode: 'allow',
-        lifetime: 'persistent',
-        source: 'settings',
-      });
-
-      const result = await invokeAction(db as any, {
-        sessionId: SESSION_ID,
-        userId: USER_ID,
-        service: 'gmail',
-        actionId: 'draft.create',
-        riskLevel: 'medium',
-      });
-      const invocation = await getInvocation(db as any, result.invocationId);
-
-      expect(result).toMatchObject({
-        outcome: 'denied',
-        mode: 'deny',
-        policyId: 'org-exact-deny',
-      });
-      expect(invocation).toMatchObject({
-        status: 'denied',
-        resolvedMode: 'deny',
-        baseMode: 'deny',
-        baseSource: 'org_policy',
-        orgPolicyId: 'org-exact-deny',
-        userOverrideId: null,
-        policySource: 'org_policy',
-        policyLifetime: null,
-        policyScope: 'action',
-      });
-    });
-
-    it('records session override source and lifetime on auto-allowed invocations', async () => {
-      await upsertUserActionPolicyOverride(db as any, {
-        id: 'user-session-allow',
-        userId: USER_ID,
-        service: 'gmail',
-        actionId: 'draft.create',
-        mode: 'allow',
-        lifetime: 'session',
-        sessionId: SESSION_ID,
-        source: 'approval_prompt',
-      });
-
-      const result = await invokeAction(db as any, {
-        sessionId: SESSION_ID,
-        userId: USER_ID,
-        service: 'gmail',
-        actionId: 'draft.create',
-        riskLevel: 'high',
-      });
-      const invocation = await getInvocation(db as any, result.invocationId);
-
-      expect(result).toMatchObject({
-        outcome: 'allowed',
-        mode: 'allow',
-      });
-      expect(invocation).toMatchObject({
-        status: 'executed',
-        resolvedMode: 'allow',
-        baseMode: 'require_approval',
-        baseSource: 'system_default',
-        userOverrideId: 'user-session-allow',
-        policySource: 'session_override',
-        policyLifetime: 'session',
-        policyScope: 'action',
-      });
-    });
-  });
-
-  describe('session override deletion', () => {
-    it('deletes only matching session-scoped overrides when a session reaches terminal status', async () => {
-      await upsertUserActionPolicyOverride(db as any, {
-        id: 'session-override',
-        userId: USER_ID,
-        service: 'gmail',
-        actionId: 'draft.create',
-        mode: 'allow',
-        lifetime: 'session',
-        sessionId: SESSION_ID,
-        source: 'approval_prompt',
-      });
-      await upsertUserActionPolicyOverride(db as any, {
-        id: 'other-session-override',
-        userId: USER_ID,
+        sessionId: OTHER_SESSION_ID,
+        subjectType: 'tool_action',
         service: 'linear',
         actionId: 'issue.create',
-        mode: 'allow',
-        lifetime: 'session',
-        sessionId: OTHER_SESSION_ID,
-        source: 'approval_prompt',
+        policyKey: `session:${OTHER_SESSION_ID}:linear.issue.create:`,
       });
-      await upsertUserActionPolicyOverride(db as any, {
-        id: 'persistent-override',
-        userId: USER_ID,
+      await upsertActionPolicy(db as any, {
+        id: 'persistent-grant',
         service: 'gmail',
-        mode: 'deny',
-        lifetime: 'persistent',
-        source: 'settings',
+        mode: 'allow',
+        managedBy: 'user',
+        principalType: 'user',
+        principalId: USER_ID,
+        subjectType: 'tool_action',
+        createdBy: USER_ID,
       });
 
       await updateSessionStatus(db as any, SESSION_ID, 'terminated');
 
-      const deleted = await getUserActionPolicyOverride(db as any, 'session-override');
-      const otherSession = await getUserActionPolicyOverride(db as any, 'other-session-override');
-      const persistent = await getUserActionPolicyOverride(db as any, 'persistent-override');
-
-      expect(deleted).toBeUndefined();
-      expect(otherSession).toBeDefined();
-      expect(persistent).toBeDefined();
+      expect(await getRuntimeGrant(db as any, 'session-grant')).toBeUndefined();
+      expect(await getRuntimeGrant(db as any, 'other-session-grant')).toBeDefined();
+      expect(await getActionPolicy(db as any, 'persistent-grant')).toBeDefined();
     });
 
-    it('deletes session-scoped overrides when a session hibernates', async () => {
-      await upsertUserActionPolicyOverride(db as any, {
-        id: 'hibernating-session-override',
+    it('removes runtime grants when a session hibernates', async () => {
+      await upsertRuntimeGrant(db as any, {
+        id: 'hibernating-session-grant',
         userId: USER_ID,
+        sessionId: SESSION_ID,
+        subjectType: 'tool_action',
         service: 'gmail',
         actionId: 'draft.create',
-        mode: 'allow',
-        lifetime: 'session',
-        sessionId: SESSION_ID,
-        source: 'approval_prompt',
+        policyKey: `session:${SESSION_ID}:gmail.draft.create:`,
       });
 
       await updateSessionStatus(db as any, SESSION_ID, 'hibernated');
 
-      const deleted = await getUserActionPolicyOverride(db as any, 'hibernating-session-override');
-      expect(deleted).toBeUndefined();
+      expect(await getRuntimeGrant(db as any, 'hibernating-session-grant')).toBeUndefined();
     });
+  });
+
+  // ── Listing ────────────────────────────────────────────────────────────
+
+  it('listUserDurableActionPolicies returns only this user’s durable grants', async () => {
+    await upsertActionPolicy(db as any, {
+      id: 'mine',
+      service: 'gmail',
+      mode: 'allow',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: USER_ID,
+      subjectType: 'tool_action',
+      createdBy: USER_ID,
+    });
+    await upsertActionPolicy(db as any, {
+      id: 'theirs',
+      service: 'linear',
+      mode: 'allow',
+      managedBy: 'user',
+      principalType: 'user',
+      principalId: OTHER_USER_ID,
+      subjectType: 'tool_action',
+      createdBy: OTHER_USER_ID,
+    });
+    await upsertActionPolicy(db as any, {
+      id: 'admin-row',
+      service: 'gmail',
+      mode: 'require_approval',
+      createdBy: USER_ID,
+    });
+
+    const rows = await listUserDurableActionPolicies(db as any, USER_ID);
+    const ids = rows.map((r: { id: string }) => r.id);
+    expect(ids).toContain('mine');
+    expect(ids).not.toContain('theirs');
+    expect(ids).not.toContain('admin-row');
   });
 });

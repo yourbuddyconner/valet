@@ -153,27 +153,29 @@ function PersonaCard({
           </span>
         )}
 
-        {canEdit && (
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={onEdit}>
-              Edit
-            </Button>
-            {isConfirmingDelete ? (
-              <>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={onEdit}>
+            {canEdit ? 'Edit' : 'View'}
+          </Button>
+          {canEdit && (
+            <>
+              {isConfirmingDelete ? (
+                <>
+                  <Button variant="secondary" onClick={onDelete}>
+                    Confirm
+                  </Button>
+                  <Button variant="secondary" onClick={onCancelDelete}>
+                    Cancel
+                  </Button>
+                </>
+              ) : (
                 <Button variant="secondary" onClick={onDelete}>
-                  Confirm
+                  Delete
                 </Button>
-                <Button variant="secondary" onClick={onCancelDelete}>
-                  Cancel
-                </Button>
-              </>
-            ) : (
-              <Button variant="secondary" onClick={onDelete}>
-                Delete
-              </Button>
-            )}
-          </div>
-        )}
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -18,44 +18,6 @@ export interface PromptAttachment {
   filename?: string;
 }
 
-/** Individual step in a workflow execution result */
-export interface WorkflowRunResultStep {
-  stepId: string;
-  status: string;
-  attempt?: number;
-  startedAt?: string;
-  completedAt?: string;
-  input?: unknown;
-  output?: unknown;
-  error?: string;
-}
-
-/** Envelope returned from workflow execution */
-export interface WorkflowRunResultEnvelope {
-  ok: boolean;
-  status: 'ok' | 'needs_approval' | 'cancelled' | 'failed';
-  executionId: string;
-  output?: Record<string, unknown>;
-  steps?: WorkflowRunResultStep[];
-  requiresApproval?: null | {
-    stepId: string;
-    prompt: string;
-    items: unknown[];
-    resumeToken: string;
-  };
-  error?: string | null;
-}
-
-/** Payload for dispatching workflow execution to runner */
-export interface WorkflowExecutionDispatchPayload {
-  kind: 'run' | 'resume';
-  executionId: string;
-  workflowHash?: string;
-  resumeToken?: string;
-  decision?: 'approve' | 'deny';
-  payload: Record<string, unknown>;
-}
-
 /** Tool call status values */
 export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 
@@ -106,6 +68,10 @@ export type DOToRunnerMessage =
       channelType?: string;
       channelId?: string;
       threadId?: string;
+      /** W3C traceparent of the originating turn's Worker/DO span, injected at dispatch so the
+       *  runner can emit child spans on the same trace and the DO can parent the runner's reply
+       *  spans to it (see SessionAgentDO.sendPrompt / resolveTurnParent). */
+      traceparent?: string;
       /** Original channel info before thread normalization (e.g., slack:D123:threadTs).
        *  Used by the Runner for the [via ...] attribution prefix so the agent knows
        *  which external channel to reply to even when channelType is 'thread'. */
@@ -197,19 +163,6 @@ export type DOToRunnerMessage =
       ref?: string;
       error?: string;
     }
-  | { type: 'workflow-list-result'; requestId: string; workflows?: unknown[]; error?: string }
-  | {
-      type: 'workflow-sync-result';
-      requestId: string;
-      success?: boolean;
-      workflow?: unknown;
-      error?: string;
-    }
-  | { type: 'workflow-run-result'; requestId: string; execution?: unknown; error?: string }
-  | { type: 'workflow-executions-result'; requestId: string; executions?: unknown[]; error?: string }
-  | { type: 'workflow-api-result'; requestId: string; data?: unknown; error?: string }
-  | { type: 'trigger-api-result'; requestId: string; data?: unknown; error?: string }
-  | { type: 'execution-api-result'; requestId: string; data?: unknown; error?: string }
   | { type: 'mailbox-send-result'; requestId: string; messageId?: string; error?: string }
   | { type: 'mailbox-check-result'; requestId: string; messages?: unknown[]; error?: string }
   | { type: 'task-create-result'; requestId: string; task?: unknown; error?: string }
@@ -217,13 +170,6 @@ export type DOToRunnerMessage =
   | { type: 'task-update-result'; requestId: string; task?: unknown; error?: string }
   | { type: 'task-my-result'; requestId: string; tasks?: unknown[]; error?: string }
   | { type: 'channel-reply-result'; requestId: string; success?: boolean; error?: string }
-  | {
-      type: 'workflow-execute';
-      executionId: string;
-      model?: string;
-      modelPreferences?: string[];
-      payload: WorkflowExecutionDispatchPayload;
-    }
   | {
       type: 'list-tools-result';
       requestId: string;
@@ -317,15 +263,6 @@ export type DOToRunnerMessage =
 
 /** Messages sent from the Runner process to the SessionAgent DO */
 export type RunnerToDOMessage =
-  | {
-      type: 'workflow-chat-message';
-      role: 'user' | 'assistant' | 'system';
-      content: string;
-      parts?: Record<string, unknown>;
-      channelType?: string;
-      channelId?: string;
-      opencodeSessionId?: string;
-    }
   | { type: 'question'; messageId?: string; questionId: string; text: string; options?: string[] }
   | { type: 'image'; messageId?: string; data: string; mimeType: string; description: string }
   | { type: 'screenshot'; messageId?: string; data: string; description: string }
@@ -368,7 +305,7 @@ export type RunnerToDOMessage =
     }
   | { type: 'git-state'; branch?: string; baseBranch?: string; commitCount?: number }
   | { type: 'models'; models: AvailableModels }
-  | { type: 'aborted'; messageId?: string }
+  | { type: 'aborted'; messageId?: string; channelType?: string; channelId?: string }
   | { type: 'wait-subscription'; reason?: string; sessionIds?: string[]; notifyOn?: string; statuses?: string[] }
   | { type: 'reverted'; messageIds: string[] }
   | { type: 'diff'; requestId: string; data: { files: DiffFile[] } }
@@ -459,51 +396,6 @@ export type RunnerToDOMessage =
       path: string;
       ref?: string;
     }
-  | { type: 'workflow-list'; requestId: string }
-  | {
-      type: 'workflow-sync';
-      requestId: string;
-      id?: string;
-      slug?: string;
-      name: string;
-      description?: string;
-      version?: string;
-      data: Record<string, unknown>;
-    }
-  | {
-      type: 'workflow-run';
-      requestId: string;
-      workflowId: string;
-      variables?: Record<string, unknown>;
-      repoUrl?: string;
-      branch?: string;
-      ref?: string;
-      sourceRepoFullName?: string;
-    }
-  | { type: 'workflow-executions'; requestId: string; workflowId?: string; limit?: number }
-  | {
-      type: 'workflow-api';
-      requestId: string;
-      action: string;
-      payload?: Record<string, unknown>;
-    }
-  | {
-      type: 'trigger-api';
-      requestId: string;
-      action: string;
-      payload?: Record<string, unknown>;
-    }
-  | {
-      type: 'execution-api';
-      requestId: string;
-      action: string;
-      payload?: Record<string, unknown>;
-    }
-  | {
-      type: 'workflow-execution-result';
-      executionId: string;
-      envelope: WorkflowRunResultEnvelope;
-    }
   | {
       type: 'model-switched';
       messageId: string;
@@ -575,6 +467,12 @@ export type RunnerToDOMessage =
       toolId: string;
       params: Record<string, unknown>;
       summary?: string;
+      /** OpenCode session ID the calling agent is running in. Lets the DO
+       *  resolve the originating channel deterministically — without it the
+       *  DO has to guess via "most recent processing row" and routes
+       *  approvals to the wrong channel under cross-thread concurrent
+       *  dispatch (TKAI-65). */
+      opencodeSessionId?: string;
     }
   | {
       type: 'skill-api';
@@ -648,11 +546,20 @@ export type RunnerToDOMessage =
   | {
       type: 'usage-report';
       turnId: string;
+      // Raw OpenCode token breakdown per message. Each entry mirrors the
+      // `tokens` shape OpenCode returns (input, output, reasoning, cache.read,
+      // cache.write). The DO persists each bucket verbatim into
+      // analytics_events; consumers compose billable totals as:
+      //   billable input  = inputTokens + cacheReadTokens + cacheWriteTokens
+      //   billable output = outputTokens + reasoningTokens
       entries: Array<{
         ocMessageId: string;
         model: string;
         inputTokens: number;
         outputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens: number;
+        reasoningTokens: number;
       }>;
     }
   | {

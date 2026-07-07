@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
-import type { ActionPolicyOverride } from '@valet/shared';
+import type { ActionPolicyOverride, ParamMatcher } from '@valet/shared';
 
 export const actionPolicyOverrideKeys = {
   all: ['action-policy-overrides'] as const,
@@ -24,6 +24,8 @@ export function useUpsertActionPolicyOverride() {
       actionId?: string | null;
       riskLevel?: string | null;
       mode: string;
+      appliesIn?: 'any' | 'workflow' | 'session';
+      paramMatchers?: ParamMatcher[];
     }) => api.put<{ ok: boolean; id: string }>(`/action-policy-overrides/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: actionPolicyOverrideKeys.list() });

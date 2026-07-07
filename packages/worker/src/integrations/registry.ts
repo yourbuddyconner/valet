@@ -12,6 +12,7 @@ import { installedIntegrations } from './packages.js';
 import { defaultCredentialResolver } from './resolvers/default.js';
 import { slackCredentialResolver } from './resolvers/slack.js';
 import { githubCredentialResolver } from './resolvers/github.js';
+import { workflowIntegrationPackage } from './workflows-actions.js';
 
 export type { CustomMcpConnectorContext } from '../services/custom-mcp-connectors.js';
 
@@ -43,6 +44,7 @@ export class IntegrationRegistry {
     for (const pkg of installedIntegrations) {
       this.packages.set(pkg.service, pkg);
     }
+    this.packages.set(workflowIntegrationPackage.service, workflowIntegrationPackage);
 
     // Register custom credential resolvers
     this.credentialResolvers.set('slack', slackCredentialResolver);
@@ -76,9 +78,12 @@ export class IntegrationRegistry {
     return new McpActionSource({
       mcpUrl: connector.serverUrl,
       serviceName: connector.serviceSlug,
-      noAuth: connector.authType !== 'oauth',
+      noAuth: !requiresUserCredential(connector),
+      authQueryParam: connector.authQueryParam,
+      tokenAuthHeader: connector.tokenAuthHeader,
       additionalHeaders: connector.additionalHeaders,
       staticAuthHeader: connector.staticAuthHeader,
+      staticAuthQueryParam: connector.staticAuthQueryParam,
       fetch: customContext.fetch,
     });
   }
@@ -132,8 +137,14 @@ function buildCustomProvider(connector: ResolvedCustomMcpConnector): Integration
     oauthScopes: connector.oauthScopes?.split(/\s+/).filter(Boolean) ?? undefined,
     mcpServerUrl: connector.serverUrl,
     isCustomConnector: true,
+    credentialScope: connector.credentialScope,
     validateCredentials(credentials) {
-      if (connector.authType !== 'oauth') return true;
+      if (connector.authType === 'none') return true;
+      if (connector.authType === 'api_key' || connector.authType === 'bearer') {
+        return connector.credentialScope === 'org'
+          || typeof credentials.access_token === 'string' && credentials.access_token.length > 0
+          || typeof credentials.api_key === 'string' && credentials.api_key.length > 0;
+      }
       return typeof credentials.access_token === 'string' && credentials.access_token.length > 0;
     },
     async testConnection() {
@@ -146,4 +157,10 @@ function mapCustomAuthType(authType: ResolvedCustomMcpConnector['authType']): In
   if (authType === 'none') return 'none';
   if (authType === 'oauth') return 'oauth2';
   return 'api_key';
+}
+
+function requiresUserCredential(connector: ResolvedCustomMcpConnector): boolean {
+  if (connector.authType === 'none') return false;
+  if (connector.authType === 'oauth') return true;
+  return connector.credentialScope === 'user';
 }

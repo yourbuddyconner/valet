@@ -20,7 +20,6 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',
   google: 'Google',
-  parallel: 'Parallel',
 };
 
 /** Built-in providers that can be configured via env vars (Worker secrets). */
@@ -28,7 +27,6 @@ const PROVIDER_ENV_KEYS: Array<{ provider: string; envKey: keyof Env }> = [
   { provider: 'anthropic', envKey: 'ANTHROPIC_API_KEY' },
   { provider: 'openai', envKey: 'OPENAI_API_KEY' },
   { provider: 'google', envKey: 'GOOGLE_API_KEY' },
-  { provider: 'parallel', envKey: 'PARALLEL_API_KEY' },
 ];
 
 /** Shape of a single model entry from models.dev/api.json */

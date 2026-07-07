@@ -1,12 +1,43 @@
 import * as React from 'react';
-import { useWorkflows } from '@/api/workflows';
-import { WorkflowCard } from './workflow-card';
+import { Link, useNavigate } from '@tanstack/react-router';
+import {
+  useCreateWorkflow,
+  useDeleteWorkflow,
+  useWorkflows,
+  type Workflow,
+} from '@/api/workflows';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SearchInput } from '@/components/ui/search-input';
+import { toastError, toastSuccess } from '@/hooks/use-toast';
+import { formatRelativeTime, slugify } from '@/lib/format';
+import { getWorkflowDeleteDialogCopy, getWorkflowRowBadges } from './workflow-list-model';
 
 export function WorkflowList() {
   const [search, setSearch] = React.useState('');
   const { data, isLoading, error } = useWorkflows();
+  const deleteWorkflow = useDeleteWorkflow();
+  const [deleteTarget, setDeleteTarget] = React.useState<Workflow | null>(null);
 
   const workflows = data?.workflows ?? [];
 
@@ -21,6 +52,18 @@ export function WorkflowList() {
       return nameMatch || descMatch || slugMatch;
     });
   }, [workflows, search]);
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return;
+
+    try {
+      await deleteWorkflow.mutateAsync(deleteTarget.id);
+      toastSuccess('Workflow deleted', `${deleteTarget.name} was removed.`);
+      setDeleteTarget(null);
+    } catch (err) {
+      toastError('Failed to delete workflow', err instanceof Error ? err.message : 'Delete failed');
+    }
+  }
 
   if (isLoading) {
     return <WorkflowListSkeleton />;
@@ -38,6 +81,16 @@ export function WorkflowList() {
 
   return (
     <div className="space-y-4">
+      <WorkflowDeleteDialog
+        workflow={deleteTarget}
+        open={Boolean(deleteTarget)}
+        isDeleting={deleteWorkflow.isPending}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        onConfirm={handleConfirmDelete}
+      />
+
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="w-full sm:max-w-xs">
           <SearchInput
@@ -46,28 +99,11 @@ export function WorkflowList() {
             placeholder="Search workflows..."
           />
         </div>
+        <CreateWorkflowDialog />
       </div>
 
       {workflows.length === 0 ? (
-        <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-700">
-            <WorkflowIcon className="size-6 text-neutral-400" />
-          </div>
-          <h3 className="text-sm font-medium text-balance text-neutral-900 dark:text-neutral-100">
-            No workflows yet
-          </h3>
-          <p className="mt-1 text-sm text-pretty text-neutral-500 dark:text-neutral-400">
-            Create a workflow with the agent using{' '}
-            <code className="rounded bg-neutral-100 px-1 py-0.5 text-xs dark:bg-neutral-700">
-              sync_workflow
-            </code>{' '}
-            or add one in your{' '}
-            <code className="rounded bg-neutral-100 px-1 py-0.5 text-xs dark:bg-neutral-700">
-              .opencode/workflows/
-            </code>{' '}
-            directory to get started.
-          </p>
-        </div>
+        <EmptyState />
       ) : filteredWorkflows.length === 0 ? (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
           <p className="text-sm text-pretty text-neutral-500 dark:text-neutral-400">
@@ -75,56 +111,324 @@ export function WorkflowList() {
           </p>
         </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <ul className="divide-y divide-neutral-200 overflow-hidden rounded-lg border border-neutral-200 bg-white dark:divide-neutral-700 dark:border-neutral-700 dark:bg-neutral-800">
           {filteredWorkflows.map((workflow) => (
-            <WorkflowCard key={workflow.id} workflow={workflow} />
+            <WorkflowRow
+              key={workflow.id}
+              workflow={workflow}
+              onRequestDelete={setDeleteTarget}
+            />
           ))}
-        </div>
+        </ul>
       )}
+    </div>
+  );
+}
+
+function WorkflowDeleteDialog({
+  workflow,
+  open,
+  isDeleting,
+  onOpenChange,
+  onConfirm,
+}: {
+  workflow: Workflow | null;
+  open: boolean;
+  isDeleting: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const copy = getWorkflowDeleteDialogCopy(workflow?.name ?? 'this workflow');
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{copy.title}</AlertDialogTitle>
+          <AlertDialogDescription>{copy.description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(event) => {
+              event.preventDefault();
+              void onConfirm();
+            }}
+            disabled={isDeleting}
+            className="bg-red-600 text-white hover:bg-red-700"
+          >
+            {isDeleting ? 'Deleting…' : 'Delete'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function CreateWorkflowDialog() {
+  const navigate = useNavigate();
+  const createWorkflow = useCreateWorkflow();
+  // React Query dedupes — this shares the cached list with the parent page.
+  // isLoading is needed so we don't render misleading "no duplicates" hints
+  // (and a green submit button) while the list is still in flight.
+  const workflowsQuery = useWorkflows();
+  const existingWorkflows = workflowsQuery.data?.workflows ?? [];
+  const workflowsLoading = workflowsQuery.isLoading;
+  const [open, setOpen] = React.useState(false);
+  const [name, setName] = React.useState('');
+  const [description, setDescription] = React.useState('');
+  const [slug, setSlug] = React.useState('');
+  // Auto-derive slug from name until the user manually edits the slug
+  // field. After that the slug is theirs and we stop syncing.
+  const [slugTouched, setSlugTouched] = React.useState(false);
+
+  const trimmedName = name.trim();
+  const duplicateName = React.useMemo(() => {
+    if (!trimmedName) return false;
+    const lower = trimmedName.toLowerCase();
+    return existingWorkflows.some((wf) => wf.name.trim().toLowerCase() === lower);
+  }, [existingWorkflows, trimmedName]);
+  const duplicateSlug = React.useMemo(() => {
+    const s = slug.trim();
+    if (!s) return false;
+    return existingWorkflows.some((wf) => wf.slug?.trim().toLowerCase() === s.toLowerCase());
+  }, [existingWorkflows, slug]);
+
+  function reset() {
+    setName('');
+    setDescription('');
+    setSlug('');
+    setSlugTouched(false);
+  }
+
+  function handleNameChange(value: string) {
+    setName(value);
+    if (!slugTouched) {
+      setSlug(slugify(value));
+    }
+  }
+
+  function handleSlugChange(value: string) {
+    setSlug(value);
+    setSlugTouched(true);
+  }
+
+  function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    createWorkflow.mutate(
+      {
+        name: trimmedName,
+        ...(description.trim() ? { description: description.trim() } : {}),
+        ...(slug.trim() ? { slug: slug.trim() } : {}),
+      },
+      {
+        onSuccess: (response) => {
+          toastSuccess('Workflow created');
+          reset();
+          setOpen(false);
+          navigate({
+            to: '/workflows/$workflowId',
+            params: { workflowId: response.workflow.id },
+          });
+        },
+        onError: (err) => {
+          toastError(err instanceof Error ? err.message : 'Failed to create workflow');
+        },
+      },
+    );
+  }
+
+  return (
+    <>
+      <Button type="button" onClick={() => setOpen(true)}>
+        New workflow
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>Create workflow</DialogTitle>
+              <DialogDescription>
+                Start with a blank dag/v1 canvas and configure nodes visually.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Name
+                </span>
+                <Input
+                  value={name}
+                  onChange={(event) => handleNameChange(event.target.value)}
+                  placeholder="Daily triage"
+                  autoFocus
+                />
+                {duplicateName && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    A workflow with this name already exists. You can still proceed —
+                    the slug below is what uniquely identifies it.
+                  </p>
+                )}
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Description
+                </span>
+                <Input
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  placeholder="Optional"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Slug
+                </span>
+                <Input
+                  value={slug}
+                  onChange={(event) => handleSlugChange(event.target.value)}
+                  placeholder="daily-triage"
+                  aria-invalid={duplicateSlug || undefined}
+                />
+                {duplicateSlug ? (
+                  <p className="text-[11px] text-red-600 dark:text-red-400">
+                    Slug already taken. Pick a different one.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                    Used in URLs and API calls. Must be unique.
+                  </p>
+                )}
+              </label>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  !name.trim()
+                  || duplicateSlug
+                  || workflowsLoading
+                  || createWorkflow.isPending
+                }
+              >
+                {createWorkflow.isPending ? 'Creating...' : workflowsLoading ? 'Loading…' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function WorkflowRow({
+  workflow,
+  onRequestDelete,
+}: {
+  workflow: Workflow;
+  onRequestDelete: (workflow: Workflow) => void;
+}) {
+  // Source of truth: workflows.published_version_id. The list endpoint
+  // returns the latest published definition under `data` even for
+  // unpublished rows (workflows.data is the /sync write surface), so
+  // checking data alone would mislabel every workflow as Published.
+  const badges = getWorkflowRowBadges({
+    publishedVersionId: workflow.publishedVersionId,
+    enabled: workflow.enabled,
+  });
+
+  return (
+    <li className="flex items-start gap-4 p-4 hover:bg-neutral-50 dark:hover:bg-neutral-700/50">
+      <Link
+        to="/workflows/$workflowId"
+        params={{ workflowId: workflow.id }}
+        className="min-w-0 flex-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
+              {workflow.name}
+            </span>
+            {badges.map((badge) => (
+              <Badge key={badge.label} variant={badge.variant}>
+                {badge.label}
+              </Badge>
+            ))}
+          </div>
+          {workflow.description && (
+            <p className="mt-1 line-clamp-2 text-xs text-pretty text-neutral-500 dark:text-neutral-400">
+              {workflow.description}
+            </p>
+          )}
+          {workflow.slug && (
+            <code className="mt-1 block truncate text-xs text-neutral-400">
+              {workflow.slug}
+            </code>
+          )}
+        </div>
+      </Link>
+      <div className="flex shrink-0 items-start gap-3">
+        <div className="hidden text-right text-xs tabular-nums text-neutral-500 dark:text-neutral-400 sm:block">
+          <div>v{workflow.version}</div>
+          <div>{formatRelativeTime(workflow.updatedAt)}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" asChild>
+            <Link to="/workflows/$workflowId" params={{ workflowId: workflow.id }}>
+              Open
+            </Link>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onRequestDelete(workflow)}
+            className="text-neutral-500 hover:bg-red-50 hover:text-red-600 dark:text-neutral-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
+          >
+            Delete
+          </Button>
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
+      <h3 className="text-sm font-medium text-balance text-neutral-900 dark:text-neutral-100">
+        No workflows yet
+      </h3>
+      <p className="mt-1 text-sm text-pretty text-neutral-500 dark:text-neutral-400">
+        Create a workflow to open the canvas editor, then publish it when it is ready for triggers.
+      </p>
+      <div className="mt-4 flex justify-center">
+        <CreateWorkflowDialog />
+      </div>
     </div>
   );
 }
 
 function WorkflowListSkeleton() {
   return (
-    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div
-          key={i}
-          className="rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-800"
-        >
-          <div className="flex items-start justify-between">
-            <Skeleton className="h-5 w-32" />
-            <Skeleton className="h-5 w-16" />
+    <ul className="divide-y divide-neutral-200 overflow-hidden rounded-lg border border-neutral-200 bg-white dark:divide-neutral-700 dark:border-neutral-700 dark:bg-neutral-800">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <li key={i} className="p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-3 w-48" />
+            </div>
+            <Skeleton className="h-3 w-16" />
           </div>
-          <Skeleton className="mt-2 h-4 w-48" />
-          <div className="mt-4 flex items-center justify-between">
-            <Skeleton className="h-4 w-24" />
-            <Skeleton className="h-4 w-20" />
-          </div>
-        </div>
+        </li>
       ))}
-    </div>
-  );
-}
-
-function WorkflowIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
-      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-      <path d="m9 14 2 2 4-4" />
-    </svg>
+    </ul>
   );
 }

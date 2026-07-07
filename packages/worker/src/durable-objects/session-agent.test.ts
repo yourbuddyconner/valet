@@ -3,8 +3,14 @@ import { ACTION_APPROVAL_EXPIRY_MS, SessionAgentDO, buildActionApprovalPromptAct
 import { createTestDb } from '../test-utils/db.js';
 import { sessions } from '../lib/schema/sessions.js';
 import { users } from '../lib/schema/users.js';
-import { createInvocation, getInvocation, getUserActionPolicyOverride, upsertActionPolicy } from '../lib/db/actions.js';
+import { userIdentityLinks } from '../lib/schema/channels.js';
+import { workflows, workflowExecutions } from '../lib/schema/workflows.js';
+import { createInvocation, getActionPolicy, getInvocation, getRuntimeGrant, upsertActionPolicy } from '../lib/db/actions.js';
+import type { InteractivePrompt } from '@valet/sdk';
 import * as sessionTools from '../services/session-tools.js';
+import * as channelsDb from '../lib/db/channels.js';
+import * as channelThreadsDb from '../lib/db/channel-threads.js';
+import * as slackDb from '../lib/db/slack.js';
 
 interface QueueRow {
   id: string;
@@ -30,6 +36,9 @@ interface QueueRow {
   child_session_id: string | null;
   child_status: string | null;
   priority: number;
+  replaceable: number;
+  received_at: number | null;
+  dispatched_at: number | null;
   created_at: number;
 }
 
@@ -63,13 +72,13 @@ function createMockSql(): SqlStorage & {
   state: Map<string, string>;
   interactivePrompts: Map<string, InteractivePromptRow>;
   messages: Map<string, Record<string, unknown>>;
-  channelState: Map<string, { busy: number; opencode_session_id: string | null }>;
+  channelState: Map<string, { busy: number; opencode_session_id: string | null; idle_queued_since: number | null; error_safety_net_at: number | null }>;
 } {
   const queue = new Map<string, QueueRow>();
   const state = new Map<string, string>();
   const interactivePrompts = new Map<string, InteractivePromptRow>();
   const messages = new Map<string, Record<string, unknown>>();
-  const channelState = new Map<string, { busy: number; opencode_session_id: string | null }>();
+  const channelState = new Map<string, { busy: number; opencode_session_id: string | null; idle_queued_since: number | null; error_safety_net_at: number | null }>();
   insertCounter = 0;
 
   return {
@@ -87,24 +96,28 @@ function createMockSql(): SqlStorage & {
 
       if (q.startsWith('INSERT INTO channel_state')) {
         const channelKey = String(params[0]);
-        const existing = channelState.get(channelKey);
-        // Distinguish between the two INSERT patterns by checking the column list:
-        // 1. (channel_key, busy, opencode_session_id) — setChannelOcSessionId, params[1] = oc session id
-        // 2. (channel_key, busy) — setChannelBusy, params[1] = busy flag
+        const existing = channelState.get(channelKey) ?? {
+          busy: 0,
+          opencode_session_id: null,
+          idle_queued_since: null,
+          error_safety_net_at: null,
+        };
+        // Distinguish between the four INSERT patterns by checking the column list.
         if (q.includes('opencode_session_id')) {
           const opencodeSessionId = params[1] === undefined || params[1] === null
             ? null
             : String(params[1]);
-          channelState.set(channelKey, {
-            busy: existing?.busy ?? 0,
-            opencode_session_id: opencodeSessionId,
-          });
+          channelState.set(channelKey, { ...existing, opencode_session_id: opencodeSessionId });
+        } else if (q.includes('idle_queued_since')) {
+          const ms = params[1] === undefined || params[1] === null ? null : Number(params[1]);
+          channelState.set(channelKey, { ...existing, idle_queued_since: ms });
+        } else if (q.includes('error_safety_net_at')) {
+          const ms = params[1] === undefined || params[1] === null ? null : Number(params[1]);
+          channelState.set(channelKey, { ...existing, error_safety_net_at: ms });
         } else {
+          // Default: (channel_key, busy) — setChannelBusy
           const busy = Number(params[1]) || 0;
-          channelState.set(channelKey, {
-            busy,
-            opencode_session_id: existing?.opencode_session_id ?? null,
-          });
+          channelState.set(channelKey, { ...existing, busy });
         }
         return cursor([]);
       }
@@ -117,10 +130,48 @@ function createMockSql(): SqlStorage & {
         return cursor([]);
       }
 
+      if (q.startsWith('UPDATE channel_state SET idle_queued_since')) {
+        for (const [key, val] of channelState) {
+          channelState.set(key, { ...val, idle_queued_since: null });
+        }
+        return cursor([]);
+      }
+
+      if (q.startsWith('UPDATE channel_state SET error_safety_net_at')) {
+        for (const [key, val] of channelState) {
+          channelState.set(key, { ...val, error_safety_net_at: null });
+        }
+        return cursor([]);
+      }
+
       if (q.startsWith('SELECT') && q.includes('FROM channel_state')) {
         if (q.includes('WHERE busy = 1')) {
           const busy = Array.from(channelState.entries()).find(([, row]) => row.busy === 1);
           return busy === undefined ? cursor([]) : cursor([{ channel_key: busy[0] }]);
+        }
+        if (q.includes('error_safety_net_at IS NOT NULL')) {
+          const rows = Array.from(channelState.entries())
+            .filter(([, r]) => r.error_safety_net_at !== null)
+            .map(([k, r]) => ({ channel_key: k, error_safety_net_at: r.error_safety_net_at }));
+          rows.sort((a, b) => (a.error_safety_net_at ?? 0) - (b.error_safety_net_at ?? 0));
+          return cursor(rows.slice(0, 1));
+        }
+        if (q.includes('idle_queued_since IS NOT NULL')) {
+          const rows = Array.from(channelState.entries())
+            .filter(([, r]) => r.idle_queued_since !== null)
+            .map(([k, r]) => ({ channel_key: k, idle_queued_since: r.idle_queued_since }));
+          rows.sort((a, b) => (a.idle_queued_since ?? 0) - (b.idle_queued_since ?? 0));
+          return cursor(rows.slice(0, 1));
+        }
+        // Reverse lookup by opencode_session_id — used by getChannelKeyByOcSessionId
+        // to route call-tool approvals back to the originating thread.
+        if (q.includes('opencode_session_id = ?')) {
+          const ocSessionId = String(params[0]);
+          const found = Array.from(channelState.entries())
+            .find(([, r]) => r.opencode_session_id === ocSessionId);
+          return found
+            ? cursor([{ channel_key: found[0] }])
+            : cursor([]);
         }
         const channelKey = String(params[0]);
         const row = channelState.get(channelKey);
@@ -165,38 +216,85 @@ function createMockSql(): SqlStorage & {
 
       if (q.startsWith('INSERT INTO prompt_queue')) {
         insertCounter += 1;
-        const row: QueueRow = {
-          id: String(params[0] ?? ''),
-          content: String(params[1] ?? ''),
-          attachments: (params[2] as string) || null,
-          model: (params[3] as string) || null,
-          queue_type: 'prompt',
-          workflow_execution_id: null,
-          workflow_payload: null,
-          status: String(params[4] ?? 'queued'),
-          author_id: (params[5] as string) || null,
-          author_email: (params[6] as string) || null,
-          author_name: (params[7] as string) || null,
-          author_avatar_url: (params[8] as string) || null,
-          channel_type: (params[9] as string) || null,
-          channel_id: (params[10] as string) || null,
-          channel_key: (params[11] as string) || null,
-          thread_id: (params[12] as string) || null,
-          continuation_context: (params[13] as string) || null,
-          context_prefix: (params[14] as string) || null,
-          reply_channel_type: (params[15] as string) || null,
-          reply_channel_id: (params[16] as string) || null,
-          child_session_id: (params[17] as string) || null,
-          child_status: (params[18] as string) || null,
-          priority: typeof params[19] === 'number' ? params[19] : 0,
-          created_at: insertCounter,
-        };
+        let row: QueueRow;
+        if (q.includes("'workflow_execute'")) {
+          // Workflow-execute insert: (id, content, queue_type, workflow_execution_id, workflow_payload, status)
+          // params: [id, workflowExecutionId, workflowPayload, status]
+          row = {
+            id: String(params[0] ?? ''),
+            content: '',
+            attachments: null,
+            model: null,
+            queue_type: 'workflow_execute',
+            workflow_execution_id: (params[1] as string) || null,
+            workflow_payload: (params[2] as string) || null,
+            status: String(params[3] ?? 'queued'),
+            author_id: null,
+            author_email: null,
+            author_name: null,
+            author_avatar_url: null,
+            channel_type: null,
+            channel_id: null,
+            channel_key: null,
+            thread_id: null,
+            continuation_context: null,
+            context_prefix: null,
+            reply_channel_type: null,
+            reply_channel_id: null,
+            child_session_id: null,
+            child_status: null,
+            priority: 0,
+            replaceable: 1,
+            received_at: typeof params[4] === 'number' ? params[4] : Date.now(),
+            dispatched_at: null,
+            created_at: insertCounter,
+          };
+        } else {
+          row = {
+            id: String(params[0] ?? ''),
+            content: String(params[1] ?? ''),
+            attachments: (params[2] as string) || null,
+            model: (params[3] as string) || null,
+            queue_type: 'prompt',
+            workflow_execution_id: null,
+            workflow_payload: null,
+            status: String(params[4] ?? 'queued'),
+            author_id: (params[5] as string) || null,
+            author_email: (params[6] as string) || null,
+            author_name: (params[7] as string) || null,
+            author_avatar_url: (params[8] as string) || null,
+            channel_type: (params[9] as string) || null,
+            channel_id: (params[10] as string) || null,
+            channel_key: (params[11] as string) || null,
+            thread_id: (params[12] as string) || null,
+            continuation_context: (params[13] as string) || null,
+            context_prefix: (params[14] as string) || null,
+            reply_channel_type: (params[15] as string) || null,
+            reply_channel_id: (params[16] as string) || null,
+            child_session_id: (params[17] as string) || null,
+            child_status: (params[18] as string) || null,
+            priority: typeof params[19] === 'number' ? params[19] : 0,
+            replaceable: typeof params[20] === 'number' ? params[20] : 1,
+            received_at: typeof params[21] === 'number' ? params[21] : Date.now(),
+            dispatched_at: null,
+            created_at: insertCounter,
+          };
+        }
         queue.set(row.id, row);
         return cursor([]);
       }
 
       if (q.startsWith('SELECT') && q.includes('FROM prompt_queue')) {
         let rows = Array.from(queue.values());
+        // Honor `WHERE id = ?` for single-row lookups (getChannelKeyById,
+        // getReceivedAtById, getModelById, etc.). The bind param is the
+        // first one in these queries. Without this filter the mock returned
+        // the FIRST inserted row for every getXxxById call, silently masking
+        // bugs in any code that resolves state by messageId.
+        if (q.includes('WHERE id = ?') || q.includes(' AND id = ?')) {
+          const targetId = String(params[0]);
+          rows = rows.filter((row) => row.id === targetId);
+        }
         if (q.includes("status = 'queued'")) {
           rows = rows.filter((row) => row.status === 'queued');
         } else if (q.includes("status = 'processing'")) {
@@ -213,8 +311,83 @@ function createMockSql(): SqlStorage & {
           rows = rows.filter((row) => row.child_session_id === null);
         }
 
+        if (q.includes('replaceable = 1')) {
+          rows = rows.filter((row) => row.replaceable === 1);
+        }
+
+        // Honor `channel_key = ?` in SELECTs (used by /clear-queue thread scoping
+        // and other channel-scoped lookups). The bind param appears at the end.
+        if (q.includes('channel_key = ?') && !q.includes('FROM channel_state')) {
+          const ck = String(params[params.length - 1]);
+          rows = rows.filter((row) => row.channel_key === ck);
+        }
+
+        // Honor `id NOT IN (?, ?, ...)` used by dequeueNext's exclude path.
+        const notInMatch = q.match(/id NOT IN \(([?,\s]+)\)/);
+        if (notInMatch) {
+          const placeholderCount = (notInMatch[1].match(/\?/g) ?? []).length;
+          const excluded = new Set(
+            params.slice(0, placeholderCount).map((p) => String(p)),
+          );
+          rows = rows.filter((row) => !excluded.has(String(row.id)));
+        }
+
         if (q.includes('COUNT(*)')) {
           return cursor([{ count: rows.length, c: rows.length }]);
+        }
+
+        // Aggregates over dispatched_at — used by lastPromptDispatchedAt
+        // (MAX) and getOldestProcessingDispatchedAt (MIN).
+        if (q.includes('MAX(dispatched_at)')) {
+          const ts = rows
+            .filter((r) => r.dispatched_at !== null)
+            .reduce<number | null>((max, r) => Math.max(max ?? 0, r.dispatched_at as number), null);
+          return cursor([{ ts }]);
+        }
+        if (q.includes('MIN(dispatched_at)')) {
+          const filtered = rows.filter((r) => r.dispatched_at !== null);
+          const ts = filtered.length === 0
+            ? null
+            : filtered.reduce<number>((min, r) => Math.min(min, r.dispatched_at as number), Infinity);
+          return cursor([{ ts: ts === Infinity ? null : ts }]);
+        }
+
+        // SELECT id ... ORDER BY dispatched_at ASC — getStuckProcessingMessageId.
+        if (q.includes('ORDER BY dispatched_at ASC')) {
+          let filtered = rows.filter((r) => r.dispatched_at !== null);
+          if (q.includes('dispatched_at <= ?')) {
+            const cutoff = Number(params[params.length - 1]);
+            filtered = filtered.filter((r) => (r.dispatched_at as number) <= cutoff);
+          }
+          filtered.sort((a, b) => (a.dispatched_at as number) - (b.dispatched_at as number));
+          return cursor(filtered.slice(0, 1));
+        }
+
+        // SELECT DISTINCT channel_key — armIdleQueuedSinceForAllQueuedChannels.
+        if (q.includes('SELECT DISTINCT channel_key')) {
+          const seen = new Set<string>();
+          const out: Array<{ channel_key: string }> = [];
+          for (const r of rows) {
+            if (r.channel_key && !seen.has(r.channel_key)) {
+              seen.add(r.channel_key);
+              out.push({ channel_key: r.channel_key });
+            }
+          }
+          return cursor(out);
+        }
+
+        // SELECT DISTINCT thread_id — handleAbort's per-thread fan-out.
+        if (q.includes('SELECT DISTINCT thread_id')) {
+          const seen = new Set<string | null>();
+          const out: Array<{ thread_id: string | null }> = [];
+          for (const r of rows) {
+            const key = r.thread_id ?? null;
+            if (!seen.has(key)) {
+              seen.add(key);
+              out.push({ thread_id: r.thread_id ?? null });
+            }
+          }
+          return cursor(out);
         }
 
         if (q.includes('ORDER BY created_at DESC')) {
@@ -225,7 +398,9 @@ function createMockSql(): SqlStorage & {
           rows.sort((a, b) => a.created_at - b.created_at);
         }
 
-        if (q.includes('LIMIT 1') && rows.length > 1) {
+        if (q.includes('LIMIT 2') && rows.length > 2) {
+          rows = rows.slice(0, 2);
+        } else if (q.includes('LIMIT 1') && rows.length > 1) {
           rows = [rows[0]];
         }
 
@@ -233,17 +408,27 @@ function createMockSql(): SqlStorage & {
       }
 
       if (q.startsWith('UPDATE prompt_queue')) {
-        if (q.includes("SET status = 'completed' WHERE status = 'processing'")) {
+        if (q.includes('SET dispatched_at = ?')) {
+          const ts = Number(params[0]);
+          const row = queue.get(String(params[1]));
+          if (row) row.dispatched_at = ts;
+        } else if (q.includes("SET status = 'completed' WHERE status = 'processing'")) {
           for (const row of queue.values()) {
             if (row.status === 'processing') row.status = 'completed';
           }
-        } else if (q.includes("SET status = 'queued' WHERE status = 'processing'")) {
+        } else if (q.includes("SET status = 'queued'") && q.includes("WHERE status = 'processing'")) {
           for (const row of queue.values()) {
-            if (row.status === 'processing') row.status = 'queued';
+            if (row.status === 'processing') {
+              row.status = 'queued';
+              if (q.includes('dispatched_at = NULL')) row.dispatched_at = null;
+            }
           }
-        } else if (q.includes("SET status = 'queued' WHERE id = ?")) {
+        } else if (q.includes("SET status = 'queued'") && q.includes('WHERE id = ?')) {
           const row = queue.get(String(params[0]));
-          if (row) row.status = 'queued';
+          if (row) {
+            row.status = 'queued';
+            if (q.includes('dispatched_at = NULL')) row.dispatched_at = null;
+          }
         } else if (q.includes("SET status = 'processing' WHERE id = ?")) {
           const row = queue.get(String(params[0]));
           if (row) row.status = 'processing';
@@ -343,7 +528,7 @@ function createMockSql(): SqlStorage & {
     state: Map<string, string>;
     interactivePrompts: Map<string, InteractivePromptRow>;
     messages: Map<string, Record<string, unknown>>;
-    channelState: Map<string, { busy: number; opencode_session_id: string | null }>;
+    channelState: Map<string, { busy: number; opencode_session_id: string | null; idle_queued_since: number | null; error_safety_net_at: number | null }>;
   };
 }
 
@@ -456,7 +641,7 @@ describe('SessionAgentDO', () => {
       replyChannelType: 'slack',
       replyChannelId: 'C123',
     });
-    (agent as any).promptQueue.stampPromptReceived();
+    // received_at is stamped automatically by enqueue.
 
     await (agent as any).handlePromptComplete();
 
@@ -816,6 +1001,51 @@ describe('SessionAgentDO', () => {
     }
   });
 
+  it('does not mirror text channel replies into the web UI', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    const runnerSend = vi.fn();
+    (agent as any).runnerLink.send = runnerSend;
+    (agent as any).channelRouter = {
+      sendReply: vi.fn().mockResolvedValue({ success: true }),
+    };
+    (agent as any).promptQueue.enqueue({
+      id: 'prompt-channel-reply',
+      content: 'threaded Telegram prompt',
+      status: 'processing',
+      channelType: 'thread',
+      channelId: 'thread-telegram',
+      channelKey: 'thread:thread-telegram',
+      threadId: 'thread-telegram',
+      replyChannelType: 'telegram',
+      replyChannelId: 'chat-123',
+    });
+
+    await (agent as any).handleChannelReply(
+      'reply-request-1',
+      'telegram',
+      'chat-123',
+      'No voice note came through on my end.',
+      undefined,
+      undefined,
+      true,
+    );
+
+    expect((agent as any).channelRouter.sendReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        channelType: 'telegram',
+        channelId: 'chat-123',
+        message: 'No voice note came through on my end.',
+      }),
+    );
+    expect(runnerSend).toHaveBeenCalledWith({ type: 'channel-reply-result', requestId: 'reply-request-1', success: true });
+    const mirrored = broadcasts.find((message) => {
+      const data = message.data as Record<string, unknown> | undefined;
+      return message.type === 'message' && data?.content === 'No voice note came through on my end.';
+    });
+    expect(mirrored).toBeUndefined();
+  });
+
   it('does not leak thread ID from a Telegram turn into a subsequent web-UI turn', async () => {
     const runnerSocket = { send: vi.fn() };
     const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });
@@ -1057,6 +1287,141 @@ describe('SessionAgentDO', () => {
     expect(pending.content).toBe('second followup');
   });
 
+  it('preserves separate internal fresh-thread scheduled prompts while runner is not ready', async () => {
+    const { agent, broadcasts, sql } = await createTestAgent();
+
+    const existing = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'existing followup',
+        threadId: 'thread-existing',
+        authorId: 'user-1',
+      }),
+    }));
+    const first = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Valet-Prompt-Queue-Policy': 'append',
+      },
+      body: JSON.stringify({
+        content: 'first scheduled prompt',
+        threadId: 'thread-scheduled-1',
+        authorName: 'Scheduled Task',
+        authorEmail: 'scheduled-task@valet.local',
+        authorId: 'user-1',
+      }),
+    }));
+    const second = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Valet-Prompt-Queue-Policy': 'append',
+      },
+      body: JSON.stringify({
+        content: 'second scheduled prompt',
+        threadId: 'thread-scheduled-2',
+        authorName: 'Scheduled Task',
+        authorEmail: 'scheduled-task@valet.local',
+        authorId: 'user-1',
+      }),
+    }));
+
+    expect(existing.status).toBe(200);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(broadcasts.find((b) => b.type === 'queue.withdrawn')).toBeUndefined();
+
+    const queued = sql
+      .exec("SELECT * FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC")
+      .toArray();
+    expect(queued).toHaveLength(3);
+    expect(queued.map((row) => row.content)).toEqual(['existing followup', 'first scheduled prompt', 'second scheduled prompt']);
+    expect(queued.map((row) => row.thread_id)).toEqual(['thread-existing', 'thread-scheduled-1', 'thread-scheduled-2']);
+    expect(queued.map((row) => row.priority)).toEqual([0, 0, 0]);
+
+    expect((agent as any).promptQueue.dequeueNext()?.content).toBe('existing followup');
+    expect((agent as any).promptQueue.dequeueNext()?.content).toBe('first scheduled prompt');
+    expect((agent as any).promptQueue.dequeueNext()?.content).toBe('second scheduled prompt');
+  });
+
+  it('ignores body-only queue preservation from public prompt payloads', async () => {
+    const { agent, broadcasts, sql } = await createTestAgent();
+
+    const first = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'first public prompt',
+        threadId: 'thread-public-1',
+        authorId: 'user-1',
+      }),
+    }));
+    const second = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'second public prompt',
+        threadId: 'thread-public-2',
+        authorId: 'user-1',
+        preserveQueuedPrompts: true,
+      }),
+    }));
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+
+    const withdrawn = broadcasts.find((b) => b.type === 'queue.withdrawn');
+    expect(withdrawn).toBeTruthy();
+    expect((withdrawn as any).data.content).toBe('first public prompt');
+
+    const queued = sql
+      .exec("SELECT * FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC")
+      .toArray();
+    expect(queued).toHaveLength(1);
+    expect(queued[0].content).toBe('second public prompt');
+  });
+
+  it('does not replace internal appended scheduled prompts with a later public prompt', async () => {
+    const { agent, broadcasts, sql } = await createTestAgent();
+
+    const scheduled = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Valet-Prompt-Queue-Policy': 'append',
+      },
+      body: JSON.stringify({
+        content: 'scheduled prompt',
+        threadId: 'thread-scheduled',
+        authorName: 'Scheduled Task',
+        authorEmail: 'scheduled-task@valet.local',
+        authorId: 'user-1',
+      }),
+    }));
+    const user = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'public prompt',
+        threadId: 'thread-public',
+        authorId: 'user-1',
+      }),
+    }));
+
+    expect(scheduled.status).toBe(200);
+    expect(user.status).toBe(200);
+    expect(broadcasts.find((b) => b.type === 'queue.withdrawn')).toBeUndefined();
+
+    const queued = sql
+      .exec("SELECT * FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC")
+      .toArray();
+    expect(queued.map((row) => row.content)).toEqual(['scheduled prompt', 'public prompt']);
+    expect((agent as any).promptQueue.dequeueNext()?.content).toBe('scheduled prompt');
+    expect((agent as any).promptQueue.dequeueNext()?.content).toBe('public prompt');
+  });
+
   it('broadcasts queue.state with pending item after enqueue', async () => {
     const runnerSocket = { send: vi.fn() };
     const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });
@@ -1097,6 +1462,161 @@ describe('SessionAgentDO', () => {
     expect(runnerSocket.send).toHaveBeenCalledWith(
       expect.stringContaining('"type":"abort"')
     );
+  });
+
+  it('WebSocket abort forwards channelType/channelId so a Stop on one thread is scoped, not global', async () => {
+    // Regression: with concurrent cross-thread dispatch enabled, the Stop
+    // button must send a channel-scoped abort so the runner aborts only the
+    // requested thread's OpenCode session, not every active channel.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.runnerBusy = true;
+
+    await (agent as any).handleClientMessage({ send: vi.fn() }, {
+      type: 'abort',
+      channelType: 'thread',
+      channelId: 'thread-stop-me',
+    });
+
+    const aborts = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((msg) => msg.type === 'abort');
+    expect(aborts).toHaveLength(1);
+    expect(aborts[0]).toMatchObject({
+      type: 'abort',
+      channelType: 'thread',
+      channelId: 'thread-stop-me',
+    });
+  });
+
+  it('HTTP /prompt interrupt with threadId scopes the abort to that thread', async () => {
+    // Stop button can also arrive via HTTP POST /prompt with body.interrupt.
+    // It must scope the runner abort using body.threadId / body.channelType.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.runnerBusy = true;
+
+    const response = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interrupt: true, threadId: 'thread-stop-me' }),
+    }));
+    expect(response.status).toBe(200);
+
+    const aborts = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((msg) => msg.type === 'abort');
+    expect(aborts).toHaveLength(1);
+    expect(aborts[0]).toMatchObject({
+      type: 'abort',
+      channelType: 'thread',
+      channelId: 'thread-stop-me',
+    });
+  });
+
+  it('aborted frame with channelType/channelId completes the right row under concurrent dispatch (2+ processing rows)', async () => {
+    // Regression for R6-F2. Under concurrent cross-thread dispatch, the DO
+    // can have 2+ processing rows. If the runner sends `aborted` with no
+    // messageId, the old fallback (getProcessingChannelKey) returns null
+    // when there are 2+ processing rows — the row stays stuck forever
+    // because the stuck-processing watchdog only fires when the runner is
+    // disconnected. The runner now forwards channelType/channelId on the
+    // aborted frame so the DO can resolve the channel even without a
+    // messageId. This test verifies that:
+    //   1. Only the row on the acked channel is completed.
+    //   2. The sibling channel's row stays processing.
+    const { agent } = await createTestAgent();
+
+    (agent as any).promptQueue.enqueue({
+      id: 'row-a',
+      content: 'A',
+      status: 'processing',
+      channelType: 'thread',
+      channelId: 'thread-a',
+      channelKey: 'thread:thread-a',
+      threadId: 'thread-a',
+    });
+    (agent as any).promptQueue.enqueue({
+      id: 'row-b',
+      content: 'B',
+      status: 'processing',
+      channelType: 'thread',
+      channelId: 'thread-b',
+      channelKey: 'thread:thread-b',
+      threadId: 'thread-b',
+    });
+    expect((agent as any).promptQueue.processingCount).toBe(2);
+
+    // Runner sends `aborted` for thread-a — no messageId (e.g. duplicate
+    // abort whose activeMessageId was cleared by a sibling frame).
+    await (agent as any).runnerHandlers.aborted({
+      type: 'aborted',
+      channelType: 'thread',
+      channelId: 'thread-a',
+    });
+
+    // Exactly one row should be completed — the one on the acked channel.
+    expect((agent as any).promptQueue.processingCount).toBe(1);
+    const sqlRows = (agent as any).ctx.storage.sql
+      .exec("SELECT id, status FROM prompt_queue ORDER BY id")
+      .toArray();
+    expect(sqlRows).toHaveLength(1);
+    expect(sqlRows[0]).toMatchObject({ id: 'row-b', status: 'processing' });
+  });
+
+  it('aborted frame without messageId or channel falls back without wiping siblings', async () => {
+    // Regression for R5-F1+F2 and R6-F4. If the runner sends `aborted`
+    // with neither a messageId nor a channel context, the DO must NOT
+    // wipe every processing row (old behavior) and must NOT drain the
+    // queue for an unrelated channel (R6-F4 — that would surprise the
+    // user with a dispatch they never asked for).
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.enqueue({
+      id: 'row-a',
+      content: 'A',
+      status: 'processing',
+      channelType: 'thread',
+      channelId: 'thread-a',
+      channelKey: 'thread:thread-a',
+    });
+    (agent as any).promptQueue.enqueue({
+      id: 'row-b',
+      content: 'B',
+      status: 'processing',
+      channelType: 'thread',
+      channelId: 'thread-b',
+      channelKey: 'thread:thread-b',
+    });
+    // A queued prompt on yet another channel — the drain-skip guard
+    // ensures this does NOT get dispatched by the confused-abort frame.
+    (agent as any).promptQueue.enqueue({
+      id: 'row-c-queued',
+      content: 'C',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-c',
+      channelKey: 'thread:thread-c',
+    });
+
+    await (agent as any).runnerHandlers.aborted({ type: 'aborted' });
+
+    // No rows wiped, no queued prompt dispatched.
+    const sqlRows = (agent as any).ctx.storage.sql
+      .exec("SELECT id, status FROM prompt_queue ORDER BY id")
+      .toArray();
+    expect(sqlRows).toHaveLength(3);
+    expect(sqlRows[0]).toMatchObject({ id: 'row-a', status: 'processing' });
+    expect(sqlRows[1]).toMatchObject({ id: 'row-b', status: 'processing' });
+    expect(sqlRows[2]).toMatchObject({ id: 'row-c-queued', status: 'queued' });
+    // Specifically, the runner did NOT receive a new prompt frame.
+    const prompts = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((msg) => msg.type === 'prompt');
+    expect(prompts).toHaveLength(0);
   });
 
   it('sendNextQueuedPrompt writes user message to message store at dispatch time', async () => {
@@ -1153,6 +1673,233 @@ describe('SessionAgentDO', () => {
     // queue.state should have been broadcast with pending: null
     const queueState = broadcasts.find((b) => b.type === 'queue.state');
     expect(queueState?.data).toMatchObject({ pending: null });
+  });
+
+  it('stuck-processing watchdog targets the OLDEST in-flight row, not the most recent', async () => {
+    // Regression for the per-row dispatched_at design: with cross-thread
+    // concurrent dispatch, MAX(dispatched_at) would let a fresh sibling
+    // dispatch push the deadline forward forever. We require MIN semantics
+    // so a wedged row from T=0 is still detectable when sibling dispatches
+    // continue at T=4min.
+    const { agent } = await createTestAgent();
+    const now = Date.now();
+
+    // Old row dispatched 6 minutes ago (past the 5-minute stuck threshold).
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-old',
+      content: 'wedged',
+      status: 'processing',
+      channelType: 'thread', channelId: 'thread-old', channelKey: 'thread:thread-old', threadId: 'thread-old',
+    });
+    (agent as any).ctx.storage.sql.exec(
+      'UPDATE prompt_queue SET dispatched_at = ? WHERE id = ?',
+      now - 6 * 60 * 1000,
+      'msg-old',
+    );
+
+    // Fresh row dispatched 10 seconds ago — pre-fix MAX would mask the wedge.
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-fresh',
+      content: 'healthy',
+      status: 'processing',
+      channelType: 'thread', channelId: 'thread-fresh', channelKey: 'thread:thread-fresh', threadId: 'thread-fresh',
+    });
+    (agent as any).ctx.storage.sql.exec(
+      'UPDATE prompt_queue SET dispatched_at = ? WHERE id = ?',
+      now - 10 * 1000,
+      'msg-fresh',
+    );
+
+    const snapshot = (agent as any).buildHealthSnapshot();
+    // OLDEST dispatched_at is the wedged row's stamp, not the fresh one.
+    expect(snapshot.oldestProcessingDispatchedAt).toBe(now - 6 * 60 * 1000);
+    expect(snapshot.stuckProcessingMessageId).toBe('msg-old');
+  });
+
+  it('sendNextQueuedPrompt drains every cross-channel queued prompt in one pass', async () => {
+    // Regression for the scheduled-trigger burst: three manual triggers fire
+    // before the runner is ready, all three get queued (PR #42's preservation
+    // path), and the wake-time drain has to dispatch all three — not just one
+    // at a time waiting for each to finish.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    for (const threadId of ['thread-a', 'thread-b', 'thread-c']) {
+      (agent as any).promptQueue.enqueue({
+        id: `msg-${threadId}`,
+        content: `prompt for ${threadId}`,
+        status: 'queued',
+        channelType: 'thread',
+        channelId: threadId,
+        channelKey: `thread:${threadId}`,
+        threadId,
+      });
+    }
+
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true);
+
+    // All three prompt frames should have been sent to the runner.
+    const sentPrompts = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((msg) => msg.type === 'prompt');
+    const sentIds = sentPrompts.map((msg: { messageId: string }) => msg.messageId).sort();
+    expect(sentIds).toEqual(['msg-thread-a', 'msg-thread-b', 'msg-thread-c']);
+
+    // Queue should be empty and each channel marked busy.
+    expect((agent as any).promptQueue.length).toBe(0);
+    expect((agent as any).promptQueue.isChannelBusy('thread:thread-a')).toBe(true);
+    expect((agent as any).promptQueue.isChannelBusy('thread:thread-b')).toBe(true);
+    expect((agent as any).promptQueue.isChannelBusy('thread:thread-c')).toBe(true);
+  });
+
+  it('sendNextQueuedPrompt filters subsequent child events against the wait subscription that was set at drain entry', async () => {
+    // dispatchQueuedPromptEntry clears sessionState.waitSubscription on every
+    // successful dispatch. The picker must use a snapshot taken at drain entry
+    // so iter 2+ still filters out non-matching child events.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).sessionState.waitSubscription = {
+      sessionIds: ['child-X'],
+      notifyOn: 'status_change',
+    };
+
+    // Item 1: a user prompt with no childSessionId — picks up first (FIFO),
+    // dispatcher clears waitSubscription as a side effect.
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-user',
+      content: 'user prompt',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-user',
+      channelKey: 'thread:thread-user',
+      threadId: 'thread-user',
+    });
+    // Item 2: a queued child event from a session OUTSIDE the wait subscription.
+    // Under the snapshot, the picker must drop it.
+    (agent as any).promptQueue.enqueue({
+      id: 'evt-child-Y',
+      content: 'child event from non-subscribed session',
+      status: 'queued',
+      childSessionId: 'child-Y',
+      childStatus: 'running',
+    });
+
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true);
+
+    const sentIds = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((m) => m.type === 'prompt')
+      .map((m: { messageId: string }) => m.messageId);
+    expect(sentIds).toEqual(['msg-user']);
+
+    // The non-matching child event must have been dropped (via dropEntry),
+    // not dispatched and not left queued.
+    expect((agent as any).promptQueue.length).toBe(0);
+  });
+
+  it('sendNextQueuedPrompt isolates per-item dispatch exceptions instead of reverting earlier in-flight dispatches', async () => {
+    // If dispatchQueuedPromptEntry throws mid-drain, only the failing row
+    // should revert; earlier successful dispatches must stay 'processing' so
+    // the runner's eventual complete attributes to them correctly.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-ok',
+      content: 'will dispatch',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-ok',
+      channelKey: 'thread:thread-ok',
+      threadId: 'thread-ok',
+    });
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-throws',
+      content: 'will throw',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-throws',
+      channelKey: 'thread:thread-throws',
+      threadId: 'thread-throws',
+    });
+
+    // Make the second item's dispatch fail with a synchronous throw inside
+    // the dispatch body. resolveModelPreferences is awaited per-item; override
+    // it to return [] for the first call and throw on the second.
+    let resolveCallCount = 0;
+    (agent as any).resolveModelPreferences = vi.fn().mockImplementation(async () => {
+      resolveCallCount += 1;
+      if (resolveCallCount === 2) throw new Error('synthetic D1 failure');
+      return [];
+    });
+
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true); // msg-ok succeeded
+
+    // msg-ok was sent, msg-throws was not.
+    const sentIds = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((m) => m.type === 'prompt')
+      .map((m: { messageId: string }) => m.messageId);
+    expect(sentIds).toEqual(['msg-ok']);
+
+    // Critically: msg-ok stays 'processing' (so the eventual runner complete
+    // attributes), msg-throws is back to 'queued' for retry.
+    const rows = (agent as any).ctx.storage.sql
+      .exec("SELECT id, status FROM prompt_queue ORDER BY id ASC")
+      .toArray();
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'msg-ok', status: 'processing' }),
+      expect.objectContaining({ id: 'msg-throws', status: 'queued' }),
+    ]));
+  });
+
+  it('sendNextQueuedPrompt leaves entries queued whose channel is already busy', async () => {
+    // Cross-channel drain must not steal a slot on a channel that's still
+    // processing — that row stays queued until the channel completes.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.setChannelBusy('thread:thread-busy', true);
+
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-busy',
+      content: 'cannot dispatch yet',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-busy',
+      channelKey: 'thread:thread-busy',
+      threadId: 'thread-busy',
+    });
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-free',
+      content: 'free to dispatch',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-free',
+      channelKey: 'thread:thread-free',
+      threadId: 'thread-free',
+    });
+
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true);
+
+    const sentIds = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((msg) => msg.type === 'prompt')
+      .map((msg: { messageId: string }) => msg.messageId);
+    expect(sentIds).toEqual(['msg-free']);
+
+    // The busy-channel row stays queued for the next drain cycle.
+    expect((agent as any).promptQueue.length).toBe(1);
+    const remaining = (agent as any).ctx.storage.sql
+      .exec("SELECT id, status FROM prompt_queue WHERE status = 'queued'")
+      .toArray();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ id: 'msg-busy', status: 'queued' });
   });
 
   it('queue.withdraw removes pending and broadcasts content', async () => {
@@ -1288,7 +2035,7 @@ describe('SessionAgentDO', () => {
       channelKey: 'web:default',
     });
 
-    await (agent as any).handleClearQueue();
+    await (agent as any).handleClearQueue(new URL('http://do/clear-queue'));
 
     const withdrawn = broadcasts.find((b) => b.type === 'queue.withdrawn');
     expect(withdrawn).toBeTruthy();
@@ -1298,6 +2045,42 @@ describe('SessionAgentDO', () => {
     expect((queueState as any)?.data?.pending).toBeNull();
 
     expect((agent as any).promptQueue.length).toBe(0);
+  });
+
+  it('handleClearQueue scoped to a threadId only withdraws that thread', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+
+    (agent as any).promptQueue.enqueue({
+      id: 'pending-a',
+      content: 'keep me',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-a',
+      channelKey: 'thread:thread-a',
+      threadId: 'thread-a',
+    });
+    (agent as any).promptQueue.enqueue({
+      id: 'pending-b',
+      content: 'clear me',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-b',
+      channelKey: 'thread:thread-b',
+      threadId: 'thread-b',
+    });
+
+    await (agent as any).handleClearQueue(new URL('http://do/clear-queue?threadId=thread-b'));
+
+    // Only thread-b's withdrawn event should fire
+    const withdrawn = broadcasts.filter((b) => b.type === 'queue.withdrawn');
+    expect(withdrawn).toHaveLength(1);
+    expect((withdrawn[0] as any).data.messageId).toBe('pending-b');
+
+    // thread-a is still queued
+    const remaining = (agent as any).ctx.storage.sql
+      .exec("SELECT id FROM prompt_queue WHERE status = 'queued'")
+      .toArray();
+    expect(remaining.map((r: any) => r.id)).toEqual(['pending-a']);
   });
 
   it('full steer lifecycle: followup → promote → dispatch', async () => {
@@ -1529,7 +2312,7 @@ describe('SessionAgentDO', () => {
 
     // Should still broadcast queue.state to clear pending card
     const queueState = broadcasts.find((b) => b.type === 'queue.state');
-    expect(queueState?.data).toEqual({ pending: null });
+    expect(queueState?.data).toMatchObject({ pending: null });
   });
 
   it('reverts stuck processing entries when runner becomes ready after hibernation', async () => {
@@ -1912,12 +2695,24 @@ describe('SessionAgentDO', () => {
       });
 
       if (opts?.failOverrideWrite) {
+        // Inject a write failure on both new-model targets: runtime_grants
+        // (for allow_session) and action_policies (for allow_always).
         testDb.sqlite.exec(`
-          CREATE TRIGGER fail_uapo_insert BEFORE INSERT ON user_action_policy_overrides
+          CREATE TRIGGER fail_rg_insert BEFORE INSERT ON runtime_grants
           BEGIN
             SELECT RAISE(ABORT, 'override write failed');
           END;
-          CREATE TRIGGER fail_uapo_update BEFORE UPDATE ON user_action_policy_overrides
+          CREATE TRIGGER fail_rg_update BEFORE UPDATE ON runtime_grants
+          BEGIN
+            SELECT RAISE(ABORT, 'override write failed');
+          END;
+          CREATE TRIGGER fail_ap_insert BEFORE INSERT ON action_policies
+          WHEN NEW.managed_by = 'user'
+          BEGIN
+            SELECT RAISE(ABORT, 'override write failed');
+          END;
+          CREATE TRIGGER fail_ap_update BEFORE UPDATE ON action_policies
+          WHEN NEW.managed_by = 'user'
           BEGIN
             SELECT RAISE(ABORT, 'override write failed');
           END;
@@ -2007,41 +2802,39 @@ describe('SessionAgentDO', () => {
       }));
     });
 
-    it('allow_session creates a session-scoped exact override and executes', async () => {
+    it('allow_session creates a session-scoped runtime grant and executes', async () => {
       const { agent, sql, appDb } = await setupApprovalPrompt('allow_session');
 
-      const override = await getUserActionPolicyOverride(appDb as any, 'inv-approval:session');
+      const grant = await getRuntimeGrant(appDb as any, 'approval:inv-approval:session');
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
-      expect(override).toMatchObject({
+      expect(grant).toMatchObject({
         userId: 'user-1',
         service: 'gmail',
         actionId: 'draft.create',
-        mode: 'allow',
-        lifetime: 'session',
         sessionId: 'orchestrator:user-1',
-        source: 'approval_prompt',
-        sourceInvocationId: 'inv-approval',
+        subjectType: 'tool_action',
       });
       expect(invocation).toMatchObject({ status: 'approved', resolvedBy: 'user-1' });
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
       expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
     });
 
-    it('allow_always creates a persistent exact override and executes', async () => {
+    it('allow_always creates a durable user action policy and executes', async () => {
       const { agent, appDb } = await setupApprovalPrompt('allow_always');
 
-      const override = await getUserActionPolicyOverride(appDb as any, 'inv-approval:persistent');
+      const policy = await getActionPolicy(appDb as any, 'approval:inv-approval:durable');
 
-      expect(override).toMatchObject({
-        userId: 'user-1',
+      expect(policy).toMatchObject({
         service: 'gmail',
         actionId: 'draft.create',
         mode: 'allow',
-        lifetime: 'persistent',
-        sessionId: null,
-        source: 'approval_prompt',
-        sourceInvocationId: 'inv-approval',
+        managedBy: 'user',
+        principalType: 'user',
+        principalId: 'user-1',
+        subjectType: 'tool_action',
+        origin: 'approval_prompt',
+        sourceApprovalId: 'inv-approval',
       });
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
     });
@@ -2061,7 +2854,7 @@ describe('SessionAgentDO', () => {
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
       expect(invocation).toMatchObject({ status: 'approved', resolvedBy: 'user-1' });
-      expect(await getUserActionPolicyOverride(appDb as any, 'inv-approval:session')).toBeUndefined();
+      expect(await getRuntimeGrant(appDb as any, 'approval:inv-approval:session')).toBeUndefined();
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
     });
 
@@ -2093,7 +2886,7 @@ describe('SessionAgentDO', () => {
       expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
     });
 
-    it('does not persist an allow override when the invocation is no longer pending', async () => {
+    it('does not persist an allow grant when the invocation is no longer pending', async () => {
       const { agent, appDb } = await setupApprovalPrompt('allow_session', {
         invocationStatus: 'denied',
       });
@@ -2101,7 +2894,7 @@ describe('SessionAgentDO', () => {
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
       expect(invocation).toMatchObject({ status: 'denied' });
-      expect(await getUserActionPolicyOverride(appDb as any, 'inv-approval:session')).toBeUndefined();
+      expect(await getRuntimeGrant(appDb as any, 'approval:inv-approval:session')).toBeUndefined();
       expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
     });
 
@@ -2176,24 +2969,24 @@ describe('SessionAgentDO', () => {
       }));
     });
 
-    it('broadcasts terminal prompt state when override persistence fails after approval', async () => {
-      const { agent, sql, appDb, broadcasts } = await setupApprovalPrompt('allow_session', {
+    it('leaves the invocation pending and restores the prompt when grant persistence fails', async () => {
+      // Post-refactor semantic: resolveInvocationWithScope persists the
+      // grant BEFORE approving the invocation. If the grant write
+      // throws, the approval never happens — invocation stays pending,
+      // prompt is restored to pending, user gets a 500 and can retry.
+      // (The old flow approved first, then wrote the grant, requiring
+      // a markFailed compensating action on grant-write failure.)
+      const { agent, sql, appDb } = await setupApprovalPrompt('allow_session', {
         failOverrideWrite: true,
       });
 
       const invocation = await getInvocation(appDb as any, 'inv-approval');
-
       expect(invocation).toMatchObject({
-        status: 'failed',
-        resolvedBy: 'user-1',
+        status: 'pending',
+        resolvedBy: null,
       });
       expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
-      expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
-      expect(broadcasts).toContainEqual(expect.objectContaining({
-        type: 'interactive_prompt_expired',
-        promptId: 'inv-approval',
-        promptType: 'approval',
-      }));
+      expect(sql.interactivePrompts.get('inv-approval')).toMatchObject({ status: 'pending' });
     });
 
     it('rejects approval resolution from a non-owner websocket user', async () => {
@@ -2551,5 +3344,278 @@ describe('SessionAgentDO', () => {
       expect.objectContaining({ reason: 'no_prompt_row', eventType: 'agentStatus', messageId: 'nonexistent' }),
     );
     expect(broadcasts.filter((m) => m.type === 'agentStatus')).toHaveLength(0);
+  });
+
+  // ─── sendChannelInteractivePrompts — thread filter and DM fallback ────────────
+
+  describe('sendChannelInteractivePrompts — thread filter and DM fallback', () => {
+    it('does not add thread-type channel as a delivery target', async () => {
+      const { agent, sql } = await createTestAgent();
+      (agent as any).sessionState.set('userId', 'user-1');
+
+      const sendInteractiveMock = vi.fn().mockResolvedValue([]);
+      (agent as any).channelRouter.sendInteractivePrompt = sendInteractiveMock;
+      (agent as any).channelRouter.resolveUserDmTarget = vi.fn().mockResolvedValue(null);
+
+      // Set appDb to a real test DB (no slack identity link → no DM fallback)
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      Object.defineProperty(agent, 'appDb', { value: appDb });
+
+      // Insert a processing row with channel_type='thread' via PromptQueue.enqueue
+      (agent as any).promptQueue.enqueue({
+        id: 'pq-t',
+        content: '',
+        status: 'processing',
+        channelType: 'thread',
+        channelId: 'thread-uuid',
+        channelKey: 'thread:thread-uuid',
+      });
+
+      const prompt: InteractivePrompt = {
+        id: 'inv-t',
+        sessionId: 'orchestrator:user-1',
+        type: 'approval',
+        title: 'Approval',
+        body: 'Test',
+        actions: [],
+        context: { channelType: 'thread', channelId: 'thread-uuid' },
+      };
+
+      // Restore the real sendChannelInteractivePrompts (it is mocked in createTestAgent)
+      delete (agent as any).sendChannelInteractivePrompts;
+
+      await (agent as any).sendChannelInteractivePrompts('inv-t', prompt);
+
+      if (sendInteractiveMock.mock.calls.length > 0) {
+        const targets = sendInteractiveMock.mock.calls[0][0].targets as Array<{ channelType: string }>;
+        expect(targets.every((t: { channelType: string }) => t.channelType !== 'thread')).toBe(true);
+      }
+      // The key assertion: no thread target was added, so sendInteractivePrompt
+      // is either not called (no DM fallback) or called without thread targets.
+      expect(sendInteractiveMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          targets: expect.arrayContaining([
+            expect.objectContaining({ channelType: 'thread' }),
+          ]),
+        }),
+      );
+    });
+
+    it('sends a DM with provenance label when user has Slack identity and no real channel targets', async () => {
+      const { agent } = await createTestAgent();
+      (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
+      (agent as any).sessionState.set('userId', 'user-1');
+
+      // Set up a real appDb with a Slack identity link for user-1
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      appDb.insert(sessions).values({
+        id: 'orchestrator:user-1',
+        userId: 'user-1',
+        workspace: '/tmp/test',
+        status: 'running',
+      }).run();
+      appDb.insert(userIdentityLinks).values({
+        id: 'link-1',
+        userId: 'user-1',
+        provider: 'slack',
+        externalId: 'U0SLACK99',
+      }).run();
+      Object.defineProperty(agent, 'appDb', { value: appDb });
+
+      // Enqueue a processing row with scheduled-task author email so isUnattended fires
+      (agent as any).promptQueue.enqueue({
+        id: 'pq-sched',
+        content: '',
+        authorEmail: 'scheduled-task@valet.local',
+        status: 'processing',
+      });
+
+      const resolveUserDmTargetMock = vi.fn().mockResolvedValue({ channelType: 'slack', channelId: 'D0DM1234' });
+      (agent as any).channelRouter.resolveUserDmTarget = resolveUserDmTargetMock;
+
+      const sendInteractiveMock = vi.fn().mockResolvedValue([{ channelType: 'slack', ref: { messageId: 't1', channelId: 'D0DM1234' } }]);
+      (agent as any).channelRouter.sendInteractivePrompt = sendInteractiveMock;
+
+      const prompt: InteractivePrompt = {
+        id: 'inv-dm',
+        sessionId: 'orchestrator:user-1',
+        type: 'approval',
+        title: 'Approval',
+        body: 'Post weekly report',
+        actions: [{ id: 'approve_once', label: 'Approve', style: 'primary' }],
+        context: { toolId: 'slack:send_message', riskLevel: 'medium', summary: 'Post weekly report' },
+      };
+
+      // Restore the real sendChannelInteractivePrompts (it is mocked in createTestAgent)
+      delete (agent as any).sendChannelInteractivePrompts;
+
+      await (agent as any).sendChannelInteractivePrompts('inv-dm', prompt);
+
+      expect(resolveUserDmTargetMock).toHaveBeenCalledWith('slack', 'user-1', 'U0SLACK99');
+      expect(sendInteractiveMock).toHaveBeenCalledOnce();
+      const callOpts = sendInteractiveMock.mock.calls[0][0] as { targets: Array<{ channelType: string; channelId: string }>; prompt: InteractivePrompt };
+      expect(callOpts.targets).toContainEqual({ channelType: 'slack', channelId: 'D0DM1234' });
+      expect(callOpts.prompt.context?.provenanceLabel as string).toContain('scheduled task');
+    });
+
+    it('creates 2-part and 3-part Slack DM bindings and pre-registers thread mapping after DM fallback delivery', async () => {
+      const { agent } = await createTestAgent();
+      (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
+      (agent as any).sessionState.set('userId', 'user-1');
+
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      appDb.insert(sessions).values({
+        id: 'orchestrator:user-1', userId: 'user-1', workspace: '/tmp', status: 'running',
+      }).run();
+      appDb.insert(userIdentityLinks).values({
+        id: 'link-slack', userId: 'user-1', provider: 'slack', externalId: 'U0SLACK99',
+      }).run();
+      Object.defineProperty(agent, 'appDb', { value: appDb, configurable: true });
+
+      // Queue a scheduled-task processing row with a thread ID so getProcessingThreadId
+      // returns the existing web conversation thread.
+      (agent as any).promptQueue.enqueue({
+        id: 'pq-bind-test',
+        content: '',
+        authorEmail: 'scheduled-task@valet.local',
+        status: 'processing',
+        threadId: 'existing-web-thread-uuid',
+      });
+
+      // Mock Slack install lookup, binding creation, and thread registration.
+      vi.spyOn(slackDb, 'getOrgSlackInstallAny').mockResolvedValue({
+        teamId: 'T0TEST123', botToken: 'xoxb-test', botUserId: 'BTEST',
+        teamName: 'Test', appId: null,
+      } as any);
+      const ensureBindingSpy = vi.spyOn(channelsDb, 'ensureChannelBinding').mockResolvedValue(undefined);
+      const registerThreadSpy = vi.spyOn(channelThreadsDb, 'registerChannelThread').mockResolvedValue(undefined);
+
+      (agent as any).channelRouter.resolveUserDmTarget = vi.fn().mockResolvedValue({ channelType: 'slack', channelId: 'D0DM1234' });
+      (agent as any).channelRouter.sendInteractivePrompt = vi.fn().mockResolvedValue([
+        { channelType: 'slack', ref: { channelId: 'D0DM1234', messageId: '1700000000.000001' } },
+      ]);
+
+      delete (agent as any).sendChannelInteractivePrompts;
+
+      const prompt: InteractivePrompt = {
+        id: 'inv-bind-test',
+        sessionId: 'orchestrator:user-1',
+        type: 'approval',
+        title: 'Approval',
+        actions: [{ id: 'approve_once', label: 'Approve', style: 'primary' }],
+      };
+
+      await (agent as any).sendChannelInteractivePrompts('inv-bind-test', prompt);
+      // Flush the fire-and-forget promise chain before asserting.
+      await new Promise((r) => setTimeout(r, 0));
+
+      // 2-part binding: catches regular DM replies (no thread_ts).
+      expect(ensureBindingSpy).toHaveBeenCalledWith(
+        appDb,
+        expect.objectContaining({
+          channelId: 'T0TEST123:D0DM1234',
+          channelType: 'slack',
+          userId: 'user-1',
+          sessionId: 'orchestrator:user-1',
+        }),
+      );
+      // 3-part binding: catches explicit "Reply in thread" on the approval message.
+      expect(ensureBindingSpy).toHaveBeenCalledWith(
+        appDb,
+        expect.objectContaining({
+          channelId: 'T0TEST123:D0DM1234:1700000000.000001',
+          channelType: 'slack',
+          slackThreadTs: '1700000000.000001',
+        }),
+      );
+      // Thread mapping: routes replies to the originating web conversation thread.
+      expect(registerThreadSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          channelType: 'slack',
+          channelId: 'D0DM1234',
+          externalThreadId: '1700000000.000001',
+          userId: 'user-1',
+          threadId: 'existing-web-thread-uuid',
+        }),
+      );
+    });
+  });
+
+  // ─── expireInteractivePromptRow — error message ───────────────────────────────
+
+  describe('expireInteractivePromptRow — error message', () => {
+    it('sends actionable unattended error when session is orchestrator with scheduled-task author email', async () => {
+      const { agent } = await createTestAgent();
+      (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
+
+      const runnerSendMock = vi.fn().mockReturnValue(true);
+      (agent as any).runnerLink.send = runnerSendMock;
+
+      const row = {
+        id: 'inv-expire',
+        type: 'approval',
+        request_id: 'req-expire',
+        context: JSON.stringify({ toolId: 'slack:send_message', invocationId: 'inv-expire' }),
+        channel_refs: null,
+      };
+
+      // Set up appDb so updateInvocationStatus doesn't throw
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      Object.defineProperty(agent, 'appDb', { value: appDb });
+
+      // Enqueue a processing row with scheduled-task author email so isUnattended fires
+      (agent as any).promptQueue.enqueue({
+        id: 'pq-expire-sched',
+        content: '',
+        authorEmail: 'scheduled-task@valet.local',
+        status: 'processing',
+      });
+
+      await (agent as any).expireInteractivePromptRow(row);
+
+      const call = runnerSendMock.mock.calls.find(
+        (c: Array<{ type: string; error?: string }>) => c[0].type === 'call-tool-result',
+      );
+      expect(call).toBeDefined();
+      const error: string = call![0].error;
+      expect(error).toContain('expired without a response');
+      expect(error).toContain('Do not retry');
+    });
+
+    it('sends a plain expired message for attended (non-orchestrator) sessions', async () => {
+      const { agent } = await createTestAgent();
+      (agent as any).sessionState.set('sessionId', 'session-regular-123'); // non-orchestrator
+
+      const runnerSendMock = vi.fn().mockReturnValue(true);
+      (agent as any).runnerLink.send = runnerSendMock;
+
+      const row = {
+        id: 'inv-expire-att',
+        type: 'approval',
+        request_id: 'req-expire-att',
+        context: JSON.stringify({ toolId: 'slack:send_message', invocationId: 'inv-expire-att' }),
+        channel_refs: null,
+      };
+
+      await (agent as any).expireInteractivePromptRow(row);
+
+      const call = runnerSendMock.mock.calls.find(
+        (c: Array<{ type: string; error?: string }>) => c[0].type === 'call-tool-result',
+      );
+      expect(call).toBeDefined();
+      const error: string = call![0].error;
+      expect(error).toContain('expired without a response');
+      expect(error).not.toContain('Do not retry');
+      expect(error).not.toContain('running unattended');
+    });
   });
 });

@@ -56,6 +56,22 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  ModelSelector,
+  ModelSelectorContent,
+  ModelSelectorEmpty,
+  ModelSelectorGroup,
+  ModelSelectorInput,
+  ModelSelectorItem,
+  ModelSelectorList,
+  ModelSelectorLogo,
+  ModelSelectorName,
+  ModelSelectorTrigger,
+} from '@/components/ui/model-selector';
+import {
+  getCustomModelCandidate,
+  type FlatModel,
+} from '@/components/settings/model-preferences-utils';
 
 export const Route = createFileRoute('/settings/admin')({
   component: AdminSettingsPage,
@@ -168,12 +184,6 @@ function OrgNameSection() {
 
 // --- Org Model Preferences ---
 
-interface FlatModel {
-  id: string;
-  name: string;
-  provider: string;
-}
-
 function flattenModels(providers: ProviderModels[]): FlatModel[] {
   return (providers ?? []).flatMap((p) =>
     (p.models ?? []).map((m) => ({ id: m.id, name: m.name, provider: p.provider }))
@@ -185,54 +195,25 @@ function OrgModelPreferencesSection() {
   const updateSettings = useUpdateOrgSettings();
   const { data: availableModels } = useAvailableModels();
   const [models, setModels] = React.useState<string[]>([]);
-  const [newModel, setNewModel] = React.useState('');
   const [saved, setSaved] = React.useState(false);
   const [dragIndex, setDragIndex] = React.useState<number | null>(null);
-  const [showDropdown, setShowDropdown] = React.useState(false);
-  const [highlightedIndex, setHighlightedIndex] = React.useState(0);
-  const inputRef = React.useRef<HTMLInputElement>(null);
-  const dropdownRef = React.useRef<HTMLDivElement>(null);
+  const [selectorOpen, setSelectorOpen] = React.useState(false);
+  const [modelQuery, setModelQuery] = React.useState('');
 
   React.useEffect(() => {
     setModels(settings?.modelPreferences ?? []);
   }, [settings?.modelPreferences]);
 
   const allModels = React.useMemo(() => flattenModels(availableModels ?? []), [availableModels]);
-
-  const filteredModels = React.useMemo(() => {
-    const query = newModel.toLowerCase().trim();
-    const candidates = allModels.filter((m) => !models.includes(m.id));
-    if (!query) return candidates;
-    return candidates.filter(
-      (m) =>
-        m.name.toLowerCase().includes(query) ||
-        m.id.toLowerCase().includes(query) ||
-        m.provider.toLowerCase().includes(query)
-    );
-  }, [newModel, allModels, models]);
-
-  React.useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (
-        dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
-        inputRef.current && !inputRef.current.contains(e.target as Node)
-      ) {
-        setShowDropdown(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, []);
-
-  React.useEffect(() => {
-    setHighlightedIndex(0);
-  }, [filteredModels.length]);
-
-  React.useEffect(() => {
-    if (!showDropdown || !dropdownRef.current) return;
-    const item = dropdownRef.current.children[highlightedIndex] as HTMLElement | undefined;
-    item?.scrollIntoView({ block: 'nearest' });
-  }, [highlightedIndex, showDropdown]);
+  const customModelCandidate = React.useMemo(
+    () =>
+      getCustomModelCandidate({
+        query: modelQuery,
+        selectedModelIds: models,
+        knownModels: allModels,
+      }),
+    [allModels, modelQuery, models]
+  );
 
   const hasChanges = JSON.stringify(models) !== JSON.stringify(settings?.modelPreferences ?? []);
 
@@ -248,13 +229,15 @@ function OrgModelPreferencesSection() {
     );
   }
 
-  function addModel(modelId?: string) {
-    const trimmed = (modelId ?? newModel).trim();
-    if (trimmed && !models.includes(trimmed)) {
-      setModels([...models, trimmed]);
-      setNewModel('');
-      setShowDropdown(false);
+  function addModel(modelId: string) {
+    if (modelId && !models.includes(modelId)) {
+      setModels((prev) => [...prev, modelId]);
     }
+  }
+
+  function handleSelectorOpenChange(open: boolean) {
+    setSelectorOpen(open);
+    if (!open) setModelQuery('');
   }
 
   function removeModel(index: number) {
@@ -267,38 +250,6 @@ function OrgModelPreferencesSection() {
     const [item] = updated.splice(from, 1);
     updated.splice(to, 0, item);
     setModels(updated);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (!showDropdown || filteredModels.length === 0) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        addModel();
-      }
-      return;
-    }
-
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault();
-        setHighlightedIndex((i) => Math.min(i + 1, filteredModels.length - 1));
-        break;
-      case 'ArrowUp':
-        e.preventDefault();
-        setHighlightedIndex((i) => Math.max(i - 1, 0));
-        break;
-      case 'Enter':
-        e.preventDefault();
-        if (filteredModels[highlightedIndex]) {
-          addModel(filteredModels[highlightedIndex].id);
-        } else {
-          addModel();
-        }
-        break;
-      case 'Escape':
-        setShowDropdown(false);
-        break;
-    }
   }
 
   function getModelDisplay(modelId: string) {
@@ -387,62 +338,58 @@ function OrgModelPreferencesSection() {
           </div>
         )}
 
-        <div className="relative max-w-lg">
-          <input
-            ref={inputRef}
-            type="text"
-            value={newModel}
-            onChange={(e) => {
-              setNewModel(e.target.value);
-              setShowDropdown(true);
-            }}
-            onFocus={() => setShowDropdown(true)}
-            onKeyDown={handleKeyDown}
-            placeholder={allModels.length > 0 ? 'Search models...' : 'provider/model-id'}
-            className={inputClass}
-          />
-          {showDropdown && filteredModels.length > 0 && (
-            <div
-              ref={dropdownRef}
-              className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
-            >
-              {filteredModels.map((model, i) => (
-                <button
-                  key={model.id}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    addModel(model.id);
-                  }}
-                  onMouseEnter={() => setHighlightedIndex(i)}
-                  className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
-                    i === highlightedIndex
-                      ? 'bg-neutral-100 dark:bg-neutral-700'
-                      : 'hover:bg-neutral-50 dark:hover:bg-neutral-750'
-                  }`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-neutral-900 dark:text-neutral-100">
-                      {model.name}
-                    </div>
-                    <div className="truncate font-mono text-xs text-neutral-400 dark:text-neutral-500">
-                      {model.id}
-                    </div>
-                  </div>
-                  <span className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-medium text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
-                    {model.provider}
-                  </span>
-                </button>
+        <ModelSelector open={selectorOpen} onOpenChange={handleSelectorOpenChange}>
+          <ModelSelectorTrigger asChild>
+            <Button variant="outline" size="sm">
+              Add model
+            </Button>
+          </ModelSelectorTrigger>
+          <ModelSelectorContent>
+            <ModelSelectorInput
+              value={modelQuery}
+              onValueChange={setModelQuery}
+              placeholder="Search models or enter provider/model-id..."
+            />
+            <ModelSelectorList>
+              <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
+              {availableModels?.map((provider) => (
+                <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
+                  {provider.models
+                    .filter((m) => !models.includes(m.id))
+                    .map((m) => (
+                      <ModelSelectorItem
+                        key={m.id}
+                        value={m.id}
+                        onSelect={() => {
+                          addModel(m.id);
+                          setSelectorOpen(false);
+                          setModelQuery('');
+                        }}
+                      >
+                        <ModelSelectorLogo provider={provider.provider} />
+                        <ModelSelectorName>{m.name}</ModelSelectorName>
+                      </ModelSelectorItem>
+                    ))}
+                </ModelSelectorGroup>
               ))}
-            </div>
-          )}
-        </div>
-
-        {allModels.length === 0 && (
-          <p className="text-xs text-neutral-400 dark:text-neutral-500">
-            Start a session to discover available models, or type a model ID manually (e.g. provider/model-id).
-          </p>
-        )}
+              {customModelCandidate && (
+                <ModelSelectorItem
+                  value={customModelCandidate}
+                  onSelect={() => {
+                    addModel(customModelCandidate);
+                    setSelectorOpen(false);
+                    setModelQuery('');
+                  }}
+                >
+                  <ModelSelectorName>
+                    <span className="text-neutral-500">Use </span>
+                    <span className="font-mono">{customModelCandidate}</span>
+                  </ModelSelectorName>
+                </ModelSelectorItem>
+              )}
+            </ModelSelectorList>
+          </ModelSelectorContent>
+        </ModelSelector>
 
         <div className="flex items-center gap-3">
           <Button
@@ -489,7 +436,7 @@ function OrgReposSection() {
           Known repositories for your organization. You can assign a default persona to each repo.
         </p>
 
-        <form onSubmit={handleAdd} className="flex items-end gap-3">
+        <form onSubmit={handleAdd} className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="flex-1">
             <label htmlFor="repo-name" className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
               Add repository
@@ -501,7 +448,7 @@ function OrgReposSection() {
               placeholder="owner/repo"
             />
           </div>
-          <Button type="submit" disabled={!fullName.includes('/') || createRepo.isPending}>
+          <Button type="submit" className="w-full sm:w-auto" disabled={!fullName.includes('/') || createRepo.isPending}>
             {createRepo.isPending ? 'Adding...' : 'Add'}
           </Button>
         </form>
@@ -519,7 +466,8 @@ function OrgReposSection() {
             ))}
           </div>
         ) : repos && repos.length > 0 ? (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 dark:border-neutral-700">
                 <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">Repository</th>
@@ -565,6 +513,7 @@ function OrgReposSection() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">No repositories added yet.</p>
         )}
@@ -861,7 +810,7 @@ function OrchestratorsSection() {
                         className="inline-flex items-center gap-1.5 transition-colors hover:text-accent dark:hover:text-accent"
                         title="Click to copy"
                       >
-                        <span className="select-all">{orch.sandboxId}</span>
+                        <span className="inline-block max-w-[160px] truncate align-bottom select-all">{orch.sandboxId}</span>
                         <span className="text-[10px]">
                           {copiedSandboxId === orch.sandboxId ? '✓' : '⎘'}
                         </span>
@@ -1130,7 +1079,7 @@ function LLMKeyRow({ provider, label, isSet, models: existingModels, showAllMode
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <div className="w-24 text-sm font-medium text-neutral-700 dark:text-neutral-300">{label}</div>
         {editing ? (
           <>
@@ -1182,7 +1131,7 @@ function LLMKeyRow({ provider, label, isSet, models: existingModels, showAllMode
       )}
     </div>
     {showModelConfig && (
-      <div className="ml-[6.5rem] rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-700 dark:bg-neutral-800/50">
+      <div className="ml-0 sm:ml-[6.5rem] rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-700 dark:bg-neutral-800/50">
         <div className="mb-3 flex items-center gap-2">
           <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
             <input
@@ -1206,7 +1155,7 @@ function LLMKeyRow({ provider, label, isSet, models: existingModels, showAllMode
                     updated[i] = { ...updated[i], id: e.target.value };
                     setModelIds(updated);
                   }}
-                  placeholder="e.g. claude-sonnet-4-20250514"
+                  placeholder="e.g. claude-sonnet-4-5"
                   className={inputClass + ' !mt-0 flex-1'}
                 />
                 <Button
@@ -1446,7 +1395,7 @@ function ModelIdInput({
       {showDropdown && filtered.length > 0 && (
         <div
           ref={dropdownRef}
-          className="absolute z-20 mt-1 max-h-48 min-w-[360px] w-full overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
+          className="absolute z-20 mt-1 max-h-48 w-full max-w-[calc(100vw-3rem)] overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
         >
           {filtered.map((modelId, i) => (
             <button
@@ -1587,7 +1536,7 @@ function CustomProviderForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 rounded-md border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-800/50">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">Provider ID</label>
           <input
@@ -1610,7 +1559,7 @@ function CustomProviderForm({
           />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">Base URL</label>
           <input
@@ -1686,7 +1635,7 @@ function CustomProviderForm({
                   -
                 </Button>
               </div>
-              <div className="mt-2 grid grid-cols-3 gap-2">
+              <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <div>
                   <label className="block text-xs text-neutral-500 dark:text-neutral-400 mb-1">Display name</label>
                   <input
@@ -1875,7 +1824,7 @@ function InvitesSection() {
           Create an invite link to share with anyone. They'll sign in with OAuth and join with the assigned role.
         </p>
 
-        <form onSubmit={handleCreate} className="flex items-end gap-3">
+        <form onSubmit={handleCreate} className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <div>
             <label htmlFor="invite-role" className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
               Role
@@ -1903,7 +1852,7 @@ function InvitesSection() {
               className={inputClass}
             />
           </div>
-          <Button type="submit" disabled={createInvite.isPending}>
+          <Button type="submit" className="w-full sm:w-auto" disabled={createInvite.isPending}>
             {createInvite.isPending ? 'Creating...' : 'Create Invite'}
           </Button>
         </form>
@@ -1938,7 +1887,8 @@ function InvitesSection() {
             ))}
           </div>
         ) : invites && invites.length > 0 ? (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 dark:border-neutral-700">
                 <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">Code</th>
@@ -2008,6 +1958,7 @@ function InvitesSection() {
               })}
             </tbody>
           </table>
+          </div>
         ) : (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">No invites yet.</p>
         )}
@@ -2036,7 +1987,8 @@ function UsersSection({ currentUserId }: { currentUserId: string }) {
             ))}
           </div>
         ) : users && users.length > 0 ? (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 dark:border-neutral-700">
                 <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">User</th>
@@ -2113,6 +2065,7 @@ function UsersSection({ currentUserId }: { currentUserId: string }) {
               })}
             </tbody>
           </table>
+          </div>
         ) : (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">No users found.</p>
         )}
@@ -2387,7 +2340,7 @@ function PluginsSection() {
                     <button
                       type="button"
                       onClick={() => hasExpandable ? setExpandedId(isExpanded ? null : plugin.id) : undefined}
-                      className={`flex flex-1 items-center gap-3 text-left ${hasExpandable ? 'cursor-pointer' : 'cursor-default'}`}
+                      className={`flex flex-1 flex-wrap items-center gap-x-3 gap-y-1.5 text-left sm:flex-nowrap ${hasExpandable ? 'cursor-pointer' : 'cursor-default'}`}
                       disabled={!hasExpandable}
                       aria-expanded={hasExpandable ? isExpanded : undefined}
                     >
@@ -2397,17 +2350,17 @@ function PluginsSection() {
                           {isCustomConnector ? plugin.description || plugin.name : plugin.name}
                         </span>
                         {isCustomConnector ? (
-                          <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-xs">
+                          <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-[140px] sm:max-w-xs">
                             {plugin.name}
                           </span>
                         ) : plugin.description ? (
-                          <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-xs">
+                          <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-[140px] sm:max-w-xs">
                             {plugin.description}
                           </span>
                         ) : null}
                       </div>
 
-                      <div className="flex items-center gap-2 ml-auto">
+                      <div className="flex flex-wrap items-center gap-1.5 ml-auto">
                         {/* Capability badges */}
                         <div className="flex flex-wrap gap-1">
                           {plugin.capabilities.map((cap) => (
@@ -2556,7 +2509,8 @@ function PluginExpandedDetail({
               Actions ({actions.length})
             </span>
           </div>
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 dark:border-neutral-700">
                 <th className="w-10 px-4 py-1.5" />
@@ -2600,6 +2554,7 @@ function PluginExpandedDetail({
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

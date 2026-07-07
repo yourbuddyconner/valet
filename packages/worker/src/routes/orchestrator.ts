@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
+import type { MemoryExportBundle } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import * as db from '../lib/db.js';
 import * as orchestratorService from '../services/orchestrator.js';
@@ -33,6 +34,32 @@ const updateIdentitySchema = z.object({
 const writeMemorySchema = z.object({
   path: z.string().min(1).max(256),
   content: z.string().min(1).max(50000),
+});
+
+// The import envelope is validated loosely so a full memory export round-trips
+// (e.g. migrating memory dev → prod): the per-file importer (importMemoryFiles)
+// does the real per-file validation, skipping invalid/empty files with a reason
+// instead of 400-ing the whole bundle. A normal export — itself ≤200 non-pinned
+// files plus pinned preferences/* — imports losslessly; importing past the
+// 200-file non-pinned cap prunes the excess and reports it via
+// MemoryImportResult.pruned rather than silently dropping files.
+export const importMemorySchema = z.object({
+  files: z
+    .array(
+      z.object({
+        path: z.string().min(1).max(256),
+        // No content length cap: real memory files exceed 50k via the agent's
+        // uncapped PATCH/append writes. content is a D1 bound parameter (not
+        // subject to the 100KB SQL-text limit); the true ceiling is D1's 2MB
+        // row size, and an oversize file is skipped-and-reported per-file by
+        // importMemoryFiles — never a 400 that fails the entire import.
+        content: z.string(),
+      }),
+    )
+    // No max file count: exportMemoryFiles is uncapped and a real account can
+    // exceed any fixed cap (200 non-pinned soft cap + unbounded pinned
+    // preferences/*), so a fixed cap would re-create this same bug class.
+    .min(1),
 });
 
 const patchMemorySchema = z.object({
@@ -249,6 +276,36 @@ orchestratorRouter.get('/memory/search', async (c) => {
 
   const results = await db.searchMemoryFiles(c.env.DB, user.id, query, path);
   return c.json({ results });
+});
+
+/**
+ * GET /api/me/memory/export
+ * Returns a portable bundle of all the user's memory files (path + content).
+ * Lets users move memory between environments (e.g. dev → prod).
+ */
+orchestratorRouter.get('/memory/export', async (c) => {
+  const user = c.get('user');
+  const files = await db.exportMemoryFiles(c.get('db'), user.id);
+  const bundle: MemoryExportBundle = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    count: files.length,
+    files,
+  };
+  return c.json(bundle);
+});
+
+/**
+ * POST /api/me/memory/import
+ * Writes a batch of memory files (merge — same-path files are overwritten).
+ * Invalid/empty files are skipped and reported rather than failing the import.
+ */
+orchestratorRouter.post('/memory/import', zValidator('json', importMemorySchema), async (c) => {
+  const user = c.get('user');
+  const body = c.req.valid('json');
+
+  const result = await db.importMemoryFiles(c.env.DB, user.id, body.files);
+  return c.json(result);
 });
 
 // ─── Notification Queue Routes (Phase C) ────────────────────────────────

@@ -229,6 +229,11 @@ export interface SessionThread {
   id: string;
   sessionId: string;
   opencodeSessionId?: string;
+  originType?: string;
+  originChannelType?: string;
+  originChannelId?: string;
+  originTriggerId?: string;
+  originTriggerType?: string;
   title?: string;
   summaryAdditions: number;
   summaryDeletions: number;
@@ -481,6 +486,8 @@ export interface ConfigureIntegrationRequest {
 }
 
 export type CustomMcpConnectorAuthType = 'none' | 'oauth' | 'api_key' | 'bearer';
+export type CustomMcpConnectorCredentialScope = 'org' | 'user';
+export type CustomMcpConnectorApiKeyPlacement = 'header' | 'query';
 
 export type CustomMcpConnectorTokenEndpointAuthMethod =
   | 'none'
@@ -494,13 +501,16 @@ export interface CustomMcpConnector {
   displayName: string;
   serverUrl: string;
   authType: CustomMcpConnectorAuthType;
+  credentialScope: CustomMcpConnectorCredentialScope;
   oauthClientId: string | null;
   oauthTokenEndpointAuthMethod: CustomMcpConnectorTokenEndpointAuthMethod;
   oauthScopes: string | null;
   oauthAuthorizationEndpoint: string | null;
   oauthTokenEndpoint: string | null;
+  apiKeyPlacement: CustomMcpConnectorApiKeyPlacement;
   apiKeyHeaderName: string | null;
   apiKeyPrefix: string | null;
+  apiKeyQueryParam: string | null;
   status: 'active' | 'disabled' | 'error';
   toolCount?: number;
   lastDiscoveredAt: string | null;
@@ -517,6 +527,7 @@ export interface CreateCustomMcpConnectorRequest {
   displayName: string;
   serverUrl: string;
   authType: CustomMcpConnectorAuthType;
+  credentialScope?: CustomMcpConnectorCredentialScope;
   oauthClientId?: string | null;
   oauthClientSecret?: string;
   oauthTokenEndpointAuthMethod?: CustomMcpConnectorTokenEndpointAuthMethod | 'auto';
@@ -524,8 +535,10 @@ export interface CreateCustomMcpConnectorRequest {
   oauthAuthorizationEndpoint?: string | null;
   oauthTokenEndpoint?: string | null;
   apiKey?: string;
+  apiKeyPlacement?: CustomMcpConnectorApiKeyPlacement;
   apiKeyHeaderName?: string | null;
   apiKeyPrefix?: string | null;
+  apiKeyQueryParam?: string | null;
   additionalHeaders?: Record<string, string>;
   status?: 'active' | 'disabled';
 }
@@ -534,6 +547,7 @@ export interface UpdateCustomMcpConnectorRequest {
   displayName?: string;
   serverUrl?: string;
   authType?: CustomMcpConnectorAuthType;
+  credentialScope?: CustomMcpConnectorCredentialScope;
   oauthClientId?: string | null;
   oauthClientSecret?: string;
   clearClientSecret?: boolean;
@@ -542,8 +556,10 @@ export interface UpdateCustomMcpConnectorRequest {
   oauthAuthorizationEndpoint?: string | null;
   oauthTokenEndpoint?: string | null;
   apiKey?: string;
+  apiKeyPlacement?: CustomMcpConnectorApiKeyPlacement;
   apiKeyHeaderName?: string | null;
   apiKeyPrefix?: string | null;
+  apiKeyQueryParam?: string | null;
   additionalHeaders?: Record<string, string>;
   clearAdditionalHeaders?: boolean;
   status?: 'active' | 'disabled' | 'error';
@@ -850,6 +866,39 @@ export interface MemoryFileSearchResult {
   relevance: number;
 }
 
+/** A single memory file inside a portable export bundle. */
+export interface MemoryExportFile {
+  path: string;
+  content: string;
+  pinned: boolean;
+  updatedAt: string;
+}
+
+/**
+ * Portable snapshot of a user's orchestrator memory. Produced by
+ * `GET /api/me/memory/export` and consumed by `POST /api/me/memory/import`,
+ * letting users move memory between environments (e.g. dev → prod).
+ */
+export interface MemoryExportBundle {
+  /** Bundle format version. Bump on breaking shape changes. */
+  version: 1;
+  exportedAt: string;
+  count: number;
+  files: MemoryExportFile[];
+}
+
+/** Outcome of importing a memory bundle. */
+export interface MemoryImportResult {
+  imported: number;
+  skipped: { path: string; reason: string }[];
+  /**
+   * Non-pinned files removed by the 200-file memory cap after the import.
+   * Normally 0 — only non-zero when an import pushes the account's non-pinned
+   * file count past the cap (e.g. merging into an already-large account).
+   */
+  pruned: number;
+}
+
 export interface OrchestratorInfo {
   sessionId: string;
   identity: OrchestratorIdentity | null;
@@ -1035,6 +1084,12 @@ export interface ActionPolicy {
   updatedAt: string;
 }
 
+export interface ParamMatcher {
+  path: string;
+  op: 'eq' | 'neq' | 'regex' | 'in' | 'not_in' | 'gt' | 'gte' | 'lt' | 'lte' | 'exists' | 'not_exists';
+  value?: unknown;
+}
+
 export interface ActionPolicyOverride {
   id: string;
   userId: string;
@@ -1042,6 +1097,10 @@ export interface ActionPolicyOverride {
   actionId?: string | null;
   riskLevel?: ActionRiskLevel | null;
   mode: ActionMode;
+  /** Context conditional — defaults to 'any'. */
+  appliesIn: 'any' | 'workflow' | 'session';
+  /** Param matchers; all must evaluate true for the policy to fire. */
+  paramMatchers: ParamMatcher[];
   lifetime: ActionPolicyLifetime;
   sessionId?: string | null;
   expiresAt?: string | null;
@@ -1125,6 +1184,36 @@ export interface UsageStatsResponse {
     cost: number | null;
     callCount: number;
     percentage: number;
+  }>;
+  /** Per-user, per-model usage — lets the UI drill into who is using which models. */
+  byUserModel: Array<{
+    userId: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    callCount: number;
+  }>;
+  /** Usage grouped by session origin: interactive (user sessions) vs automated
+   *  (workflow: scheduled triggers / webhooks / manual runs) vs orchestrator. */
+  byPurpose: Array<{
+    purpose: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    callCount: number;
+    percentage: number;
+  }>;
+  /** Per-automation drill-down for the "automated" (workflow) origin: which specific
+   *  workflow produced the usage and how it fired (schedule / webhook / manual). */
+  byWorkflow: Array<{
+    workflowId: string | null;
+    workflowName: string;
+    triggerType: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    callCount: number;
   }>;
   period: number;
 }
@@ -1234,6 +1323,9 @@ export interface Skill {
   id: string;
   orgId: string;
   ownerId: string | null;
+  ownerName?: string | null;
+  ownerEmail?: string | null;
+  ownerAvatarUrl?: string | null;
   source: SkillSource;
   name: string;
   slug: string;
@@ -1253,6 +1345,9 @@ export interface SkillSummary {
   source: SkillSource;
   visibility: SkillVisibility;
   ownerId: string | null;
+  ownerName?: string | null;
+  ownerEmail?: string | null;
+  ownerAvatarUrl?: string | null;
   updatedAt: string;
 }
 

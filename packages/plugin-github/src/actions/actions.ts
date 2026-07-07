@@ -3,6 +3,409 @@ import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from
 import { Octokit } from 'octokit';
 import { parseJobLog } from './parse-job-log.js';
 
+const githubIssueSummarySchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    title: { type: 'string' },
+    state: { type: 'string', enum: ['open', 'closed'] },
+    user: { type: ['string', 'null'] },
+    url: { type: 'string' },
+    labels: { type: 'array', items: { type: ['string', 'null'] } },
+    assignees: { type: 'array', items: { type: 'string' } },
+    created_at: { type: 'string' },
+    updated_at: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubPullRequestSummarySchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    title: { type: 'string' },
+    state: { type: 'string', enum: ['open', 'closed'] },
+    user: { type: ['string', 'null'] },
+    url: { type: 'string' },
+    draft: { type: 'boolean' },
+    created_at: { type: 'string' },
+    updated_at: { type: 'string' },
+    head: { type: ['string', 'null'] },
+    base: { type: ['string', 'null'] },
+  },
+} satisfies Record<string, unknown>;
+
+const githubRepositorySummarySchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    name: { type: 'string' },
+    full_name: { type: 'string' },
+    private: { type: 'boolean' },
+    html_url: { type: 'string' },
+    description: { type: ['string', 'null'] },
+    default_branch: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubCommitSummarySchema = {
+  type: 'object',
+  properties: {
+    sha: { type: 'string' },
+    message: { type: ['string', 'null'] },
+    author: { type: ['string', 'null'] },
+    date: { type: ['string', 'null'] },
+    url: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubSearchCodeItemSchema = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    path: { type: 'string' },
+    repo: { type: ['string', 'null'] },
+    url: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubWorkflowRunSummarySchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    name: { type: ['string', 'null'] },
+    status: { type: ['string', 'null'] },
+    conclusion: { type: ['string', 'null'] },
+    branch: { type: ['string', 'null'] },
+    event: { type: 'string' },
+    url: { type: 'string' },
+    created_at: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubWorkflowSummarySchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    name: { type: 'string' },
+    path: { type: 'string' },
+    state: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubIssueDetailSchema = {
+  type: 'object',
+  properties: {
+    ...githubIssueSummarySchema.properties,
+    body: { type: ['string', 'null'] },
+    comments: { type: 'number' },
+    closed_at: { type: ['string', 'null'] },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const githubPullRequestDetailSchema = {
+  type: 'object',
+  properties: {
+    ...githubPullRequestSummarySchema.properties,
+    body: { type: ['string', 'null'] },
+    merged: { type: 'boolean' },
+    additions: { type: 'number' },
+    deletions: { type: 'number' },
+    changed_files: { type: 'number' },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const githubCommentSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    user: { type: ['object', 'null'], additionalProperties: true },
+    body: { type: 'string' },
+    html_url: { type: 'string' },
+    created_at: { type: 'string' },
+    updated_at: { type: 'string' },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const githubIssueMutationSchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    url: { type: 'string' },
+    title: { type: 'string' },
+    state: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubPullRequestMutationSchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    url: { type: 'string' },
+    title: { type: 'string' },
+    state: { type: 'string' },
+    draft: { type: 'boolean' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubRepositoryCreationSchema = {
+  type: 'object',
+  properties: {
+    full_name: { type: 'string' },
+    url: { type: 'string' },
+    clone_url: { type: 'string' },
+    private: { type: 'boolean' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubPullRequestInspectionSchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    title: { type: 'string' },
+    state: { type: 'string' },
+    merged: { type: 'boolean' },
+    draft: { type: 'boolean' },
+    user: { type: ['string', 'null'] },
+    url: { type: 'string' },
+    head: {
+      type: 'object',
+      properties: {
+        ref: { type: ['string', 'null'] },
+        sha: { type: 'string' },
+      },
+    },
+    base: {
+      type: 'object',
+      properties: {
+        ref: { type: ['string', 'null'] },
+      },
+    },
+    body: { type: ['string', 'null'] },
+    additions: { type: 'number' },
+    deletions: { type: 'number' },
+    changed_files: { type: 'number' },
+    files: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string' },
+          status: { type: 'string' },
+          additions: { type: 'number' },
+          deletions: { type: 'number' },
+        },
+      },
+    },
+    reviews: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          user: { type: ['string', 'null'] },
+          state: { type: 'string' },
+          body: { type: ['string', 'null'] },
+        },
+      },
+    },
+    comments: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          user: { type: ['string', 'null'] },
+          path: { type: 'string' },
+          line: { type: ['number', 'null'] },
+          body: { type: 'string' },
+        },
+      },
+    },
+    checks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          status: { type: 'string' },
+          conclusion: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+} satisfies Record<string, unknown>;
+
+const githubMergeResultSchema = {
+  type: 'object',
+  properties: {
+    merged: { type: 'boolean' },
+    message: { type: 'string' },
+    sha: { type: ['string', 'null'] },
+  },
+} satisfies Record<string, unknown>;
+
+const githubBranchResultSchema = {
+  type: 'object',
+  properties: {
+    branch: { type: 'string' },
+    sha: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubDeleteBranchResultSchema = {
+  type: 'object',
+  properties: {
+    deleted: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubReleaseResultSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    tag: { type: 'string' },
+    url: { type: 'string' },
+    draft: { type: 'boolean' },
+    prerelease: { type: 'boolean' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubForkResultSchema = {
+  type: 'object',
+  properties: {
+    full_name: { type: 'string' },
+    url: { type: 'string' },
+    clone_url: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubWorkflowRunDetailSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    name: { type: ['string', 'null'] },
+    status: { type: ['string', 'null'] },
+    conclusion: { type: ['string', 'null'] },
+    event: { type: 'string' },
+    branch: { type: ['string', 'null'] },
+    commit_sha: { type: ['string', 'null'] },
+    url: { type: 'string' },
+    created_at: { type: 'string' },
+    updated_at: { type: 'string' },
+    run_attempt: { type: 'number' },
+    jobs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number' },
+          name: { type: 'string' },
+          status: { type: 'string' },
+          conclusion: { type: ['string', 'null'] },
+          started_at: { type: ['string', 'null'] },
+          completed_at: { type: ['string', 'null'] },
+          steps: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                status: { type: 'string' },
+                conclusion: { type: ['string', 'null'] },
+                number: { type: 'number' },
+              },
+            },
+          },
+        },
+      },
+    },
+    annotations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          start_line: { type: 'number' },
+          end_line: { type: 'number' },
+          annotation_level: { type: 'string' },
+          message: { type: 'string' },
+          title: { type: ['string', 'null'] },
+        },
+      },
+    },
+    warnings: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubJobLogsSchema = {
+  type: 'object',
+  properties: {
+    job_id: { type: 'number' },
+    job_name: { type: 'string' },
+    steps: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+    },
+  },
+} satisfies Record<string, unknown>;
+
+const githubMessageResultSchema = {
+  type: 'object',
+  properties: {
+    message: { type: 'string' },
+    url: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubReadRepoFileSchema = {
+  type: 'object',
+  properties: {
+    path: { type: 'string' },
+    repo: { type: 'string' },
+    ref: { type: ['string', 'null'] },
+    size: { type: 'number' },
+    content: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubDependabotAlertSummarySchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    state: { type: 'string' },
+    severity: { type: ['string', 'null'] },
+    summary: { type: ['string', 'null'] },
+    package: { type: ['string', 'null'] },
+    ecosystem: { type: ['string', 'null'] },
+    manifest_path: { type: ['string', 'null'] },
+    ghsa_id: { type: ['string', 'null'] },
+    cve_id: { type: ['string', 'null'] },
+    url: { type: 'string' },
+    created_at: { type: 'string' },
+    updated_at: { type: ['string', 'null'] },
+    dismissed_at: { type: ['string', 'null'] },
+    fixed_at: { type: ['string', 'null'] },
+    repository: { type: ['string', 'null'] },
+  },
+} satisfies Record<string, unknown>;
+
+const githubListDependabotAlertsSchema = {
+  type: 'object',
+  properties: {
+    count: { type: 'number' },
+    alerts: { type: 'array', items: githubDependabotAlertSummarySchema },
+  },
+} satisfies Record<string, unknown>;
+
+// The single-alert endpoint returns the full Octokit payload; declare it as
+// a permissive object so downstream schemas can be tightened later without
+// blocking the presence-of-output-schema test.
+const githubDependabotAlertDetailSchema = {
+  type: 'object',
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
 // ─── Octokit + Attribution Helpers ──────────────────────────────────────────
 
 function getOctokit(ctx: ActionContext): Octokit {
@@ -39,6 +442,7 @@ const getRepository: ActionDefinition = {
     owner: z.string().describe('Repository owner'),
     repo: z.string().describe('Repository name'),
   }),
+  outputSchema: githubRepositorySummarySchema,
 };
 
 const listRepos: ActionDefinition = {
@@ -51,6 +455,10 @@ const listRepos: ActionDefinition = {
     perPage: z.number().int().min(1).max(100).optional().describe('Results per page'),
     page: z.number().int().min(1).optional().describe('Page number'),
   }),
+  outputSchema: {
+    type: 'array',
+    items: githubRepositorySummarySchema,
+  },
 };
 
 const getIssue: ActionDefinition = {
@@ -63,6 +471,7 @@ const getIssue: ActionDefinition = {
     repo: z.string(),
     issueNumber: z.number().int(),
   }),
+  outputSchema: githubIssueDetailSchema,
 };
 
 const createIssue: ActionDefinition = {
@@ -76,6 +485,7 @@ const createIssue: ActionDefinition = {
     title: z.string(),
     body: z.string().optional(),
   }),
+  outputSchema: githubIssueDetailSchema,
 };
 
 const getPullRequest: ActionDefinition = {
@@ -88,6 +498,7 @@ const getPullRequest: ActionDefinition = {
     repo: z.string(),
     pullNumber: z.number().int(),
   }),
+  outputSchema: githubPullRequestDetailSchema,
 };
 
 const createComment: ActionDefinition = {
@@ -101,6 +512,7 @@ const createComment: ActionDefinition = {
     issueNumber: z.number().int(),
     body: z.string(),
   }),
+  outputSchema: githubCommentSchema,
 };
 
 const listPullRequests: ActionDefinition = {
@@ -114,6 +526,10 @@ const listPullRequests: ActionDefinition = {
     state: z.enum(['open', 'closed', 'all']).optional().describe('PR state filter (default: open)'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30, max 100)'),
   }),
+  outputSchema: {
+    type: 'array',
+    items: githubPullRequestSummarySchema,
+  },
 };
 
 const inspectPullRequest: ActionDefinition = {
@@ -128,6 +544,7 @@ const inspectPullRequest: ActionDefinition = {
     filesLimit: z.number().int().min(1).max(300).optional().describe('Max files to return (default: 100)'),
     commentsLimit: z.number().int().min(1).max(300).optional().describe('Max review comments (default: 100)'),
   }),
+  outputSchema: githubPullRequestInspectionSchema,
 };
 
 const updatePullRequest: ActionDefinition = {
@@ -144,6 +561,7 @@ const updatePullRequest: ActionDefinition = {
     state: z.enum(['open', 'closed']).optional().describe('Set PR state'),
     labels: z.array(z.string()).optional().describe('Labels to set (replaces existing)'),
   }),
+  outputSchema: githubIssueMutationSchema,
 };
 
 const createRepository: ActionDefinition = {
@@ -159,6 +577,7 @@ const createRepository: ActionDefinition = {
     gitignoreTemplate: z.string().optional().describe('Gitignore template (e.g. "Node", "Python")'),
     licenseTemplate: z.string().optional().describe('License keyword (e.g. "mit", "apache-2.0")'),
   }),
+  outputSchema: githubRepositoryCreationSchema,
 };
 
 const listIssues: ActionDefinition = {
@@ -176,6 +595,10 @@ const listIssues: ActionDefinition = {
     direction: z.enum(['asc', 'desc']).optional().describe('Sort direction'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: {
+    type: 'array',
+    items: githubIssueSummarySchema,
+  },
 };
 
 const updateIssue: ActionDefinition = {
@@ -193,6 +616,7 @@ const updateIssue: ActionDefinition = {
     labels: z.array(z.string()).optional().describe('Labels to set (replaces existing)'),
     assignees: z.array(z.string()).optional().describe('Assignee usernames (replaces existing)'),
   }),
+  outputSchema: githubIssueMutationSchema,
 };
 
 const createPullRequest: ActionDefinition = {
@@ -209,6 +633,7 @@ const createPullRequest: ActionDefinition = {
     body: z.string().optional().describe('PR description (markdown)'),
     draft: z.boolean().optional().describe('Create as draft PR'),
   }),
+  outputSchema: githubPullRequestMutationSchema,
 };
 
 const mergePullRequest: ActionDefinition = {
@@ -224,6 +649,7 @@ const mergePullRequest: ActionDefinition = {
     commitTitle: z.string().optional().describe('Custom merge commit title'),
     commitMessage: z.string().optional().describe('Custom merge commit message'),
   }),
+  outputSchema: githubMergeResultSchema,
 };
 
 const createBranch: ActionDefinition = {
@@ -237,6 +663,7 @@ const createBranch: ActionDefinition = {
     branch: z.string().describe('New branch name'),
     fromRef: z.string().optional().describe('Source ref — branch, tag, or SHA (default: repo default branch)'),
   }),
+  outputSchema: githubBranchResultSchema,
 };
 
 const deleteBranch: ActionDefinition = {
@@ -249,6 +676,7 @@ const deleteBranch: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     branch: z.string().describe('Branch name to delete'),
   }),
+  outputSchema: githubDeleteBranchResultSchema,
 };
 
 const listCommits: ActionDefinition = {
@@ -264,6 +692,10 @@ const listCommits: ActionDefinition = {
     author: z.string().optional().describe('GitHub username or email to filter by'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: {
+    type: 'array',
+    items: githubCommitSummarySchema,
+  },
 };
 
 const searchCode: ActionDefinition = {
@@ -275,6 +707,13 @@ const searchCode: ActionDefinition = {
     q: z.string().describe('Search query (supports GitHub code search qualifiers like "repo:", "language:", "path:")'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      total_count: { type: 'number' },
+      items: { type: 'array', items: githubSearchCodeItemSchema },
+    },
+  },
 };
 
 const searchIssues: ActionDefinition = {
@@ -288,6 +727,13 @@ const searchIssues: ActionDefinition = {
     order: z.enum(['asc', 'desc']).optional().describe('Sort order'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      total_count: { type: 'number' },
+      items: { type: 'array', items: githubIssueSummarySchema },
+    },
+  },
 };
 
 const createRelease: ActionDefinition = {
@@ -306,6 +752,7 @@ const createRelease: ActionDefinition = {
     prerelease: z.boolean().optional().describe('Mark as pre-release'),
     generateReleaseNotes: z.boolean().optional().describe('Auto-generate release notes'),
   }),
+  outputSchema: githubReleaseResultSchema,
 };
 
 const forkRepository: ActionDefinition = {
@@ -319,6 +766,7 @@ const forkRepository: ActionDefinition = {
     organization: z.string().optional().describe('Organization to fork to (default: authenticated user)'),
     name: z.string().optional().describe('Custom name for the fork'),
   }),
+  outputSchema: githubForkResultSchema,
 };
 
 const listWorkflowRuns: ActionDefinition = {
@@ -334,6 +782,13 @@ const listWorkflowRuns: ActionDefinition = {
     event: z.string().optional().describe('Filter by event type (e.g. "push", "pull_request")'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      total_count: { type: 'number' },
+      runs: { type: 'array', items: githubWorkflowRunSummarySchema },
+    },
+  },
 };
 
 const getWorkflowRun: ActionDefinition = {
@@ -346,6 +801,7 @@ const getWorkflowRun: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     run_id: z.number().int().describe('Workflow run ID'),
   }),
+  outputSchema: githubWorkflowRunDetailSchema,
 };
 
 const getJobLogs: ActionDefinition = {
@@ -362,6 +818,7 @@ const getJobLogs: ActionDefinition = {
     tail_lines: z.number().int().min(10).max(5000).optional().default(500).describe('Max lines per step, tail-biased (default: 500)'),
     include_timestamps: z.boolean().optional().default(false).describe('Include ISO timestamp prefixes (default: false)'),
   }),
+  outputSchema: githubJobLogsSchema,
 };
 
 const rerunWorkflow: ActionDefinition = {
@@ -375,6 +832,7 @@ const rerunWorkflow: ActionDefinition = {
     run_id: z.number().int().describe('Workflow run ID to re-run'),
     failed_only: z.boolean().optional().default(false).describe('Only re-run failed jobs (default: false)'),
   }),
+  outputSchema: githubMessageResultSchema,
 };
 
 const cancelWorkflowRun: ActionDefinition = {
@@ -387,6 +845,12 @@ const cancelWorkflowRun: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     run_id: z.number().int().describe('Workflow run ID to cancel'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      message: { type: 'string' },
+    },
+  },
 };
 
 const listWorkflows: ActionDefinition = {
@@ -398,6 +862,13 @@ const listWorkflows: ActionDefinition = {
     owner: z.string().describe('Repository owner'),
     repo: z.string().describe('Repository name'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      total_count: { type: 'number' },
+      workflows: { type: 'array', items: githubWorkflowSummarySchema },
+    },
+  },
 };
 
 const triggerWorkflow: ActionDefinition = {
@@ -412,6 +883,12 @@ const triggerWorkflow: ActionDefinition = {
     ref: z.string().describe('Branch or tag to run the workflow on'),
     inputs: z.record(z.string()).optional().describe('Workflow dispatch input values (key-value pairs)'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      message: { type: 'string' },
+    },
+  },
 };
 
 const readRepoFile: ActionDefinition = {
@@ -425,6 +902,40 @@ const readRepoFile: ActionDefinition = {
     path: z.string().describe('File path in the repository'),
     ref: z.string().optional().describe('Git ref (branch, tag, or commit SHA)'),
   }),
+  outputSchema: githubReadRepoFileSchema,
+};
+
+const listDependabotAlerts: ActionDefinition = {
+  id: 'github.list_dependabot_alerts',
+  name: 'List Dependabot Alerts',
+  description: 'List Dependabot vulnerability alerts for a repository or organization. Pass `org` instead of `owner`+`repo` to list across an entire org.',
+  riskLevel: 'low',
+  params: z.object({
+    owner: z.string().optional().describe('Repository owner (required unless `org` is set)'),
+    repo: z.string().optional().describe('Repository name (required unless `org` is set)'),
+    org: z.string().optional().describe('Organization login — when set, lists alerts across the org instead of a single repo'),
+    state: z.enum(['auto_dismissed', 'dismissed', 'fixed', 'open']).optional().describe('Filter by alert state (default: open)'),
+    severity: z.enum(['low', 'medium', 'high', 'critical']).optional().describe('Filter by severity'),
+    ecosystem: z.string().optional().describe('Filter by package ecosystem (e.g. "npm", "pip", "rubygems", "maven")'),
+    package: z.string().optional().describe('Filter by package name'),
+    sort: z.enum(['created', 'updated']).optional().describe('Sort field (default: created)'),
+    direction: z.enum(['asc', 'desc']).optional().describe('Sort direction (default: desc)'),
+    limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
+  }),
+  outputSchema: githubListDependabotAlertsSchema,
+};
+
+const getDependabotAlert: ActionDefinition = {
+  id: 'github.get_dependabot_alert',
+  name: 'Get Dependabot Alert',
+  description: 'Get details of a single Dependabot alert including the vulnerable dependency, advisory, and remediation info.',
+  riskLevel: 'low',
+  params: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    alert_number: z.number().int().describe('Dependabot alert number'),
+  }),
+  outputSchema: githubDependabotAlertDetailSchema,
 };
 
 const allActions: ActionDefinition[] = [
@@ -457,6 +968,8 @@ const allActions: ActionDefinition[] = [
   listWorkflows,
   triggerWorkflow,
   readRepoFile,
+  listDependabotAlerts,
+  getDependabotAlert,
 ];
 
 // ─── Permission hints for 403 errors ─────────────────────────────────────────
@@ -480,6 +993,8 @@ const PERMISSION_HINTS: Record<string, string> = {
   'github.create_release': 'contents:write',
   'github.inspect_pull_request': 'pull_requests:read (+ checks:read for check runs)',
   'github.fork_repository': 'contents:write',
+  'github.list_dependabot_alerts': 'dependabot_alerts:read',
+  'github.get_dependabot_alert': 'dependabot_alerts:read',
 };
 
 function handleOctokitError(err: any, actionId: string, operation: string): ActionResult {
@@ -1337,6 +1852,64 @@ async function executeAction(
           };
         } catch (err: any) {
           return handleOctokitError(err, actionId, 'Read repo file');
+        }
+      }
+
+      case 'github.list_dependabot_alerts': {
+        const p = listDependabotAlerts.params.parse(params);
+        if (!p.org && !(p.owner && p.repo)) {
+          return { success: false, error: 'Must provide either `org`, or both `owner` and `repo`.' };
+        }
+        try {
+          const query = {
+            state: p.state,
+            severity: p.severity,
+            ecosystem: p.ecosystem,
+            package: p.package,
+            sort: p.sort,
+            direction: p.direction,
+            per_page: p.limit ?? 30,
+          };
+          const data = p.org
+            ? (await octokit.request('GET /orgs/{org}/dependabot/alerts', { org: p.org, ...query })).data
+            : (await octokit.request('GET /repos/{owner}/{repo}/dependabot/alerts', {
+                owner: p.owner as string, repo: p.repo as string, ...query,
+              })).data;
+
+          const alerts = data.map((a) => ({
+            number: a.number,
+            state: a.state,
+            severity: a.security_advisory?.severity ?? a.security_vulnerability?.severity ?? null,
+            summary: a.security_advisory?.summary ?? null,
+            package: a.dependency?.package?.name ?? a.security_vulnerability?.package?.name ?? null,
+            ecosystem: a.dependency?.package?.ecosystem ?? a.security_vulnerability?.package?.ecosystem ?? null,
+            manifest_path: a.dependency?.manifest_path ?? null,
+            ghsa_id: a.security_advisory?.ghsa_id ?? null,
+            cve_id: a.security_advisory?.cve_id ?? null,
+            url: a.html_url,
+            created_at: a.created_at,
+            updated_at: a.updated_at ?? null,
+            dismissed_at: a.dismissed_at ?? null,
+            fixed_at: a.fixed_at ?? null,
+            repository: (a as { repository?: { full_name?: string } }).repository?.full_name ?? null,
+          }));
+
+          return { success: true, data: { count: alerts.length, alerts } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'List dependabot alerts');
+        }
+      }
+
+      case 'github.get_dependabot_alert': {
+        const p = getDependabotAlert.params.parse(params);
+        try {
+          const { data } = await octokit.request(
+            'GET /repos/{owner}/{repo}/dependabot/alerts/{alert_number}',
+            { owner: p.owner, repo: p.repo, alert_number: p.alert_number },
+          );
+          return { success: true, data };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Get dependabot alert');
         }
       }
 

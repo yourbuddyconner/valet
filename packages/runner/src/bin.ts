@@ -128,18 +128,9 @@ function buildInitialConfig(): OpenCodeConfig {
   if (process.env.OPENAI_API_KEY) providerKeys.openai = process.env.OPENAI_API_KEY;
   if (process.env.GOOGLE_API_KEY) providerKeys.google = process.env.GOOGLE_API_KEY;
 
-  const tools: Record<string, boolean> = {};
-  // Disable Parallel AI tools if the API key is not configured
-  if (!process.env.PARALLEL_API_KEY) {
-    tools.parallel_web_search = false;
-    tools.parallel_web_extract = false;
-    tools.parallel_deep_research = false;
-    tools.parallel_data_enrichment = false;
-  }
-
   return {
     providerKeys,
-    tools,
+    tools: {},
     instructions: [],
     isOrchestrator: process.env.IS_ORCHESTRATOR === "true",
   };
@@ -259,60 +250,6 @@ async function main() {
     onForwardMessages: async (targetSessionId, limit, after) => {
       return await agentClient.requestForwardMessages(targetSessionId, limit, after);
     },
-    onListWorkflows: async () => {
-      return await agentClient.requestListWorkflows();
-    },
-    onSyncWorkflow: async (params) => {
-      return await agentClient.requestSyncWorkflow(params);
-    },
-    onGetWorkflow: async (workflowId) => {
-      return await agentClient.requestGetWorkflow(workflowId);
-    },
-    onUpdateWorkflow: async (workflowId, payload) => {
-      return await agentClient.requestUpdateWorkflow(workflowId, payload);
-    },
-    onDeleteWorkflow: async (workflowId) => {
-      return await agentClient.requestDeleteWorkflow(workflowId);
-    },
-    onRunWorkflow: async (params) => {
-      return await agentClient.requestRunWorkflow(
-        params.workflowId,
-        params.variables,
-        {
-          repoUrl: params.repoUrl,
-          branch: params.branch,
-          ref: params.ref,
-          sourceRepoFullName: params.sourceRepoFullName,
-        },
-      );
-    },
-    onListWorkflowExecutions: async (workflowId, limit) => {
-      return await agentClient.requestListWorkflowExecutions(workflowId, limit);
-    },
-    onListTriggers: async (filters) => {
-      return await agentClient.requestListTriggers(filters);
-    },
-    onSyncTrigger: async (params) => {
-      return await agentClient.requestSyncTrigger(params);
-    },
-    onRunTrigger: async (triggerId, params) => {
-      return await agentClient.requestRunTrigger(triggerId, params);
-    },
-    onDeleteTrigger: async (triggerId) => {
-      return await agentClient.requestDeleteTrigger(triggerId);
-    },
-    onGetExecution: async (executionId) => {
-      return await agentClient.requestGetExecution(executionId);
-    },
-    onGetExecutionSteps: async (executionId) => {
-      return await agentClient.requestGetExecutionSteps(executionId);
-    },
-    onApproveExecution: async (executionId, params) => {
-      return await agentClient.requestApproveExecution(executionId, params);
-    },
-    onCancelExecution: async (executionId, params) => {
-      return await agentClient.requestCancelExecution(executionId, params);
-    },
     onTunnelsUpdated: (tunnels) => {
       agentClient.sendTunnels(tunnels);
     },
@@ -352,7 +289,7 @@ async function main() {
       }
       return result;
     },
-    onCallTool: async (toolId, params, summary) => {
+    onCallTool: async (toolId, params, summary, opencodeSessionId) => {
       // Enforce whitelist on tool invocation
       if (activeToolWhitelist) {
         const { service, actionId } = parseToolId(toolId);
@@ -360,7 +297,7 @@ async function main() {
           throw new Error(`Tool "${toolId}" is not available for this persona`);
         }
       }
-      const callResult = await agentClient.requestCallTool(toolId, params, summary);
+      const callResult = await agentClient.requestCallTool(toolId, params, summary, opencodeSessionId);
       // If the action returned images, hand them to the PromptHandler so it
       // can abort the current turn and re-send with vision attachments.
       if (callResult.images?.length) {
@@ -444,11 +381,6 @@ async function main() {
   agentClient.onNewSession(async (channelType, channelId, requestId) => {
     console.log(`[Runner] New session requested for ${channelType}:${channelId}`);
     await promptHandler.handleNewSession(channelType, channelId, requestId);
-  });
-
-  agentClient.onWorkflowExecute(async (executionId, payload, model, modelPreferences) => {
-    console.log(`[Runner] Received workflow execution dispatch: ${executionId} (${payload.kind})`);
-    await promptHandler.handleWorkflowExecutionDispatch(executionId, payload, model, modelPreferences);
   });
 
   agentClient.onTunnelDelete(async (name, actor) => {

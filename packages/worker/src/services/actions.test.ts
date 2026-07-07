@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { approveInvocation, denyInvocation } from './actions.js';
+import { approveInvocation, denyInvocation, markExecuted, markFailed } from './actions.js';
 import { createInvocation, getInvocation } from '../lib/db/actions.js';
 import { actionInvocations, sessions, users } from '../lib/schema/index.js';
 import { createTestDb } from '../test-utils/db.js';
@@ -76,5 +76,70 @@ describe('action invocation approval helpers', () => {
 
     expect(result.ok).toBe(true);
     expect(invocation).toMatchObject({ status: 'denied', resolvedBy: USER_ID });
+  });
+
+  it('markExecuted only flips pending/approved rows; cancel-set "failed" is preserved', async () => {
+    // The cancel cleanup pipeline transitions pending invocations to
+    // 'failed' before the action runs. If the workflow then races to
+    // call markExecuted (replay, slow network), the audit row MUST
+    // stay 'failed' — otherwise we'd lie about an action being
+    // executed for a workflow the user cancelled.
+    await createInvocation(db as any, {
+      id: 'cancelled-mid-flight',
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      service: 'gmail',
+      actionId: 'send',
+      riskLevel: 'medium',
+      resolvedMode: 'allow',
+      status: 'pending',
+    });
+    // Simulate cancel cleanup running first.
+    db.update(actionInvocations)
+      .set({ status: 'failed', error: 'workflow_cancelled' })
+      .where(eq(actionInvocations.id, 'cancelled-mid-flight'))
+      .run();
+    // Late markExecuted from a step.do replay must NOT overwrite.
+    await markExecuted(db as any, 'cancelled-mid-flight', { ok: true });
+    const inv = await getInvocation(db as any, 'cancelled-mid-flight');
+    expect(inv?.status).toBe('failed');
+    expect(inv?.error).toBe('workflow_cancelled');
+  });
+
+  it('markExecuted flips a pending allow-mode row to executed', async () => {
+    await createInvocation(db as any, {
+      id: 'allow-pending',
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      service: 'gmail',
+      actionId: 'send',
+      riskLevel: 'medium',
+      resolvedMode: 'allow',
+      status: 'pending',
+    });
+    await markExecuted(db as any, 'allow-pending', { ok: true });
+    const inv = await getInvocation(db as any, 'allow-pending');
+    expect(inv?.status).toBe('executed');
+  });
+
+  it('markFailed preserves a cancel-set failed row (idempotent)', async () => {
+    await createInvocation(db as any, {
+      id: 'allow-fail-race',
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      service: 'gmail',
+      actionId: 'send',
+      riskLevel: 'medium',
+      resolvedMode: 'allow',
+      status: 'pending',
+    });
+    db.update(actionInvocations)
+      .set({ status: 'failed', error: 'workflow_cancelled' })
+      .where(eq(actionInvocations.id, 'allow-fail-race'))
+      .run();
+    await markFailed(db as any, 'allow-fail-race', 'oh no');
+    const inv = await getInvocation(db as any, 'allow-fail-race');
+    expect(inv?.status).toBe('failed');
+    expect(inv?.error).toBe('workflow_cancelled');
   });
 });

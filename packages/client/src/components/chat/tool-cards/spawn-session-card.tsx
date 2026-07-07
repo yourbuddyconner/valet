@@ -49,6 +49,7 @@ export function SpawnSessionCard({ tool }: { tool: ToolCallData }) {
       icon={<ForkIcon className="h-3.5 w-3.5" />}
       label="spawn_session"
       status={tool.status}
+      tool={tool}
       summary={summary}
     >
       <ToolCardSection>

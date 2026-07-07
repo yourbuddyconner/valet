@@ -105,4 +105,18 @@ export const api = {
 
   delete: <T>(endpoint: string, options?: RequestOptions) =>
     apiClient<T>(endpoint, { ...options, method: 'DELETE' }),
+
+  /**
+   * Lower-level fetch wrapper for callers that need the raw Response —
+   * streaming endpoints, file uploads, or anything that doesn't return
+   * JSON. Adds auth + base URL, doesn't parse the body.
+   */
+  fetch: (endpoint: string, init?: RequestInit): Promise<Response> => {
+    const token = useAuthStore.getState().token;
+    const headers = new Headers(init?.headers);
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    return fetch(`${API_BASE}${endpoint}`, { ...init, headers });
+  },
 };

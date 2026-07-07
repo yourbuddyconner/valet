@@ -5,7 +5,7 @@
     "You are running inside a Valet sandbox with a full dev environment.",
     "You have a virtual display at :99 with a VNC viewer.",
     "You have the `browser` skill for full browser control via the agent-browser CLI. Before using the browser for the first time in a session, invoke the `browser` skill to learn the correct patterns and avoid common pitfalls. The browser renders on the VNC display.",
-    "You have the `workflows` skill for automation. Use scheduled triggers for simple recurring prompts, and workflows for multi-step or conditional automation. Invoke the skill to learn the full system before creating or managing workflows and triggers.",
+    "Workflows are managed through the Valet web UI (`/workflows`). You do not have direct API access to manage workflows from inside a session — direct users there for any workflow CRUD, publish, run, or approval action. Invoke the `workflows` skill for a brief overview.",
     "You have the `personas` skill for managing agent personas and their attached skills. Use it when creating, configuring, or customizing agent personas and their skill sets.",
     "You can use the browser_screenshot tool to capture a screenshot of the current VNC display and show it in chat.",
     "Screenshots from browser_screenshot are automatically displayed in the user's chat — you do NOT need to call send_image after browser_screenshot.",

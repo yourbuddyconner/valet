@@ -1,0 +1,142 @@
+<h2>Execution page: which mental model fits?</h2>
+<p class="subtitle">The current page leads with the diagram and dumps step outputs in a flat list. Three directions for how a workflow run could be experienced.</p>
+
+<style>
+  .triple { display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  .frame { background:var(--surface-2,#0f1115); border:1px solid var(--border,#222); border-radius:10px; padding:10px; height: 460px; display:flex; flex-direction:column; gap:6px; }
+  .row { display:flex; gap:6px; align-items:stretch; }
+  .pill { font-size:10px; padding:2px 6px; border-radius:4px; background:#1f2937; color:#d1d5db; font-family: ui-monospace, monospace; }
+  .step-card { background:#0b0d12; border:1px solid #222; border-radius:6px; padding:8px; display:flex; flex-direction:column; gap:4px; }
+  .step-card.ok { border-left: 3px solid #10b981; }
+  .step-card.fail { border-left: 3px solid #ef4444; }
+  .step-card.run { border-left: 3px solid #f59e0b; }
+  .step-card.pending { border-left: 3px solid #4b5563; opacity:0.6; }
+  .step-title { font-family: ui-monospace, monospace; font-size:11px; color:#e5e7eb; display:flex; justify-content:space-between; }
+  .step-meta { font-size:10px; color:#9ca3af; }
+  .preview { background:#06080c; border-radius:4px; padding:4px 6px; font-family:ui-monospace, monospace; font-size:10px; color:#9ca3af; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .scroller { overflow-y:auto; display:flex; flex-direction:column; gap:6px; flex:1; }
+  .diagram-mini { background:#06080c; border-radius:4px; padding:8px; display:flex; flex-direction:column; align-items:center; gap:4px; flex:1; }
+  .node { background:#1f2937; color:#e5e7eb; font-family:ui-monospace, monospace; font-size:9px; padding:3px 8px; border-radius:3px; }
+  .node.sel { background:#3b82f6; }
+  .node.ok { border-left:2px solid #10b981; }
+  .arrow { color:#4b5563; font-size:10px; }
+  .label { font-size:9px; text-transform:uppercase; letter-spacing:0.08em; color:#6b7280; }
+  .opt-title { font-size:13px; font-weight:600; color:#f9fafb; }
+  .opt-sub { font-size:11px; color:#9ca3af; }
+  .options { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:14px; margin-top:14px; }
+  .option-block { padding:10px; border-radius:8px; border:1px solid #222; cursor:pointer; transition: all .15s; }
+  .option-block:hover { background:#0f1115; border-color:#3b82f6; }
+  .selected-tag { display:inline-block; font-size:9px; padding:1px 5px; background:#10b981; color:#000; border-radius:3px; margin-left:4px; }
+</style>
+
+<div class="triple">
+  <!-- A: Timeline-first -->
+  <div class="frame">
+    <div class="label">A · Timeline cards</div>
+    <div class="scroller">
+      <div class="step-card ok">
+        <div class="step-title"><span>LOOP · over personas</span><span class="pill">3 iters</span></div>
+        <div class="step-meta">1.2s · 3 of 3</div>
+      </div>
+      <div class="step-card ok" style="margin-left:14px">
+        <div class="step-title"><span>AGENT · personaResult <span class="pill">#1</span></span><span>✓</span></div>
+        <div class="preview">"Orchestrating spring raids on properly cobblers..."</div>
+      </div>
+      <div class="step-card ok" style="margin-left:14px">
+        <div class="step-title"><span>AGENT · personaResult <span class="pill">#2</span></span><span>✓</span></div>
+        <div class="preview">"Orchestrating complex software engineering heists..."</div>
+      </div>
+      <div class="step-card ok" style="margin-left:14px">
+        <div class="step-title"><span>AGENT · personaResult <span class="pill">#3</span></span><span>✓</span></div>
+        <div class="preview">"Greetings team, ready to dive into the day..."</div>
+      </div>
+      <div class="step-card ok">
+        <div class="step-title"><span>BASH · envOutput</span><span>✓</span></div>
+        <div class="preview">Runner OS: Linux, Shell: /bin/bash</div>
+      </div>
+      <div class="step-card ok">
+        <div class="step-title"><span>BASH · timestampOutput</span><span>✓</span></div>
+        <div class="preview">Workflow ran at $(date +%H:%M:%S)</div>
+      </div>
+      <div class="step-card fail">
+        <div class="step-title"><span>NOTIFY · notify-both-responded</span><span>✗</span></div>
+        <div class="preview">outputs.personaResult.capability</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- B: Diagram-focus split -->
+  <div class="frame">
+    <div class="label">B · Diagram-focus split</div>
+    <div class="row" style="flex:1;">
+      <div class="diagram-mini" style="flex:1.1;">
+        <div class="node ok">trigger</div>
+        <div class="arrow">↓</div>
+        <div class="node ok">loop</div>
+        <div class="arrow">↓</div>
+        <div class="node ok sel">personaResult</div>
+        <div class="arrow">↓</div>
+        <div class="node ok">envOutput</div>
+        <div class="arrow">↓</div>
+        <div class="node ok">timestampOutput</div>
+        <div class="arrow">↓</div>
+        <div class="node" style="border:1px solid #ef4444;">notify ✗</div>
+      </div>
+      <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
+        <div class="step-card ok" style="border-left-width:3px;">
+          <div class="step-title"><span>personaResult <span class="pill">#1</span></span></div>
+          <div class="step-meta">800ms · agent_prompt</div>
+          <div class="preview">"capability": "Orchestrating spring raids on properly cobblers..."</div>
+        </div>
+        <div class="step-card ok" style="opacity:.6">
+          <div class="step-title"><span>#2</span></div>
+          <div class="preview">"complex software engineering..."</div>
+        </div>
+        <div class="step-card ok" style="opacity:.6">
+          <div class="step-title"><span>#3</span></div>
+          <div class="preview">"Greetings team, ready..."</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- C: Report-style top-down -->
+  <div class="frame">
+    <div class="label">C · Report (collapsed by default)</div>
+    <div class="scroller">
+      <div class="step-card ok">
+        <div class="step-title"><span>▸ loop · over personas <span class="pill">3 iters · 1.2s</span></span><span>✓</span></div>
+      </div>
+      <div class="step-card ok">
+        <div class="step-title"><span>▸ envOutput · bash <span class="pill">120ms</span></span><span>✓</span></div>
+      </div>
+      <div class="step-card ok">
+        <div class="step-title"><span>▾ timestampOutput · bash <span class="pill">90ms</span></span><span>✓</span></div>
+        <div class="preview" style="white-space:pre-wrap; max-height:60px;">{
+  "stdout": "Workflow ran at 21:43:11",
+  "exitCode": 0
+}</div>
+      </div>
+      <div class="step-card fail">
+        <div class="step-title"><span>▾ notify-both-responded · notify</span><span>✗</span></div>
+        <div class="preview" style="color:#fecaca;">outputs.personaResult.capability</div>
+        <button class="pill" style="background:#374151; cursor:pointer;">↻ Retry from here</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="options" data-multiselect>
+  <div class="option-block option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="opt-title">A · Timeline cards</div>
+    <div class="opt-sub">Vertical timeline. Each step is a card with inline output preview. Loops indent their iterations as nested cards. CI / GitHub Actions feel.</div>
+  </div>
+  <div class="option-block option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="opt-title">B · Diagram-focus split</div>
+    <div class="opt-sub">Diagram is the navigation. Clicking a node focuses its detail panel. Selected step shows input + output. Architectural / "I think in graphs" feel.</div>
+  </div>
+  <div class="option-block option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="opt-title">C · Report (collapsed)</div>
+    <div class="opt-sub">Linear list, everything collapsed by default. Click a row to expand its IO. Compact, scan-friendly. Build log / test report feel.</div>
+  </div>
+</div>

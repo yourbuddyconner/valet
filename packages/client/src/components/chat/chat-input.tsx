@@ -7,6 +7,23 @@ import { useAudioRecorder } from '@/hooks/use-audio-recorder';
 import { SLASH_COMMANDS } from '@valet/shared';
 import { isImageFile, needsProcessing, needsCompression, processImage, perImageBudget } from '@/lib/image-compression';
 import { toastError } from '@/hooks/use-toast';
+import {
+  ModelSelector,
+  ModelSelectorContent,
+  ModelSelectorEmpty,
+  ModelSelectorGroup,
+  ModelSelectorInput,
+  ModelSelectorItem,
+  ModelSelectorList,
+  ModelSelectorLogo,
+  ModelSelectorName,
+  ModelSelectorSeparator,
+  ModelSelectorTrigger,
+} from '@/components/ui/model-selector';
+import {
+  buildModelSelectorGroups,
+  type FlatModel,
+} from '@/components/ui/model-selector-utils';
 
 interface ChatInputProps {
   onSend: (content: string, model?: string, attachments?: PromptAttachment[]) => void;
@@ -20,6 +37,8 @@ interface ChatInputProps {
   placeholder?: string;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   availableModels?: ProviderModels[];
+  userModelPreferences?: string[];
+  orgModelPreferences?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
   onAbort?: () => void;
@@ -40,12 +59,6 @@ interface ChatInputProps {
   externalValue?: string | null;
   /** Called after externalValue has been consumed */
   onExternalValueConsumed?: () => void;
-}
-
-interface FlatModel {
-  id: string;
-  name: string;
-  provider: string;
 }
 
 const MAX_IMAGE_ATTACHMENTS = 8;
@@ -140,6 +153,8 @@ export function ChatInput({
   placeholder = 'Ask or build anything...',
   inputRef,
   availableModels = [],
+  userModelPreferences,
+  orgModelPreferences,
   selectedModel = '',
   onModelChange,
   onAbort,
@@ -166,6 +181,7 @@ export function ChatInput({
   const [isSendingFiles, setIsSendingFiles] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
   const originalFilesRef = useRef<File[]>([]);
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -238,6 +254,15 @@ export function ChatInput({
       p.models.map((m) => ({ id: m.id, name: m.name, provider: p.provider }))
     );
   }, [availableModels]);
+  const modelGroups = useMemo(
+    () =>
+      buildModelSelectorGroups({
+        availableModels,
+        userModelPreferences,
+        orgModelPreferences,
+      }),
+    [availableModels, orgModelPreferences, userModelPreferences]
+  );
 
   // ─── Slash Command Detection ──────────────────────────────────────────
   // Detect /command pattern: input is exactly "/<partial>" with no spaces (command picker)
@@ -977,7 +1002,7 @@ export function ChatInput({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
+              className="flex h-11 w-11 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
               title="Attach files"
               aria-label="Attach files"
             >
@@ -988,7 +1013,7 @@ export function ChatInput({
                 <button
                   type="button"
                   onClick={cancelRecording}
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
+                  className="flex h-11 w-11 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
                   title="Cancel recording"
                   aria-label="Cancel recording"
                 >
@@ -1001,7 +1026,7 @@ export function ChatInput({
                 <button
                   type="button"
                   onClick={handleMicClick}
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-red-500 transition-colors hover:bg-red-500/20"
+                  className="flex h-11 w-11 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-red-500 transition-colors hover:bg-red-500/20"
                   title="Stop recording"
                   aria-label="Stop recording"
                 >
@@ -1012,7 +1037,7 @@ export function ChatInput({
               <button
                 type="button"
                 onClick={handleMicClick}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
+                className="flex h-11 w-11 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
                 title="Record voice note"
                 aria-label="Record voice note"
               >
@@ -1024,29 +1049,97 @@ export function ChatInput({
             )}
             <div className="flex-1" />
             {hasModels && (
-              <select
-                value={selectedModel}
-                onChange={(e) => onModelChange?.(e.target.value)}
-                className="max-w-[240px] shrink-0 cursor-pointer truncate appearance-none rounded-md border border-neutral-200/60 bg-transparent px-1.5 py-0.5 font-mono text-xs font-medium text-neutral-400 transition-colors hover:border-neutral-300 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/30 dark:border-neutral-700/60 dark:text-neutral-500 dark:hover:border-neutral-600 dark:hover:text-neutral-400"
-              >
-                <option value="">Default model</option>
-                {availableModels.map((provider) => (
-                  <optgroup key={provider.provider} label={provider.provider}>
-                    {provider.models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
+              <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen}>
+                <ModelSelectorTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-neutral-200/60 bg-transparent px-1.5 py-0.5 font-mono text-xs font-medium text-neutral-400 transition-colors hover:border-neutral-300 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/30 dark:border-neutral-700/60 dark:text-neutral-500 dark:hover:border-neutral-600 dark:hover:text-neutral-400"
+                  >
+                    {selectedModel ? (
+                      (() => {
+                        const flat = allModels.find((m) => m.id === selectedModel);
+                        return flat ? (
+                          <>
+                            <ModelSelectorLogo provider={flat.provider} />
+                            <span className="max-w-[140px] truncate">{flat.name}</span>
+                          </>
+                        ) : (
+                          <span className="max-w-[140px] truncate">{selectedModel}</span>
+                        );
+                      })()
+                    ) : (
+                      <span>Default model</span>
+                    )}
+                  </button>
+                </ModelSelectorTrigger>
+                <ModelSelectorContent>
+                  <ModelSelectorInput placeholder="Search models..." />
+                  <ModelSelectorList>
+                    <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
+                    <ModelSelectorItem
+                      value="__default__"
+                      onSelect={() => {
+                        onModelChange?.('');
+                        setModelSelectorOpen(false);
+                      }}
+                    >
+                      <ModelSelectorName className="text-neutral-500">Default model</ModelSelectorName>
+                      {!selectedModel && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
+                    </ModelSelectorItem>
+                    <ModelSelectorSeparator />
+                    {modelGroups.preferredGroup && (
+                      <>
+                        <ModelSelectorGroup heading={modelGroups.preferredGroup.heading}>
+                          {modelGroups.preferredGroup.models.map((m) => (
+                            <ModelSelectorItem
+                              key={m.id}
+                              value={m.id}
+                              onSelect={() => {
+                                onModelChange?.(m.id);
+                                setModelSelectorOpen(false);
+                              }}
+                            >
+                              <ModelSelectorLogo provider={m.provider} />
+                              <ModelSelectorName>{m.name}</ModelSelectorName>
+                              {selectedModel === m.id && (
+                                <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                              )}
+                            </ModelSelectorItem>
+                          ))}
+                        </ModelSelectorGroup>
+                        <ModelSelectorSeparator />
+                      </>
+                    )}
+                    {modelGroups.providerGroups.map((provider) => (
+                      <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
+                        {provider.models.map((m) => (
+                          <ModelSelectorItem
+                            key={m.id}
+                            value={m.id}
+                            onSelect={() => {
+                              onModelChange?.(m.id);
+                              setModelSelectorOpen(false);
+                            }}
+                          >
+                            <ModelSelectorLogo provider={provider.provider} />
+                            <ModelSelectorName>{m.name}</ModelSelectorName>
+                            {selectedModel === m.id && (
+                              <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                            )}
+                          </ModelSelectorItem>
+                        ))}
+                      </ModelSelectorGroup>
                     ))}
-                  </optgroup>
-                ))}
-              </select>
+                  </ModelSelectorList>
+                </ModelSelectorContent>
+              </ModelSelector>
             )}
             {/* Send / Stop — circle button inside the container */}
             {isAgentActive ? (
               <button
                 type="button"
                 onClick={onAbort}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-neutral-600 text-white transition-colors hover:bg-neutral-700 dark:bg-neutral-400 dark:text-neutral-900 dark:hover:bg-neutral-300"
+                className="flex h-11 w-11 md:h-8 md:w-8 shrink-0 items-center justify-center rounded-full bg-neutral-600 text-white transition-colors hover:bg-neutral-700 dark:bg-neutral-400 dark:text-neutral-900 dark:hover:bg-neutral-300"
                 aria-label="Stop"
               >
                 <StopIcon className="h-3.5 w-3.5" />
@@ -1055,7 +1148,7 @@ export function ChatInput({
               <button
                 type="submit"
                 disabled={(!value.trim() && attachments.length === 0) || disabled || sendDisabled || isSendingFiles || isCompressing}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
+                className="flex h-11 w-11 md:h-8 md:w-8 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
                 aria-label="Send"
               >
                 <SendIcon className="h-4 w-4" />
@@ -1178,6 +1271,25 @@ function MicStopIcon({ className }: { className?: string }) {
       className={className}
     >
       <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M20 6 9 17l-5-5" />
     </svg>
   );
 }

@@ -52,10 +52,14 @@ export function CollaboratorsBar({ connectedUsers, className }: CollaboratorsBar
             <img
               src={user.avatarUrl}
               alt={user.name || user.id}
+              title={user.name || `User ${user.id.slice(0, 8)}`}
+              aria-label={user.name || `User ${user.id.slice(0, 8)}`}
               className="h-6 w-6 rounded-full border-2 border-surface-0 ring-0 dark:border-surface-0"
             />
           ) : (
             <div
+              title={user.name || `User ${user.id.slice(0, 8)}`}
+              aria-label={user.name || `User ${user.id.slice(0, 8)}`}
               className={cn(
                 'flex h-6 w-6 items-center justify-center rounded-full border-2 border-surface-0 font-mono text-[9px] font-semibold text-white dark:border-surface-0',
                 getColorForUser(user.id)

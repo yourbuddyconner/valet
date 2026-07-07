@@ -18,6 +18,8 @@ import {
 type AdminMcpConnectorsContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 const authTypeSchema = z.enum(['none', 'oauth', 'api_key', 'bearer']);
+const credentialScopeSchema = z.enum(['org', 'user']);
+const apiKeyPlacementSchema = z.enum(['header', 'query']);
 const tokenEndpointAuthMethodSchema = z.enum([
   'none',
   'client_secret_basic',
@@ -30,6 +32,7 @@ const createConnectorSchema = z.object({
   displayName: z.string().trim().min(1),
   serverUrl: z.string().trim().min(1),
   authType: authTypeSchema,
+  credentialScope: credentialScopeSchema.optional(),
   oauthClientId: z.string().trim().min(1).nullable().optional(),
   oauthClientSecret: z.string().optional(),
   oauthTokenEndpointAuthMethod: tokenEndpointAuthMethodSchema.optional(),
@@ -37,8 +40,10 @@ const createConnectorSchema = z.object({
   oauthAuthorizationEndpoint: z.string().trim().min(1).nullable().optional(),
   oauthTokenEndpoint: z.string().trim().min(1).nullable().optional(),
   apiKey: z.string().optional(),
+  apiKeyPlacement: apiKeyPlacementSchema.optional(),
   apiKeyHeaderName: z.string().trim().min(1).nullable().optional(),
   apiKeyPrefix: z.string().nullable().optional(),
+  apiKeyQueryParam: z.string().trim().min(1).nullable().optional(),
   additionalHeaders: additionalHeadersSchema.optional(),
   status: z.enum(['active', 'disabled']).optional(),
 }).strict() satisfies ZodType<CreateCustomMcpConnectorRequest>;
@@ -47,6 +52,7 @@ const updateConnectorSchema = z.object({
   displayName: z.string().trim().min(1).optional(),
   serverUrl: z.string().trim().min(1).optional(),
   authType: authTypeSchema.optional(),
+  credentialScope: credentialScopeSchema.optional(),
   oauthClientId: z.string().trim().min(1).nullable().optional(),
   oauthClientSecret: z.string().optional(),
   clearClientSecret: z.boolean().optional(),
@@ -55,8 +61,10 @@ const updateConnectorSchema = z.object({
   oauthAuthorizationEndpoint: z.string().trim().min(1).nullable().optional(),
   oauthTokenEndpoint: z.string().trim().min(1).nullable().optional(),
   apiKey: z.string().optional(),
+  apiKeyPlacement: apiKeyPlacementSchema.optional(),
   apiKeyHeaderName: z.string().trim().min(1).nullable().optional(),
   apiKeyPrefix: z.string().nullable().optional(),
+  apiKeyQueryParam: z.string().trim().min(1).nullable().optional(),
   additionalHeaders: additionalHeadersSchema.optional(),
   clearAdditionalHeaders: z.boolean().optional(),
   status: z.enum(['active', 'disabled', 'error']).optional(),

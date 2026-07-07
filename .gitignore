@@ -15,6 +15,7 @@ node_modules/
 dist/
 .wrangler/
 wrangler.deploy.toml
+wrangler.local.toml
 
 # Environment files
 .env

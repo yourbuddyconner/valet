@@ -361,7 +361,15 @@ Orchestrator sessions do NOT get auto-created web bindings through this path.
 
 ### Channel Reply
 
-The `channel_reply` tool allows the orchestrator (or any session) to reply on external channels. Supports text and images. Routes through the gateway to the DO, which dispatches to the appropriate channel handler (Telegram, Slack, etc.).
+The `channel_reply` tool allows the orchestrator (or any session) to reply on external channels. Supports text, images, and files. Routes through the gateway to the DO, which dispatches to the appropriate channel handler (Telegram, Slack, etc.).
+
+Successful external replies return a tool result to the runner but do not create separate web UI transcript messages. This keeps externally sent replies from appearing as synthetic `system` bubbles in the browser thread.
+
+### Thread Routing Mappings
+
+`channel_thread_mappings` is routing metadata for replies and follow-ups across external channels such as Slack and Telegram. Adding or updating a reply routing mapping must not relabel the thread's original display origin.
+
+Orchestrator-targeted manual and scheduled triggers create automation-origin threads for sidebar grouping. Workflow execution history is not part of this behavior.
 
 ## Memory System
 
@@ -437,9 +445,15 @@ Both orchestrators and children can create/list tasks on the same board.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/memories` | List/search memories (optional category, query, limit) |
-| POST | `/memories` | Create memory (content + category) |
-| DELETE | `/memories/:id` | Delete memory |
+| GET | `/memory?path=` | List a directory (empty path or trailing `/`) or read a file |
+| PUT | `/memory` | Create or overwrite a file (`{ path, content }`) |
+| PATCH | `/memory` | Surgical edits (append/prepend/replace/insert_after/delete_section) |
+| DELETE | `/memory?path=` | Delete a file, or all files under a `/`-suffixed prefix |
+| GET | `/memory/search?query=` | FTS5 search (optional `path` prefix) |
+| GET | `/memory/export` | Export all of the user's memory files as a portable JSON bundle |
+| POST | `/memory/import` | Import a bundle (merge — overwrites same-path files; skips invalid/empty) |
+
+Export/import let users move memory between environments (e.g. dev → prod). The bundle is `{ version, exportedAt, count, files: [{ path, content, pinned, updatedAt }] }`; import reuses the write path, so normalization, pinning, FTS indexing, and the memory cap all apply.
 
 ### Notification Routes (`/api/me`)
 

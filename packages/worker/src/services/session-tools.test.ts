@@ -172,10 +172,112 @@ describe('resolveActionPolicy', () => {
       orgId: 'default',
     });
 
-    expect(result.tools).toMatchObject([{ id: 'salesforce:salesforce.query', riskLevel: 'low' }]);
+    expect(result.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'salesforce:salesforce.query', riskLevel: 'low' }),
+    ]));
     expect(resolveSpy).not.toHaveBeenCalledWith('salesforce', expect.anything(), expect.anything(), expect.anything());
     const toolsListHeaders = new Headers((fetchMock.mock.calls.at(-1)?.[1] as RequestInit).headers);
     expect(toolsListHeaders.get('X-API-Key')).toBe('org-api-key');
+  });
+
+  it('lists workflow tools without a configured integration row', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    db.insert(users).values({ id: USER_ID, email: 'workflow-tools@example.com' }).run();
+
+    const result = await listTools(appDb, mockD1(), envWithEncryption(), USER_ID, {
+      credentialCache: emptyCredentialCache(),
+      orgId: 'default',
+      service: 'workflows',
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.tools.map((tool) => tool.id)).toContain('workflows:workflows.list');
+    expect(result.tools.map((tool) => tool.id)).toContain('workflows:workflows.publish');
+    expect(integrationRegistry.getProvider('workflows')?.authType).toBe('none');
+  });
+
+  it('resolves workflow action policy without a configured integration row', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    db.insert(users).values({ id: USER_ID, email: 'workflow-policy@example.com' }).run();
+    db.insert(sessions).values({
+      id: SESSION_ID,
+      userId: USER_ID,
+      workspace: '/tmp/workflow-policy',
+      status: 'running',
+    }).run();
+
+    const result = await resolveActionPolicy(
+      appDb,
+      mockD1(),
+      envWithEncryption(),
+      USER_ID,
+      'workflows:workflows.list',
+      {},
+      {
+        sessionId: SESSION_ID,
+        discoveredToolRiskLevels: new Map([['workflows:workflows.list', 'low']]),
+        credentialCache: emptyCredentialCache(),
+        disabledPluginServicesCache: null,
+        orgId: 'default',
+      },
+    );
+
+    expect(result).toMatchObject({
+      outcome: 'allowed',
+      service: 'workflows',
+      actionId: 'workflows.list',
+      riskLevel: 'low',
+    });
+  });
+
+  it('lists user-scoped custom API-key connector tools with the current user credential', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    db.insert(users).values({ id: USER_ID, email: 'mcp-policy@example.com' }).run();
+    db.insert(customMcpConnectors).values({
+      id: 'connector-1',
+      orgId: 'default',
+      serviceSlug: 'excalibur',
+      displayName: 'Excalibur',
+      serverUrl: 'https://mcp.example.com',
+      authType: 'api_key',
+      credentialScope: 'user',
+      apiKeyHeaderName: 'X-API-Key',
+      apiKeyPrefix: 'Token',
+      status: 'active',
+    }).run();
+    db.insert(integrations).values({
+      id: 'integration-excalibur',
+      userId: USER_ID,
+      service: 'excalibur',
+      config: { entities: [] },
+      status: 'active',
+    }).run();
+    const fetchMock = stubMcpFetch();
+    vi.spyOn(integrationRegistry, 'resolveCredentials').mockResolvedValue({
+      ok: true,
+      credential: {
+        accessToken: 'user-api-key',
+        credentialType: 'api_key',
+        refreshed: false,
+      },
+    });
+
+    const result = await listTools(appDb, mockD1(), envWithEncryption(), USER_ID, {
+      credentialCache: emptyCredentialCache(),
+      orgId: 'default',
+    });
+
+    expect(result.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'excalibur:excalibur.query', riskLevel: 'low' }),
+    ]));
+    expect(integrationRegistry.resolveCredentials).toHaveBeenCalledWith('excalibur', expect.anything(), USER_ID, {
+      forceRefresh: false,
+    });
+    const toolsListHeaders = new Headers((fetchMock.mock.calls.at(-1)?.[1] as RequestInit).headers);
+    expect(toolsListHeaders.get('X-API-Key')).toBe('Token user-api-key');
   });
 
   it('filters disabled actions for custom connector slugs', async () => {

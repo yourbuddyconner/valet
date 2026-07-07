@@ -7,7 +7,7 @@ import type { SlackTransport } from '@valet/plugin-slack/channels';
 import { checkPrivateChannelAccess } from '@valet/plugin-slack/actions';
 import { channelRegistry } from '../channels/registry.js';
 import * as db from '../lib/db.js';
-import { dispatchOrchestratorPrompt } from '../lib/workflow-runtime.js';
+import { dispatchOrchestratorPrompt } from '../services/orchestrator.js';
 import { handleChannelCommand } from './channel-webhooks.js';
 import { getSlackUserInfo, getSlackBotInfo } from '../services/slack.js';
 import { buildThreadContext, buildDmContext } from '../services/slack-threads.js';

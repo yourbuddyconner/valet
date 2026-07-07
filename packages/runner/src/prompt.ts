@@ -19,14 +19,6 @@
 import { createTwoFilesPatch } from "diff";
 import { AgentClient, type PromptAuthor } from "./agent-client.js";
 import type { AvailableModels, DiffFile, PromptAttachment, ReviewFileSummary, ReviewResultData } from "./types.js";
-import { compileWorkflowDefinition, type NormalizedWorkflowStep } from "./workflow-compiler.js";
-import {
-  executeWorkflowResume,
-  executeWorkflowRun,
-  type WorkflowRunPayload,
-  type WorkflowStepExecutionContext,
-  type WorkflowStepExecutionResult,
-} from "./workflow-engine.js";
 
 // ─── Date Context ────────────────────────────────────────────────────────────
 
@@ -164,15 +156,6 @@ interface AssistantMessageRecovery {
   modelLabel?: string;
   finish?: string;
   outputTokens?: number | null;
-}
-
-interface WorkflowExecutionDispatchPayload {
-  kind: "run" | "resume";
-  executionId: string;
-  workflowHash?: string;
-  resumeToken?: string;
-  decision?: "approve" | "deny";
-  payload: Record<string, unknown>;
 }
 
 interface SessionResyncResult {
@@ -314,6 +297,45 @@ function attachmentSummary(attachments: PromptAttachment[]): string {
     .join(',');
 }
 
+function timeoutFromEnv(name: string, fallbackMs: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallbackMs;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallbackMs;
+}
+
+function readProcessStream(stream: unknown): Promise<string> {
+  if (!stream || typeof stream !== 'object') return Promise.resolve('');
+  return new Response(stream as ReadableStream<Uint8Array>).text().catch(() => '');
+}
+
+async function waitForSubprocess(
+  proc: ReturnType<typeof Bun.spawn>,
+  timeoutMs: number,
+): Promise<{ timedOut: true; exitCode: null; stderr: string } | { timedOut: false; exitCode: number; stderr: string }> {
+  const stdoutPromise = readProcessStream(proc.stdout);
+  const stderrPromise = readProcessStream(proc.stderr);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      proc.exited.then((exitCode) => ({ type: 'exit' as const, exitCode })),
+      new Promise<{ type: 'timeout' }>((resolve) => {
+        timeoutId = setTimeout(() => resolve({ type: 'timeout' }), timeoutMs);
+      }),
+    ]);
+
+    if (outcome.type === 'timeout') {
+      try { proc.kill('SIGKILL'); } catch { /* already exited */ }
+      return { timedOut: true, exitCode: null, stderr: '' };
+    }
+
+    const [, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+    return { timedOut: false, exitCode: outcome.exitCode, stderr };
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 // Emergency fallback timeout — only fires if no idle/completion event arrives
 const EMERGENCY_TIMEOUT_MS = 60_000;
 
@@ -324,6 +346,56 @@ const FIRST_RESPONSE_TIMEOUT_MS = 90_000;
 // Hard ceiling on a single sync prompt attempt. Prevents the sync fetch from blocking
 // forever when OpenCode enters an internal provider retry loop (e.g. repeated 429/5xx).
 const SYNC_PROMPT_TIMEOUT_MS = 300_000; // 5 minutes
+
+// Audio preprocessing runs before the sync prompt timeout starts, so each
+// subprocess needs its own ceiling to avoid pinning a channel busy forever.
+const AUDIO_FFMPEG_TIMEOUT_MS = 60_000;
+const AUDIO_WHISPER_TIMEOUT_MS = 120_000;
+const DEFAULT_WHISPER_MODEL_PATH = '/models/whisper/ggml-base.en.bin';
+
+type AudioTranscriptionFailureReason =
+  | 'invalid-data-url'
+  | 'missing-whisper-model'
+  | 'ffmpeg-timeout'
+  | 'ffmpeg-failed'
+  | 'whisper-timeout'
+  | 'whisper-failed'
+  | 'missing-output'
+  | 'empty-transcript'
+  | 'transcription-error';
+
+interface AudioTranscriptionFailure {
+  reason: AudioTranscriptionFailureReason;
+  mime: string;
+  filename?: string;
+  detail?: string;
+}
+
+interface AudioTranscriptionResult {
+  transcriptions: string[];
+  remaining: PromptAttachment[];
+  failures: AudioTranscriptionFailure[];
+}
+
+function whisperModelPath(): string {
+  return process.env.VALET_WHISPER_MODEL_PATH || DEFAULT_WHISPER_MODEL_PATH;
+}
+
+function audioTranscriptionFallback(failures: AudioTranscriptionFailure[]): string {
+  const missingModel = failures.find((failure) => failure.reason === 'missing-whisper-model');
+  if (missingModel) {
+    const detail = missingModel.detail ? ` ${missingModel.detail}` : '';
+    return `[The user sent a voice note/audio attachment. The audio reached the runner, but local transcription could not run because the Whisper model is missing.${detail} Ask an operator to provision the Whisper model volume, or ask the user to type the message.]`;
+  }
+
+  const firstFailure = failures[0];
+  if (firstFailure) {
+    const detail = firstFailure.detail ? `${firstFailure.reason}: ${firstFailure.detail}` : firstFailure.reason;
+    return `[The user sent a voice note/audio attachment. The audio reached the runner, but local transcription failed (${detail}). Ask the user to type the message if the transcript is needed.]`;
+  }
+
+  return '[The user sent a voice note/audio attachment, but transcription is unavailable. Please ask them to type their message instead.]';
+}
 
 // Repeated zero-output retry status events mean OpenCode is retrying the same
 // provider internally without returning a usable response to the runner.
@@ -575,6 +647,12 @@ export class ChannelSession {
   awaitingAssistantForAttempt = false;
   turnCreated = false;
   turnId: string | null = null;
+  /** Thread the current prompt belongs to. Sourced from the inbound prompt
+   *  message; survives across prompts on the same channel until a new
+   *  threadId is provided. Used to tag the assistant turn so messages
+   *  persist with a non-null thread_id even on channels (like `web:*`)
+   *  whose channelKey doesn't encode the thread. */
+  currentThreadId: string | null = null;
 
   // Callback to reset the sync prompt timeout on SSE activity.
   // Set by the failover loop, cleared when the sync fetch completes.
@@ -592,7 +670,18 @@ export class ChannelSession {
   pendingReplyChannelId: string | undefined;
 
   // Per-message usage entries for the current turn (reset per prompt)
-  usageEntries = new Map<string, { model: string; inputTokens: number; outputTokens: number }>();
+  // Per-message token breakdown for the current turn. Mirrors OpenCode's
+  // tokens shape verbatim so downstream consumers can compose cost-aware
+  // views (cache reads vs writes are billed at different rates, reasoning
+  // is billed as output, etc).
+  usageEntries = new Map<string, {
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    reasoningTokens: number;
+  }>();
 
   // Pre-compaction memory flush state (session-lifetime — NOT reset per prompt)
   cumulativeInputTokens = 0;
@@ -708,7 +797,9 @@ export class PromptHandler {
   private eventStreamAbort: AbortController | null = null;
   private responseTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private firstResponseTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  private lastPromptSentAt: number = 0;
+  // (lastPromptSentAt removed at class level — the real per-channel value
+  //  lives on ChannelSession.lastPromptSentAt. The class-level field was
+  //  dead state and a footgun for future cross-channel leaks.)
 
   // Per-channel OpenCode session state
   private channels = new Map<string, ChannelSession>();
@@ -802,15 +893,13 @@ export class PromptHandler {
   private idleWaiters = new Map<string, () => void>();
   private ephemeralContent = new Map<string, string>(); // accumulated text from SSE
 
-  // Original channel info for [via ...] attribution when channelType is 'thread'
-  private pendingReplyChannelType: string | undefined;
-  private pendingReplyChannelId: string | undefined;
+  // (pendingReplyChannelType / pendingReplyChannelId removed at class level —
+  //  the per-channel fields on ChannelSession are the source of truth. The
+  //  class-level fields were dead state and a cross-channel-leak footgun.)
 
   // OpenCode question requests (question tool)
   private pendingQuestionRequests = new Map<string, { answers: (string[] | null)[] }>();
   private promptToQuestion = new Map<string, { requestID: string; index: number }>();
-  private workflowExecutionModel: string | undefined;
-  private workflowExecutionModelPreferences: string[] | undefined;
   private readonly verboseSseDebug = process.env.RUNNER_DEBUG_SSE_RAW === "1";
   private sseDebugLogCount = 0;
   private readonly sseDebugLogLimit = 80;
@@ -1077,13 +1166,17 @@ export class PromptHandler {
   private extractChannelContext(channel: ChannelSession): { channelType?: string; channelId?: string; threadId?: string } {
     const idx = channel.channelKey.indexOf(":");
     if (idx <= 0 || idx >= channel.channelKey.length - 1) {
-      return {};
+      return { threadId: channel.currentThreadId ?? undefined };
     }
     const channelType = channel.channelKey.slice(0, idx);
     const channelId = channel.channelKey.slice(idx + 1);
-    // Thread channels carry their thread ID in the channel key. Other channels
-    // do not carry a thread ID — never fall back to a separate mutable field.
-    const threadId = channelType === "thread" ? channelId : undefined;
+    // Thread channels carry their thread ID in the channel key; other
+    // channels (web, slack-direct, etc.) keep the active threadId on the
+    // ChannelSession via the inbound prompt's threadId parameter.
+    const threadId =
+      channelType === "thread"
+        ? channelId
+        : channel.currentThreadId ?? undefined;
     return { channelType, channelId, threadId };
   }
 
@@ -1094,414 +1187,6 @@ export class PromptHandler {
     return cleaned.startsWith("sha256:") ? cleaned : `sha256:${cleaned}`;
   }
 
-  private async handleWorkflowExecutionPrompt(
-    messageId: string,
-    request: WorkflowExecutionDispatchPayload,
-    options?: { emitChatError?: boolean; model?: string; modelPreferences?: string[] },
-  ): Promise<void> {
-    const executionId = request.executionId;
-    const emitChatError = options?.emitChatError !== false;
-    this.agentClient.sendAgentStatus("thinking", undefined, messageId);
-
-    const fail = async (error: string) => {
-      this.agentClient.sendWorkflowExecutionResult(executionId, {
-        ok: false,
-        status: "failed",
-        executionId,
-        output: {},
-        steps: [],
-        requiresApproval: null,
-        error,
-      });
-      if (emitChatError) {
-        this.agentClient.sendError(messageId, error);
-      }
-      this.agentClient.sendAgentStatus("idle", undefined, messageId);
-      this.agentClient.sendComplete();
-    };
-
-    const previousWorkflowModel = this.workflowExecutionModel;
-    const previousWorkflowModelPrefs = this.workflowExecutionModelPreferences;
-    const normalizedDispatchModel = typeof options?.model === "string" && options.model.trim()
-      ? options.model.trim()
-      : undefined;
-    const normalizedDispatchPrefs = Array.isArray(options?.modelPreferences)
-      ? options.modelPreferences
-          .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-          .filter((entry) => entry.length > 0)
-      : [];
-    this.workflowExecutionModel = normalizedDispatchModel;
-    this.workflowExecutionModelPreferences = normalizedDispatchPrefs.length > 0 ? normalizedDispatchPrefs : undefined;
-
-    try {
-      const workflowValue = request.payload.workflow;
-      if (!workflowValue || typeof workflowValue !== "object" || Array.isArray(workflowValue)) {
-        await fail("Workflow execution payload missing workflow object");
-        return;
-      }
-
-      const compiled = await compileWorkflowDefinition(workflowValue);
-      if (!compiled.ok || !compiled.workflow || !compiled.workflowHash) {
-        await fail(compiled.errors[0]?.message || "Workflow compilation failed");
-        return;
-      }
-
-      const expectedHash = this.normalizeWorkflowHash(request.workflowHash);
-      const compiledHash = this.normalizeWorkflowHash(compiled.workflowHash);
-      if (expectedHash && expectedHash !== compiledHash) {
-        await fail(`Workflow hash mismatch: expected ${expectedHash}, got ${compiledHash}`);
-        return;
-      }
-
-      const payload = request.payload as WorkflowRunPayload & Record<string, unknown>;
-      const runPayload: WorkflowRunPayload = {
-        trigger: payload.trigger as Record<string, unknown> | undefined,
-        variables: payload.variables as Record<string, unknown> | undefined,
-        runtime: payload.runtime as WorkflowRunPayload["runtime"] | undefined,
-      };
-      const hooks = {
-        onToolStep: (step: NormalizedWorkflowStep, context: WorkflowStepExecutionContext) =>
-          this.executeWorkflowToolStep(step, context),
-        onAgentStep: (step: NormalizedWorkflowStep, context: WorkflowStepExecutionContext) =>
-          this.executeWorkflowAgentStep(step, context),
-      };
-
-      const envelope = request.kind === "run"
-        ? await executeWorkflowRun(executionId, compiled.workflow, runPayload, hooks)
-        : await executeWorkflowResume(
-            executionId,
-            compiled.workflow,
-            runPayload,
-            request.resumeToken || "",
-            request.decision === "deny" ? "deny" : "approve",
-            hooks,
-          );
-
-      this.agentClient.sendWorkflowExecutionResult(executionId, {
-        ok: envelope.ok,
-        status: envelope.status,
-        executionId: envelope.executionId,
-        output: envelope.output,
-        steps: envelope.steps,
-        requiresApproval: envelope.requiresApproval,
-        error: envelope.error,
-      });
-      this.agentClient.sendAgentStatus("idle", undefined, messageId);
-      this.agentClient.sendComplete();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await fail(message);
-    } finally {
-      this.workflowExecutionModel = previousWorkflowModel;
-      this.workflowExecutionModelPreferences = previousWorkflowModelPrefs;
-    }
-  }
-
-  async handleWorkflowExecutionDispatch(
-    executionId: string,
-    payload: WorkflowExecutionDispatchPayload,
-    model?: string,
-    modelPreferences?: string[],
-  ): Promise<void> {
-    const request: WorkflowExecutionDispatchPayload = {
-      ...payload,
-      executionId: payload.executionId || executionId,
-    };
-    await this.handleWorkflowExecutionPrompt(`workflow:${executionId}`, request, {
-      emitChatError: false,
-      model,
-      modelPreferences,
-    });
-  }
-
-  private async executeWorkflowToolStep(
-    step: NormalizedWorkflowStep,
-    _context: WorkflowStepExecutionContext,
-  ): Promise<WorkflowStepExecutionResult | void> {
-    if (typeof step.tool !== "string") {
-      return;
-    }
-
-    const tool = step.tool;
-    const args = isRecord(step.arguments) ? step.arguments : {};
-
-    switch (tool) {
-      case "spawn_session": {
-        const task = typeof args.task === "string" ? args.task.trim() : "";
-        const workspace = typeof args.workspace === "string" ? args.workspace.trim() : "";
-        if (!task || !workspace) {
-          return { status: "failed", error: "spawn_session requires task and workspace" };
-        }
-        const result = await this.agentClient.requestSpawnChild({
-          task,
-          workspace,
-          repoUrl: typeof args.repoUrl === "string" ? args.repoUrl : undefined,
-          branch: typeof args.branch === "string" ? args.branch : undefined,
-          ref: typeof args.ref === "string" ? args.ref : undefined,
-          title: typeof args.title === "string" ? args.title : undefined,
-          model: typeof args.model === "string" ? args.model : undefined,
-        });
-        return {
-          status: "completed",
-          output: { tool, childSessionId: result.childSessionId },
-        };
-      }
-
-      case "send_message": {
-        const targetSessionId = typeof args.targetSessionId === "string" ? args.targetSessionId.trim() : "";
-        const content = typeof args.content === "string" ? args.content : "";
-        if (!targetSessionId || !content) {
-          return { status: "failed", error: "send_message requires targetSessionId and content" };
-        }
-        const interrupt = args.interrupt === true;
-        const result = await this.agentClient.requestSendMessage(targetSessionId, content, interrupt);
-        return {
-          status: "completed",
-          output: { tool, targetSessionId, success: result.success },
-        };
-      }
-
-      case "list_workflows": {
-        const result = await this.agentClient.requestListWorkflows();
-        return { status: "completed", output: { tool, workflows: result.workflows } };
-      }
-
-      case "run_workflow": {
-        const workflowId = typeof args.workflowId === "string" ? args.workflowId.trim() : "";
-        if (!workflowId) {
-          return { status: "failed", error: "run_workflow requires workflowId" };
-        }
-        const variables = isRecord(args.variables) ? args.variables : undefined;
-        const repoUrl = typeof args.repoUrl === "string" ? args.repoUrl.trim() : "";
-        const branch = typeof args.branch === "string" ? args.branch.trim() : "";
-        const ref = typeof args.ref === "string" ? args.ref.trim() : "";
-        const sourceRepoFullName = typeof args.sourceRepoFullName === "string" ? args.sourceRepoFullName.trim() : "";
-        const result = await this.agentClient.requestRunWorkflow(
-          workflowId,
-          variables,
-          {
-            repoUrl: repoUrl || undefined,
-            branch: branch || undefined,
-            ref: ref || undefined,
-            sourceRepoFullName: sourceRepoFullName || undefined,
-          },
-        );
-        return { status: "completed", output: { tool, execution: result.execution } };
-      }
-
-      case "list_workflow_executions": {
-        const workflowId = typeof args.workflowId === "string" ? args.workflowId : undefined;
-        const limit = typeof args.limit === "number" ? args.limit : undefined;
-        const result = await this.agentClient.requestListWorkflowExecutions(workflowId, limit);
-        return { status: "completed", output: { tool, executions: result.executions } };
-      }
-    }
-
-    return;
-  }
-
-  private async executeWorkflowAgentStep(
-    step: NormalizedWorkflowStep,
-    context: WorkflowStepExecutionContext,
-  ): Promise<WorkflowStepExecutionResult | void> {
-    if (step.type !== "agent_message") {
-      return;
-    }
-
-    const content = (
-      typeof step.content === "string"
-        ? step.content
-        : typeof step.message === "string"
-          ? step.message
-          : typeof step.goal === "string"
-            ? step.goal
-            : ""
-    ).trim();
-
-    if (!content) {
-      return { status: "failed", error: "agent_message requires content/message/goal" };
-    }
-
-    if (!this.runnerSessionId) {
-      return { status: "failed", error: "agent_message unavailable: runner session id is missing" };
-    }
-
-    const interrupt = step.interrupt === true;
-    const awaitResponse = step.await_response === true || step.awaitResponse === true;
-    const awaitTimeoutRaw =
-      typeof step.await_timeout_ms === "number"
-        ? step.await_timeout_ms
-        : typeof step.awaitTimeoutMs === "number"
-          ? step.awaitTimeoutMs
-          : 120_000;
-    const awaitTimeoutMs = Math.max(1_000, Math.min(awaitTimeoutRaw, 900_000));
-    const previousChannel = this.currentPromptChannel;
-    const modelChain = this.buildModelFailoverChain(
-      this.workflowExecutionModel,
-      this.workflowExecutionModelPreferences,
-    );
-    const preferredModel = modelChain[0];
-
-    try {
-      const workflowChannelType = "workflow";
-      const workflowChannelId = context.executionId;
-      const channel = this.getOrCreateChannel(workflowChannelType, workflowChannelId);
-      this.currentPromptChannel = channel;
-      await this.ensureChannelOpenCodeSession(channel);
-
-      this.agentClient.sendWorkflowChatMessage("user", content, {
-        workflowExecutionId: context.executionId,
-        workflowStepId: step.id,
-        kind: "agent_message",
-      }, {
-        channelType: workflowChannelType,
-        channelId: workflowChannelId,
-        opencodeSessionId: channel.opencodeSessionId ?? undefined,
-      });
-
-      if (interrupt) {
-        const sessionId = channel.opencodeSessionId;
-        if (sessionId) {
-          await fetch(`${this.opencodeUrl}/session/${sessionId}/abort`, { method: "POST" }).catch(() => undefined);
-        }
-      }
-
-      if (!awaitResponse) {
-        await this.sendPromptToChannelWithRecovery(channel, content, {
-          model: preferredModel,
-          channelType: workflowChannelType,
-          channelId: workflowChannelId,
-        });
-        return {
-          status: "completed",
-          output: {
-            type: "agent_message",
-            targetSessionId: this.runnerSessionId,
-            content,
-            interrupt,
-            awaitResponse: false,
-            success: true,
-          },
-        };
-      }
-
-      const attemptSessionIds = new Set<string>();
-      try {
-        let lastFailure: string | null = null;
-        const candidates = modelChain.length > 0 ? modelChain : [undefined];
-
-        for (const modelCandidate of candidates) {
-          channel.resetPromptState();
-          channel.lastError = null;
-          let sessionId = await this.ensureChannelOpenCodeSession(channel);
-          this.ephemeralContent.set(sessionId, "");
-          attemptSessionIds.add(sessionId);
-          let idlePromise = this.pollUntilIdle(sessionId, awaitTimeoutMs);
-
-          const sentSessionId = await this.sendPromptToChannelWithRecovery(channel, content, {
-            model: modelCandidate,
-            channelType: workflowChannelType,
-            channelId: workflowChannelId,
-          });
-          if (sentSessionId !== sessionId) {
-            this.ephemeralContent.delete(sessionId);
-            this.idleWaiters.delete(sessionId);
-            sessionId = sentSessionId;
-            this.ephemeralContent.set(sessionId, "");
-            attemptSessionIds.add(sessionId);
-            idlePromise = this.pollUntilIdle(sessionId, awaitTimeoutMs);
-          }
-
-          await idlePromise;
-
-          const responseText = (this.ephemeralContent.get(sessionId) || "").trim();
-          const stepError = channel.lastError || null;
-
-          let recoveredResponse = responseText;
-          if (!recoveredResponse) {
-            const recovered = await this.recoverAssistantTextOrError();
-            if (recovered.text) {
-              recoveredResponse = recovered.text;
-            } else if (recovered.error) {
-              lastFailure = recovered.error;
-              channel.lastError = recovered.error;
-              this.lastError = recovered.error;
-              if (!isRetriableProviderError(recovered.error)) {
-                break;
-              }
-              continue;
-            }
-          }
-
-          if (recoveredResponse) {
-            this.agentClient.sendWorkflowChatMessage("assistant", recoveredResponse, {
-              workflowExecutionId: context.executionId,
-              workflowStepId: step.id,
-              kind: "agent_message_response",
-            }, {
-              channelType: workflowChannelType,
-              channelId: workflowChannelId,
-              opencodeSessionId: channel.opencodeSessionId ?? undefined,
-            });
-
-            return {
-              status: "completed",
-              output: {
-                type: "agent_message",
-                targetSessionId: this.runnerSessionId,
-                content,
-                interrupt,
-                awaitResponse: true,
-                awaitTimeoutMs,
-                response: recoveredResponse,
-                model: modelCandidate || null,
-              },
-            };
-          }
-
-          if (stepError) {
-            lastFailure = stepError;
-            if (!isRetriableProviderError(stepError)) {
-              break;
-            }
-          } else {
-            lastFailure = "agent_message_empty_response";
-          }
-        }
-
-        return {
-          status: "failed",
-          error: lastFailure || "agent_message_empty_response",
-          output: {
-            type: "agent_message",
-            targetSessionId: this.runnerSessionId,
-            content,
-            interrupt,
-            awaitResponse: true,
-            awaitTimeoutMs,
-          },
-        };
-      } finally {
-        for (const sessionId of attemptSessionIds) {
-          this.ephemeralContent.delete(sessionId);
-          this.idleWaiters.delete(sessionId);
-        }
-      }
-    } catch (error) {
-      return {
-        status: "failed",
-        error: error instanceof Error ? error.message : String(error),
-        output: {
-          type: "agent_message",
-          targetSessionId: this.runnerSessionId,
-          content,
-          interrupt,
-        },
-      };
-    } finally {
-      this.currentPromptChannel = previousChannel;
-    }
-  }
 
   /**
    * Start the global SSE event subscription. Call once at startup.
@@ -1551,10 +1236,14 @@ export class PromptHandler {
 
     // Resolve per-channel session
     this.currentPromptChannel = channel;
-    // NOTE: `threadId` parameter is no longer consumed here. Thread routing now
-    // flows through the `thread:<id>` channelKey resolved upstream in the DO.
-    // The parameter remains in the signature for caller compatibility.
-    void threadId;
+    // Thread routing primarily flows through the `thread:<id>` channelKey
+    // resolved upstream in the DO. But not every dispatch path sets it
+    // (e.g. web channels, initial auto-prompts) — in those cases the
+    // threadId parameter is still authoritative. Stash it on the channel
+    // so ensureTurnCreated can attribute the assistant turn correctly.
+    if (threadId) {
+      channel.currentThreadId = threadId;
+    }
     // Store original channel info for [via ...] attribution prefix (per-channel for concurrency)
     channel.pendingReplyChannelType = replyChannelType;
     channel.pendingReplyChannelId = replyChannelId;
@@ -1619,8 +1308,10 @@ export class PromptHandler {
       const hasAudio = effectiveAttachments.some(a => a.mime.startsWith('audio/'));
       if (hasAudio) {
         let transcribed = false;
+        let transcriptionFailures: AudioTranscriptionFailure[] = [];
         try {
-          const { transcriptions, remaining } = await this.transcribeAudioAttachments(effectiveAttachments);
+          const { transcriptions, remaining, failures } = await this.transcribeAudioAttachments(effectiveAttachments);
+          transcriptionFailures = failures;
           if (transcriptions.length > 0) {
             transcribed = true;
             const transcriptText = transcriptions.join('\n\n');
@@ -1636,13 +1327,20 @@ export class PromptHandler {
           effectiveAttachments = remaining;
         } catch (err) {
           console.error('[PromptHandler] Failed to transcribe audio:', err);
+          transcriptionFailures = [{
+            reason: 'transcription-error',
+            mime: 'audio/*',
+            detail: errorReason(err),
+          }];
+        }
+        if (!transcribed) {
+          const audioFallback = audioTranscriptionFallback(transcriptionFailures);
+          effectiveContent = effectiveContent?.trim()
+            ? `${effectiveContent}\n\n${audioFallback}`
+            : audioFallback;
         }
         // Strip audio from what goes to OpenCode — it can't process audio files
         effectiveAttachments = effectiveAttachments.filter(a => !a.mime.startsWith('audio/'));
-        // If transcription failed and content is empty, provide a fallback so the prompt isn't empty
-        if (!transcribed && !effectiveContent?.trim()) {
-          effectiveContent = '[The user sent a voice note but transcription is unavailable. Please ask them to type their message instead.]';
-        }
       }
 
       // Materialize PDFs to disk instead of stuffing full parsed text into context.
@@ -2023,25 +1721,30 @@ export class PromptHandler {
 
     console.log(`[PromptHandler] Sending complete`);
 
-    // Emit llm_response timing with token counts for throughput analysis
+    // Emit llm_response timing with token counts for throughput analysis.
+    // tokens_per_sec is the user-perceived output rate (excludes reasoning,
+    // which is internal); input/output here are billable totals composed
+    // from the raw breakdown so charts match the Anthropic dashboard.
     if (channel.lastPromptSentAt > 0) {
       const durationMs = Date.now() - channel.lastPromptSentAt;
-      let inputTokens = 0;
-      let outputTokens = 0;
+      let billableInput = 0;
+      let billableOutput = 0;
+      let visibleOutput = 0;
       for (const entry of channel.usageEntries.values()) {
-        inputTokens += entry.inputTokens;
-        outputTokens += entry.outputTokens;
+        billableInput += entry.inputTokens + entry.cacheReadTokens + entry.cacheWriteTokens;
+        billableOutput += entry.outputTokens + entry.reasoningTokens;
+        visibleOutput += entry.outputTokens;
       }
       this.agentClient.sendAnalyticsEvents([{
         eventType: 'llm_response',
         durationMs,
         properties: {
-          input_tokens: inputTokens,
-          output_tokens: outputTokens,
-          tokens_per_sec: durationMs > 0 ? Math.round((outputTokens / durationMs) * 1000) : 0,
+          input_tokens: billableInput,
+          output_tokens: billableOutput,
+          tokens_per_sec: durationMs > 0 ? Math.round((visibleOutput / durationMs) * 1000) : 0,
         },
       }]);
-      this.lastPromptSentAt = 0;
+      channel.lastPromptSentAt = 0;
     }
 
     this.agentClient.sendComplete(channel.activeMessageId ?? undefined);
@@ -2055,6 +1758,9 @@ export class PromptHandler {
           model: data.model,
           inputTokens: data.inputTokens,
           outputTokens: data.outputTokens,
+          cacheReadTokens: data.cacheReadTokens,
+          cacheWriteTokens: data.cacheWriteTokens,
+          reasoningTokens: data.reasoningTokens,
         })
       );
       this.agentClient.sendUsageReport(channel.turnId, entries);
@@ -2345,8 +2051,12 @@ export class PromptHandler {
       // Always acknowledge the abort so the DO can drain its prompt queue.
       // Without this, queued messages would be stuck forever waiting for the
       // 'aborted' signal that triggers handlePromptComplete().
+      // Forward the originally-requested channelType/channelId so the DO can
+      // route the completion even when no specific messageId is available —
+      // without these, the DO's fallback (getProcessingChannelKey) returns
+      // null under concurrent dispatch and the row stays stuck.
       console.log(`[PromptHandler] Abort: no active channels to abort, sending aborted ack`);
-      this.agentClient.sendAborted();
+      this.agentClient.sendAborted(undefined, channelType, channelId);
       // TEMPORARY: Task 12 plumbs channel-bound messageId through SSE handlers
       this.agentClient.sendAgentStatus("idle", undefined, this.getActiveMessageId());
       return;
@@ -2367,8 +2077,20 @@ export class PromptHandler {
       ch.idleNotified = true;
     }
 
-    // Tell DO first so clients get immediate feedback
-    this.agentClient.sendAborted(abortedMessageId);
+    // Tell DO first so clients get immediate feedback. Always forward the
+    // channel context so the DO can complete the correct row even when
+    // abortedMessageId is undefined (e.g. all targets had their
+    // activeMessageId cleared by a sibling abort frame). For multi-channel
+    // session-wide aborts, channelType/channelId stay undefined here and
+    // the DO falls back to its per-channel resolution.
+    const ackCtx = targetChannels.length === 1
+      ? this.extractChannelContext(targetChannels[0])
+      : undefined;
+    this.agentClient.sendAborted(
+      abortedMessageId,
+      ackCtx?.channelType ?? channelType,
+      ackCtx?.channelId ?? channelId,
+    );
     // TEMPORARY: Task 12 plumbs channel-bound messageId through SSE handlers
     this.agentClient.sendAgentStatus("idle", undefined, this.getActiveMessageId());
 
@@ -3077,16 +2799,30 @@ export class PromptHandler {
 
   private async transcribeAudioAttachments(
     attachments: PromptAttachment[],
-  ): Promise<{ transcriptions: string[]; remaining: PromptAttachment[] }> {
+  ): Promise<AudioTranscriptionResult> {
     const fs = await import('fs/promises');
     const transcriptions: string[] = [];
     const remaining: PromptAttachment[] = [];
+    const failures: AudioTranscriptionFailure[] = [];
 
     for (const attachment of attachments) {
       if (!attachment.mime.startsWith('audio/')) {
         remaining.push(attachment);
         continue;
       }
+
+      const recordFailure = (
+        reason: AudioTranscriptionFailureReason,
+        detail?: string,
+      ) => {
+        remaining.push(attachment);
+        failures.push({
+          reason,
+          mime: attachment.mime,
+          filename: attachment.filename,
+          detail,
+        });
+      };
 
       const uid = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const ext = PromptHandler.AUDIO_EXTENSIONS[attachment.mime] || 'ogg';
@@ -3100,7 +2836,16 @@ export class PromptHandler {
         const commaIdx = attachment.url.indexOf(',');
         if (commaIdx === -1) {
           console.warn('[PromptHandler] Invalid audio data URL, skipping');
-          remaining.push(attachment);
+          recordFailure('invalid-data-url', 'Audio attachment URL was not a data URL.');
+          continue;
+        }
+        const modelPath = whisperModelPath();
+        try {
+          await fs.access(modelPath);
+        } catch {
+          const detail = `Whisper model not found at ${modelPath}. Run modal run backend/app.py::setup_whisper_models.`;
+          console.error(`[PromptHandler] ${detail}`);
+          recordFailure('missing-whisper-model', detail);
           continue;
         }
         const b64 = attachment.url.slice(commaIdx + 1);
@@ -3118,11 +2863,17 @@ export class PromptHandler {
             '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
             '-y', wavPath,
           ], { stdout: 'pipe', stderr: 'pipe' });
-          const ffmpegExit = await ffmpegProc.exited;
-          if (ffmpegExit !== 0) {
-            const stderr = await new Response(ffmpegProc.stderr).text();
-            console.error(`[PromptHandler] ffmpeg conversion failed (exit ${ffmpegExit}): ${stderr.slice(-500)}`);
-            remaining.push(attachment);
+          const ffmpegTimeoutMs = timeoutFromEnv('VALET_AUDIO_FFMPEG_TIMEOUT_MS', AUDIO_FFMPEG_TIMEOUT_MS);
+          const ffmpegResult = await waitForSubprocess(ffmpegProc, ffmpegTimeoutMs);
+          if (ffmpegResult.timedOut) {
+            console.error(`[PromptHandler] ffmpeg conversion timed out after ${ffmpegTimeoutMs}ms`);
+            recordFailure('ffmpeg-timeout', `ffmpeg exceeded ${ffmpegTimeoutMs}ms while converting audio.`);
+            continue;
+          }
+          if (ffmpegResult.exitCode !== 0) {
+            const stderr = ffmpegResult.stderr;
+            console.error(`[PromptHandler] ffmpeg conversion failed (exit ${ffmpegResult.exitCode}): ${stderr.slice(-500)}`);
+            recordFailure('ffmpeg-failed', `exit ${ffmpegResult.exitCode}: ${stderr.slice(-500)}`);
             continue;
           }
           console.log(`[PromptHandler] Converted ${ext} → WAV: ${wavPath}`);
@@ -3131,25 +2882,31 @@ export class PromptHandler {
         // Run whisper-cli
         const whisperProc = Bun.spawn([
           'whisper-cli',
-          '--model', '/models/whisper/ggml-base.en.bin',
+          '--model', modelPath,
           '--file', whisperInput,
           '--output-txt',
           '--output-file', outBase,
           '--no-timestamps',
         ], { stdout: 'pipe', stderr: 'pipe' });
 
-        const exitCode = await whisperProc.exited;
-        const stderr = await new Response(whisperProc.stderr).text();
-        if (exitCode !== 0) {
-          console.error(`[PromptHandler] whisper-cli failed (exit ${exitCode}): ${stderr.slice(-500)}`);
-          remaining.push(attachment);
+        const whisperTimeoutMs = timeoutFromEnv('VALET_AUDIO_WHISPER_TIMEOUT_MS', AUDIO_WHISPER_TIMEOUT_MS);
+        const whisperResult = await waitForSubprocess(whisperProc, whisperTimeoutMs);
+        const stderr = whisperResult.stderr;
+        if (whisperResult.timedOut) {
+          console.error(`[PromptHandler] whisper-cli timed out after ${whisperTimeoutMs}ms`);
+          recordFailure('whisper-timeout', `whisper-cli exceeded ${whisperTimeoutMs}ms while transcribing audio.`);
+          continue;
+        }
+        if (whisperResult.exitCode !== 0) {
+          console.error(`[PromptHandler] whisper-cli failed (exit ${whisperResult.exitCode}): ${stderr.slice(-500)}`);
+          recordFailure('whisper-failed', `exit ${whisperResult.exitCode}: ${stderr.slice(-500)}`);
           continue;
         }
 
         // Read transcript
         if (!await Bun.file(txtPath).exists()) {
           console.error(`[PromptHandler] whisper-cli produced no output file at ${txtPath}. stderr: ${stderr.slice(-500)}`);
-          remaining.push(attachment);
+          recordFailure('missing-output', `whisper-cli produced no transcript file at ${txtPath}.`);
           continue;
         }
 
@@ -3159,11 +2916,11 @@ export class PromptHandler {
           console.log(`[PromptHandler] Transcribed audio (${attachment.filename || 'voice'}): "${transcript.slice(0, 100)}..."`);
         } else {
           console.warn(`[PromptHandler] whisper-cli produced empty transcript`);
-          remaining.push(attachment);
+          recordFailure('empty-transcript', 'whisper-cli produced an empty transcript.');
         }
       } catch (err) {
         console.error('[PromptHandler] Audio transcription error:', err);
-        remaining.push(attachment);
+        recordFailure('transcription-error', errorReason(err));
       } finally {
         // Clean up all temp files
         for (const p of [srcPath, wavPath, txtPath]) {
@@ -3172,7 +2929,7 @@ export class PromptHandler {
       }
     }
 
-    return { transcriptions, remaining };
+    return { transcriptions, remaining, failures };
   }
 
   /**
@@ -3381,8 +3138,11 @@ export class PromptHandler {
     // knows which external channel to reply to.
     let attributedContent = content;
     const replyChannel = this.currentPromptChannel;
-    const attrChannelType = replyChannel?.pendingReplyChannelType || this.pendingReplyChannelType || channelType;
-    const attrChannelId = replyChannel?.pendingReplyChannelId || this.pendingReplyChannelId || channelId;
+    // Attribution prefers per-channel pendingReplyChannelType/Id (set by
+    // handlePrompt for THIS channel's dispatch). The class-level fields were
+    // dead state and have been removed.
+    const attrChannelType = replyChannel?.pendingReplyChannelType || channelType;
+    const attrChannelId = replyChannel?.pendingReplyChannelId || channelId;
     if (attrChannelType && attrChannelId && attrChannelType !== "thread") {
       attributedContent = `[via ${attrChannelType} | chatId: ${attrChannelId}] ${attributedContent}`;
     }
@@ -3403,7 +3163,7 @@ export class PromptHandler {
     };
     if (model) {
       // OpenCode expects model as { providerID, modelID }
-      // Our model IDs come from the provider list as raw model IDs (e.g. "claude-3-5-sonnet-20241022")
+      // Our model IDs come from the provider list as raw model IDs (e.g. "claude-sonnet-4-5")
       // with the provider known separately, but we store them with a provider prefix
       // like "providerID/modelID" or just "modelID" if provider is implicit.
       const slashIdx = model.indexOf("/");
@@ -4299,12 +4059,29 @@ export class PromptHandler {
       if (!channel.countedTokenMessageIds.has(ocMessageId)) {
         const tokenObj = info.tokens as Record<string, unknown> | undefined;
         if (tokenObj) {
-          const input = typeof tokenObj.input === "number" ? tokenObj.input : 0;
-          const output = typeof tokenObj.output === "number" ? tokenObj.output : 0;
-          if (input > 0 || output > 0) {
+          // OpenCode reports tokens as five raw buckets:
+          //   { input, output, reasoning, cache: { read, write } }
+          // We persist each verbatim so downstream cost analyses can apply
+          // the right per-bucket pricing (Anthropic cache reads are cheap,
+          // cache writes expensive, reasoning is billed as output).
+          //
+          // Compaction thresholds gate on what the model actually processed,
+          // so cumulative*Tokens sum the billable totals:
+          //   billable input  = input + cache.read + cache.write
+          //   billable output = output + reasoning
+          const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+          const baseInput = num(tokenObj.input);
+          const cache = isRecord(tokenObj.cache) ? tokenObj.cache : {};
+          const cacheRead = num(cache.read);
+          const cacheWrite = num(cache.write);
+          const baseOutput = num(tokenObj.output);
+          const reasoning = num(tokenObj.reasoning);
+          const billableInput = baseInput + cacheRead + cacheWrite;
+          const billableOutput = baseOutput + reasoning;
+          if (billableInput > 0 || billableOutput > 0) {
             channel.countedTokenMessageIds.add(ocMessageId);
-            channel.cumulativeInputTokens += input;
-            channel.cumulativeOutputTokens += output;
+            channel.cumulativeInputTokens += billableInput;
+            channel.cumulativeOutputTokens += billableOutput;
 
             // Track per-message usage for cost reporting
             const modelId = info.modelID as string | undefined;
@@ -4314,8 +4091,11 @@ export class PromptHandler {
               : channel.lastUsedModel ?? "unknown";
             channel.usageEntries.set(ocMessageId, {
               model: usageModel,
-              inputTokens: input,
-              outputTokens: output,
+              inputTokens: baseInput,
+              outputTokens: baseOutput,
+              cacheReadTokens: cacheRead,
+              cacheWriteTokens: cacheWrite,
+              reasoningTokens: reasoning,
             });
           }
         }
@@ -4612,6 +4392,9 @@ export class PromptHandler {
             model: data.model,
             inputTokens: data.inputTokens,
             outputTokens: data.outputTokens,
+            cacheReadTokens: data.cacheReadTokens,
+            cacheWriteTokens: data.cacheWriteTokens,
+            reasoningTokens: data.reasoningTokens,
           })
         );
         this.agentClient.sendUsageReport(channel.turnId, entries);

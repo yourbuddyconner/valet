@@ -5,7 +5,7 @@ export const slackProvider: IntegrationProvider = {
   service: 'slack',
   displayName: 'Slack',
   authType: 'bot_token',
-  supportedEntities: ['channels', 'messages', 'users'],
+  supportedEntities: ['channels', 'messages', 'users', 'usergroups'],
 
   validateCredentials(credentials: IntegrationCredentials): boolean {
     return !!credentials.bot_token;

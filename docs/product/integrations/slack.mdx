@@ -12,7 +12,7 @@ Read channels, post messages, look up users, and route Slack-channel conversatio
 | Service slug | `slack` |
 | Display name | Slack |
 | Auth type | `bot_token` |
-| Supported entities | `channels`, `messages`, `users` |
+| Supported entities | `channels`, `messages`, `users`, `usergroups` |
 
 ## Setup
 
@@ -22,17 +22,23 @@ Bot token — an admin pastes a bot token issued by the provider during connecti
 
 ## Actions
 
-11 actions are defined for Slack. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
+17 actions are defined for Slack. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
 
 | Action ID | What it does | Key params | Risk |
 | --- | --- | --- | --- |
 | `slack.dm_owner` | Send a direct message to the session owner on Slack. No user lookup needed. | `text` | low |
 | `slack.dm_user` | Send a direct message to a Slack user by their user ID (U...). Use list_users to find IDs. | `user`, `text` | low |
+| `slack.send_message` | Post a message to a Slack channel or thread. Returns `ts` so you can thread follow-up messages. Use this for arbitrary channel posts — use `channel_reply` only when replying on the specific channel a user wrote from. | `channel`, `text`, `thread_ts`?, `blocks`? | medium |
 | `slack.add_reaction` | Add an emoji reaction to a message | `channel`, `timestamp`, `name` | low |
 | `slack.list_channels` | List Slack channels. By default lists only channels the bot has joined. Set scope to "all" to discover all public channels in the workspace. Use prefix to filter by channel name prefix (e.g. "eng-" or "team-"). | `scope`?, `prefix`? | low |
 | `slack.read_history` | Read recent messages from a Slack channel the bot has joined. Use list_channels to get channel IDs. Each message ts can be used as thread_ts for replies. Use oldest/latest to narrow to a time window. | `channel`, `limit`?, `cursor`?, `oldest`?, `latest`?, `filter`?, `threads_only`?, `include_subtypes`? | low |
 | `slack.read_thread` | Read replies in a Slack thread. Bot must be a member of the channel. | `channel`, `thread_ts`, `limit`?, `cursor`? | low |
 | `slack.list_users` | List human users in the Slack workspace. Returns user IDs needed for dm_user. Use filter to search by ID, handle, real name, display name, or email. | `filter`? | low |
+| `slack.list_usergroups` | List Slack user groups. Use include_users only when membership IDs are needed because it can return a large result. | `include_disabled`?, `include_users`?, `include_count`?, `team_id`? | low |
+| `slack.list_usergroup_users` | List user IDs in a Slack user group. Use list_users to resolve IDs to names if needed. | `usergroup`, `include_disabled`?, `team_id`? | low |
+| `slack.update_usergroup` | Update Slack user group metadata such as name, handle, description, or default channels. Use add_usergroup_users/remove_usergroup_users for membership changes. | `usergroup`, `name`?, `handle`?, `description`?, `channels`?, `additional_channels`?, `enable_section`?, `team_id`? | high |
+| `slack.add_usergroup_users` | Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes. Avoid concurrent membership updates to the same user group because Slack's API replaces the full member list. | `usergroup`, `users`, `team_id`? | high |
+| `slack.remove_usergroup_users` | Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead. Avoid concurrent membership updates to the same user group because Slack's API replaces the full member list. | `usergroup`, `users`, `team_id`? | high |
 | `slack.fetch_file` | Download a file from Slack. For images, the content is returned visually so you can see it. For text files, the content is returned as text. Use the url from the files array in message data. IMPORTANT: Call this tool one at a time, not in parallel — each image fetch interrupts the session to deliver the image to your vision. | `url` | low |
 | `slack.get_pins` | Get pinned messages in a channel. Returns messages in the same format as read_history. Useful for understanding what a channel considers important. | `channel` | low |
 | `slack.get_channel_info` | Get detailed information about a channel: topic, purpose, member count, creation date, creator. Useful when reading a channel for the first time — save the context to memory so you do not re-fetch. | `channel` | low |
@@ -56,6 +62,33 @@ Send a direct message to a Slack user by their user ID (U...). Use list_users to
 | --- | --- | --- | --- |
 | `user` | string | Yes | User ID (U...) |
 | `text` | string | Yes | Message text |
+
+### `slack.send_message`
+
+Post a message to a Slack channel or thread. Returns `ts` (message timestamp) and `channel` — save `ts` to thread follow-up messages under this one via `thread_ts`.
+
+**When to use `slack.send_message` vs `channel_reply`:**
+
+- Use `slack.send_message` to post to any channel the bot has joined, or to start/continue a thread on any message. This is the right tool for proactive posts, scheduled reports, and multi-message threads.
+- Use `channel_reply` when you want to reply on the exact channel a user wrote *from* (indicated by the `[via slack | chatId: ...]` prefix in the incoming message). `channel_reply` is route-bound to the originating conversation; `slack.send_message` works for any target.
+
+**Worked example — post a header, then thread bullets under it:**
+
+```
+# Step 1: post the header
+call_tool("slack.send_message", { channel: "#proj-valet", text: "*Weekly status*" })
+→ { ok: true, ts: "1780887543.189519", channel: "C0..." }
+
+# Step 2: thread bullets under the header using the returned ts
+call_tool("slack.send_message", { channel: "C0...", text: "• Item 1\n• Item 2\n• Item 3", thread_ts: "1780887543.189519" })
+```
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `channel` | string | Yes | Channel ID (`C...`) or channel name with `#` prefix (e.g. `#proj-valet`). Use `list_channels` to find IDs. |
+| `text` | string | Yes | Message body. Supports Slack mrkdwn: bold `*text*`, italic `_text_`, code `` `code` ``, links `<url\|label>`. |
+| `thread_ts` | string | No | Post as a threaded reply. Use the `ts` from a previous `send_message` response (e.g. `"1780887543.189519"`). |
+| `blocks` | string | No | Block Kit JSON array as a string for rich formatting. When provided, `text` is used as the notification fallback only. |
 
 ### `slack.add_reaction`
 
@@ -109,6 +142,62 @@ List human users in the Slack workspace. Returns user IDs needed for dm_user. Us
 | Param | Type | Required | Description |
 | --- | --- | --- | --- |
 | `filter` | string | No | Case-insensitive search over user ID, handle, real name, display name, and email. Use this to avoid dumping the full user list. |
+
+### `slack.list_usergroups`
+
+List Slack user groups. Use `include_users` only when membership IDs are needed because it can return a large result.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `include_disabled` | boolean | No | Include disabled user groups. Default false. |
+| `include_users` | boolean | No | Include member user IDs for each user group. Default false. |
+| `include_count` | boolean | No | Include member counts. Default true. |
+| `team_id` | string | No | Encoded team ID. Required only when using an org-level token. |
+
+### `slack.list_usergroup_users`
+
+List user IDs in a Slack user group. Use `slack.list_users` to resolve IDs to names if needed.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `usergroup` | string | Yes | User group ID (`S...`) |
+| `include_disabled` | boolean | No | Allow listing users for disabled user groups. Default false. |
+| `team_id` | string | No | Encoded team ID. Required only when using an org-level token. |
+
+### `slack.update_usergroup`
+
+Update Slack user group metadata such as name, handle, description, or default channels. Use `slack.add_usergroup_users` and `slack.remove_usergroup_users` for membership changes.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `usergroup` | string | Yes | User group ID (`S...`) |
+| `name` | string | No | New user group name. Must be unique among user groups. |
+| `handle` | string | No | New mention handle without `@`. Must be unique among channels, users, and user groups. |
+| `description` | string | No | Short user group description. Pass an empty string to clear it. |
+| `channels` | string[] | No | Default channel IDs for this user group. Pass an empty array to clear defaults. |
+| `additional_channels` | string[] | No | Additional channel IDs where members can add the user group. Pass an empty array to clear. |
+| `enable_section` | boolean | No | Show this user group as a sidebar section for all group members. Requires at least one default channel. |
+| `team_id` | string | No | Encoded team ID. Required only when using an org-level token. |
+
+### `slack.add_usergroup_users`
+
+Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes. This wraps Slack's replace-all membership API, so avoid concurrent membership updates to the same user group.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `usergroup` | string | Yes | User group ID (`S...`) |
+| `users` | string[] | Yes | Slack user IDs (`U...` or `W...`) to add |
+| `team_id` | string | No | Encoded team ID. Required only when using an org-level token. |
+
+### `slack.remove_usergroup_users`
+
+Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead. This wraps Slack's replace-all membership API, so avoid concurrent membership updates to the same user group.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `usergroup` | string | Yes | User group ID (`S...`) |
+| `users` | string[] | Yes | Slack user IDs (`U...` or `W...`) to remove |
+| `team_id` | string | No | Encoded team ID. Required only when using an org-level token. |
 
 ### `slack.fetch_file`
 

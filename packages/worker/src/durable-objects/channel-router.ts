@@ -43,6 +43,7 @@ export interface SendReplyOpts {
 export interface SendReplyResult {
   success: boolean;
   error?: string;
+  messageId?: string;
 }
 
 export interface SendInteractivePromptOpts {
@@ -92,11 +93,11 @@ export class ChannelRouter {
           );
         });
       }
+
+      return { success: true, messageId: result.messageId };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
-
-    return { success: true };
   }
 
   async sendInteractivePrompt(
@@ -123,6 +124,19 @@ export class ChannelRouter {
     }
 
     return refs;
+  }
+
+  async resolveUserDmTarget(
+    channelType: string,
+    userId: string,
+    platformUserId: string,
+  ): Promise<ChannelTarget | null> {
+    const transport = channelRegistry.getTransport(channelType);
+    if (!transport?.resolveUserDmTarget) return null;
+    const token = await this.deps.resolveToken(channelType, userId);
+    if (!token) return null;
+    const ctx: ChannelContext = { token, userId };
+    return transport.resolveUserDmTarget(platformUserId, ctx);
   }
 
   async updateInteractivePrompt(opts: UpdateInteractivePromptOpts): Promise<void> {

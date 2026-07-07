@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ActionDefinition, ActionContext, ActionResult } from '@valet/sdk';
 import { insertMarkdown } from './docs-markdown.js';
+import { withGoogleWorkspaceOutputSchemas } from './workspace-output-schemas.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -990,6 +991,6 @@ async function executeAction(
 
 // ─── Export ──────────────────────────────────────────────────────────────────
 
-export const driveActionDefs: ActionDefinition[] = allActions;
+export const driveActionDefs: ActionDefinition[] = withGoogleWorkspaceOutputSchemas(allActions);
 export { executeAction as executeDriveAction };
 export { resolveCorpora };

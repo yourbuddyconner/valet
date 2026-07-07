@@ -4,12 +4,10 @@ import { zValidator } from '@hono/zod-validator';
 import { NotFoundError } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import {
-  parseJsonObject,
   listWorkflows,
   getWorkflowByIdOrSlug,
-  getWorkflowOwnerCheck,
   listWorkflowExecutions,
-  listWorkflowProposals,
+  parseExecutionTriggerData,
 } from '../lib/db.js';
 import * as workflowService from '../services/workflows.js';
 
@@ -39,29 +37,10 @@ const updateWorkflowSchema = z.object({
   data: z.record(z.unknown()).optional(),
 });
 
-const createProposalSchema = z.object({
-  executionId: z.string().optional(),
-  proposedBySessionId: z.string().optional(),
-  baseWorkflowHash: z.string().min(1),
-  proposal: z.record(z.unknown()),
-  diffText: z.string().optional(),
-  expiresAt: z.string().optional(),
-});
-
-const reviewProposalSchema = z.object({
-  approve: z.boolean(),
-  notes: z.string().optional(),
-});
-
-const applyProposalSchema = z.object({
-  reviewNotes: z.string().optional(),
-  version: z.string().optional(),
-});
-
-const rollbackWorkflowSchema = z.object({
-  targetWorkflowHash: z.string().min(1),
-  version: z.string().optional(),
-  notes: z.string().optional(),
+const createWorkflowSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().max(500).nullable().optional(),
+  slug: z.string().min(1).max(120).nullable().optional(),
 });
 
 /**
@@ -73,20 +52,43 @@ workflowsRouter.get('/', async (c) => {
 
   const result = await listWorkflows(c.get('db'), user.id);
 
+  // Mirror the detail endpoint: prefer the published version's
+  // definition over workflows.data so list and detail agree once a
+  // workflow has been published. workflows.data is the /sync write
+  // surface and goes stale after publish.
+  const { getPublishedDefinitions } = await import('../services/workflow-versions.js');
+  const publishedMap = await getPublishedDefinitions(
+    c.get('db'),
+    result.results.map((row) => row.id),
+  );
+
   const workflows = result.results.map((row) => ({
     id: row.id,
     slug: row.slug,
     name: row.name,
     description: row.description,
     version: row.version,
-    data: JSON.parse(row.data as string),
+    data: publishedMap.get(row.id) ?? JSON.parse(row.data as string),
     enabled: Boolean(row.enabled),
     tags: row.tags ? JSON.parse(row.tags as string) : [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    publishedVersionId: row.published_version_id,
   }));
 
   return c.json({ workflows });
+});
+
+/**
+ * POST /api/workflows
+ * Create a user-authored workflow with an initial dag/v1 draft.
+ */
+workflowsRouter.post('/', zValidator('json', createWorkflowSchema), async (c) => {
+  const user = c.get('user');
+  const body = c.req.valid('json');
+
+  const result = await workflowService.createWorkflow(c.get('db'), user.id, body);
+  return c.json(result, 201);
 });
 
 /**
@@ -94,14 +96,26 @@ workflowsRouter.get('/', async (c) => {
  * Get a single workflow by ID or slug
  */
 workflowsRouter.get('/:id', async (c) => {
-  const { id } = c.req.param();
+  const { id: idOrSlug } = c.req.param();
   const user = c.get('user');
 
-  const row = await getWorkflowByIdOrSlug(c.get('db'), user.id, id);
+  // Route through assertWorkflowAccess so post-MVP role splits land
+  // here without a follow-up. The helper resolves slug→id; we then
+  // re-fetch the full row.
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'viewer');
 
-  if (!row) {
-    throw new NotFoundError('Workflow', id);
-  }
+  const row = await getWorkflowByIdOrSlug(c.get('db'), user.id, id);
+  if (!row) throw new NotFoundError('Workflow', idOrSlug);
+
+  // Prefer the published version's definition over workflows.data —
+  // workflows.data is the /sync write surface and publishDraft does
+  // not mirror published versions back into it, so reading from
+  // workflow_definition_versions keeps the response aligned with what
+  // triggers run. Falls back to data for not-yet-published rows.
+  const { getPublishedDefinition } = await import('../services/workflow-versions.js');
+  const publishedDef = await getPublishedDefinition(c.get('db'), row.id);
+  const data = publishedDef ?? JSON.parse(row.data as string);
 
   return c.json({
     workflow: {
@@ -110,11 +124,12 @@ workflowsRouter.get('/:id', async (c) => {
       name: row.name,
       description: row.description,
       version: row.version,
-      data: JSON.parse(row.data as string),
+      data,
       enabled: Boolean(row.enabled),
       tags: row.tags ? JSON.parse(row.tags as string) : [],
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      publishedVersionId: row.published_version_id,
     },
   });
 });
@@ -148,9 +163,12 @@ workflowsRouter.post('/sync-all', zValidator('json', syncAllWorkflowsSchema), as
  * Update a workflow
  */
 workflowsRouter.put('/:id', zValidator('json', updateWorkflowSchema), async (c) => {
-  const { id } = c.req.param();
+  const { id: idOrSlug } = c.req.param();
   const user = c.get('user');
   const body = c.req.valid('json');
+
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
 
   const result = await workflowService.updateWorkflow(c.env, user.id, id, body);
   return c.json(result);
@@ -161,8 +179,11 @@ workflowsRouter.put('/:id', zValidator('json', updateWorkflowSchema), async (c) 
  * Delete a workflow
  */
 workflowsRouter.delete('/:id', async (c) => {
-  const { id } = c.req.param();
+  const { id: idOrSlug } = c.req.param();
   const user = c.get('user');
+
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
 
   await workflowService.deleteWorkflow(c.get('db'), user.id, id);
   return c.json({ success: true });
@@ -173,173 +194,346 @@ workflowsRouter.delete('/:id', async (c) => {
  * Get execution history for a workflow
  */
 workflowsRouter.get('/:id/executions', async (c) => {
-  const { id } = c.req.param();
+  const { id: idOrSlug } = c.req.param();
   const user = c.get('user');
   const { limit, offset } = c.req.query();
 
-  const workflow = await getWorkflowOwnerCheck(c.get('db'), user.id, id);
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id: workflowId } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'viewer');
 
-  if (!workflow) {
-    throw new NotFoundError('Workflow', id);
-  }
-
-  const result = await listWorkflowExecutions(c.env.DB, workflow.id, user.id, {
+  const result = await listWorkflowExecutions(c.env.DB, workflowId, user.id, {
     limit: parseInt(limit || '50'),
     offset: parseInt(offset || '0'),
   });
 
-  const executions = result.results.map((row) => ({
-    id: row.id,
-    workflowId: row.workflow_id,
-    sessionId: row.session_id,
-    triggerId: row.trigger_id,
-    status: row.status,
-    triggerType: row.trigger_type,
-    triggerMetadata: row.trigger_metadata ? JSON.parse(row.trigger_metadata as string) : null,
-    resumeToken: row.resume_token || null,
-    variables: row.variables ? JSON.parse(row.variables as string) : null,
-    outputs: row.outputs ? JSON.parse(row.outputs as string) : null,
-    steps: row.steps ? JSON.parse(row.steps as string) : null,
-    error: row.error,
-    startedAt: row.started_at,
-    completedAt: row.completed_at,
-  }));
+  const executions = result.results.map((row) => {
+    const triggerData = parseExecutionTriggerData(row as { inputs?: string | null });
+    return {
+      id: row.id,
+      workflowId: row.workflow_id,
+      triggerId: row.trigger_id,
+      status: row.status,
+      triggerType: row.trigger_type,
+      triggerMetadata: row.trigger_metadata ? JSON.parse(row.trigger_metadata as string) : null,
+      triggerData,
+      outputs: row.outputs ? JSON.parse(row.outputs as string) : null,
+      error: row.error,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+    };
+  });
 
   return c.json({ executions });
 });
 
-/**
- * GET /api/workflows/:id/history
- * List immutable workflow definition snapshots.
- */
-workflowsRouter.get('/:id/history', async (c) => {
-  const { id } = c.req.param();
-  const user = c.get('user');
-  const { limit, offset } = c.req.query();
+// ─── Approve / deny a pending workflow approval ────────────────────────────
 
-  const result = await workflowService.getWorkflowHistoryWithSnapshot(c.get('db'), user.id, id, {
-    limit: limit ? parseInt(limit, 10) : undefined,
-    offset: offset ? parseInt(offset, 10) : undefined,
+// `scope` is `once` for plain approvals, `workflow_execution` when the user
+// wants a runtime grant for the rest of the execution. `nodeId` narrows a
+// `workflow_execution` grant to the specific foreach body (or other
+// repeating node), so "Approve remaining rows" doesn't bleed across other
+// approval nodes that share the same service+actionId.
+const approvalDecisionSchema = z.object({
+  reason: z.string().optional(),
+  scope: z.enum(['once', 'workflow_execution']).optional(),
+  nodeId: z.string().optional(),
+});
+
+workflowsRouter.post(
+  '/:id/executions/:executionId/approvals/:approvalId/approve',
+  zValidator('json', approvalDecisionSchema),
+  async (c) => {
+    return runResolveApprovalRoute(c, 'approved');
+  },
+);
+
+workflowsRouter.post(
+  '/:id/executions/:executionId/approvals/:approvalId/deny',
+  zValidator('json', approvalDecisionSchema),
+  async (c) => {
+    return runResolveApprovalRoute(c, 'denied');
+  },
+);
+
+async function runResolveApprovalRoute(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  c: any,
+  result: 'approved' | 'denied',
+) {
+  const { id: workflowIdOrSlug, executionId, approvalId } = c.req.param();
+  const user = c.get('user');
+  const body = c.req.valid('json') as { reason?: string; scope?: 'once' | 'workflow_execution'; nodeId?: string };
+
+  // Resolve slug→id so the shared helper can verify ownership against
+  // the canonical workflow id from the execution row.
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id: workflowId } = await assertWorkflowAccess(c.get('db'), user, workflowIdOrSlug, 'editor');
+
+  const { resolveWorkflowApprovalRequest } = await import('../services/workflow-approvals.js');
+  const outcome = await resolveWorkflowApprovalRequest({
+    env: c.env,
+    user,
+    approvalId,
+    executionId,
+    expectedWorkflowId: workflowId,
+    result,
+    ...(body.reason !== undefined ? { reason: body.reason } : {}),
+    ...(body.scope !== undefined ? { scope: body.scope } : {}),
+    ...(body.nodeId !== undefined ? { nodeId: body.nodeId } : {}),
   });
 
-  if (!result) {
-    throw new NotFoundError('Workflow', id);
+  if (outcome.kind === 'expired') {
+    return c.json({ status: 'expired', timedOut: true }, 409);
   }
-
-  return c.json(result);
-});
-
-/**
- * GET /api/workflows/:id/proposals
- * List self-modification proposals for a workflow.
- */
-workflowsRouter.get('/:id/proposals', async (c) => {
-  const { id } = c.req.param();
-  const user = c.get('user');
-  const { limit, offset, status } = c.req.query();
-
-  const workflow = await getWorkflowOwnerCheck(c.get('db'), user.id, id);
-
-  if (!workflow) {
-    throw new NotFoundError('Workflow', id);
+  if (outcome.kind === 'already_resolved') {
+    return c.json({ status: outcome.status, alreadyResolved: true });
   }
+  return c.json({ status: outcome.status });
+}
 
-  const result = await listWorkflowProposals(c.env.DB, workflow.id, {
-    limit: parseInt(limit || '50', 10),
-    offset: parseInt(offset || '0', 10),
-    status,
+// ─── Cancel a running workflow execution ───────────────────────────────────
+
+workflowsRouter.post('/:id/executions/:executionId/cancel', async (c) => {
+  const { id: idOrSlug, executionId } = c.req.param();
+  const user = c.get('user');
+
+  // Resolve slug→id before passing to cancelExecution. The cross-tenant
+  // guard inside cancelExecution compares execution.workflowId (always
+  // canonical) against expectedWorkflowId — if we passed the URL param
+  // (a slug for slug-routed callers), the comparison always misses and
+  // returns 404 for any legitimate slug-addressed cancel.
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id: workflowId } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
+
+  const { cancelExecution } = await import('../workflows/cancel-cleanup.js');
+  const result = await cancelExecution(c.env, {
+    executionId,
+    cancelledBy: user.id,
+    expectedWorkflowId: workflowId,
   });
-
-  const proposals = result.results.map((row) => ({
-    id: row.id,
-    workflowId: row.workflow_id,
-    executionId: row.execution_id,
-    proposedBySessionId: row.proposed_by_session_id,
-    baseWorkflowHash: row.base_workflow_hash,
-    proposal: parseJsonObject(row.proposal_json as string),
-    diffText: row.diff_text,
-    status: row.status,
-    reviewNotes: row.review_notes,
-    expiresAt: row.expires_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }));
-
-  return c.json({ proposals });
-});
-
-/**
- * POST /api/workflows/:id/proposals
- * Create a self-modification proposal.
- */
-workflowsRouter.post('/:id/proposals', zValidator('json', createProposalSchema), async (c) => {
-  const { id } = c.req.param();
-  const user = c.get('user');
-  const body = c.req.valid('json');
-
-  const result = await workflowService.createProposal(c.get('db'), user.id, id, body);
-  return c.json(result, 201);
-});
-
-/**
- * POST /api/workflows/:id/proposals/:proposalId/review
- * Approve or reject a proposal before apply.
- */
-workflowsRouter.post('/:id/proposals/:proposalId/review', zValidator('json', reviewProposalSchema), async (c) => {
-  const { id, proposalId } = c.req.param();
-  const user = c.get('user');
-  const body = c.req.valid('json');
-
-  const result = await workflowService.reviewProposal(c.get('db'), user.id, id, proposalId, body.approve, body.notes);
-  return c.json({ success: true, status: result.status, reviewedAt: result.reviewedAt });
-});
-
-/**
- * POST /api/workflows/:id/proposals/:proposalId/apply
- * Apply an approved proposal to the workflow definition.
- */
-workflowsRouter.post('/:id/proposals/:proposalId/apply', zValidator('json', applyProposalSchema), async (c) => {
-  const { id, proposalId } = c.req.param();
-  const user = c.get('user');
-  const body = c.req.valid('json');
-
-  const result = await workflowService.applyProposal(c.get('db'), user.id, id, proposalId, body);
-
-  if (result.alreadyApplied) {
-    return c.json({ success: true, status: 'applied', message: 'Proposal already applied' });
+  if (result.status === 'not_found') {
+    throw new NotFoundError('WorkflowExecution', executionId);
   }
-
-  return c.json({
-    success: true,
-    proposalId: result.proposalId,
-    workflow: result.workflow,
-  });
+  return c.json({ status: result.status });
 });
 
-/**
- * POST /api/workflows/:id/rollback
- * Roll back workflow definition to a historical snapshot hash.
- */
-workflowsRouter.post('/:id/rollback', zValidator('json', rollbackWorkflowSchema), async (c) => {
-  const { id } = c.req.param();
+// ─── dag/v1 draft + published-version endpoints ────────────────────────────
+
+const draftPutSchema = z.object({
+  draft: z.record(z.unknown()),
+  ui: z.unknown().optional(),
+  // Optimistic-lock baseline: the `updated_at` the client read from
+  // GET /:id/draft. When present, the server rejects the write with
+  // 409 if the row has moved on. This lets the copilot's server-side
+  // writes survive a user's "Save draft" click on a stale editor
+  // snapshot — without this the user's PUT is last-write-wins and
+  // silently erases whatever the copilot just committed.
+  expectedUpdatedAt: z.string().min(1).optional(),
+});
+
+const publishSchema = z.object({
+  publishNote: z.string().min(1).max(500).optional(),
+});
+
+const testRunSchema = z.object({
+  // Sample trigger payload, available as {{trigger.data.X}} and
+  // validated against the trigger node's dataSchema when declared.
+  triggerData: z.record(z.unknown()).optional(),
+  // Optional clientRequestId for idempotency — double-clicks on the
+  // editor's Test Run button should not spawn two executions.
+  clientRequestId: z.string().min(8).max(64).optional(),
+});
+
+workflowsRouter.get('/:id/draft', async (c) => {
+  const { id: idOrSlug } = c.req.param();
+  const user = c.get('user');
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'viewer');
+  const { getDraft, WorkflowVersionError } = await import('../services/workflow-versions.js');
+  try {
+    const result = await getDraft(c.get('db'), id);
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof WorkflowVersionError && err.code === 'not_found') {
+      throw new NotFoundError('Workflow', idOrSlug);
+    }
+    throw err;
+  }
+});
+
+workflowsRouter.put('/:id/draft', zValidator('json', draftPutSchema), async (c) => {
+  const { id: idOrSlug } = c.req.param();
   const user = c.get('user');
   const body = c.req.valid('json');
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
+  const { saveDraft, WorkflowVersionError } = await import('../services/workflow-versions.js');
+  const { isWorkflowDefinition } = await import('../lib/workflow-dag/schema.js');
+  const { validateDefinition, validateAgainstAvailableModels, groupWorkflowValidationResults, isValidationWarning } = await import('../lib/workflow-dag/validator.js');
+  if (!isWorkflowDefinition(body.draft)) {
+    return c.json({ error: 'invalid_draft', errors: validateDefinition(body.draft) }, 400);
+  }
+  const structuralErrors = validateDefinition(body.draft).filter((issue) => !isValidationWarning(issue));
+  if (structuralErrors.length > 0) {
+    return c.json({ error: 'invalid_draft', ...groupWorkflowValidationResults(structuralErrors) }, 400);
+  }
+  const { assembleLlmProviderEnv } = await import('../lib/llm/provider-env.js');
+  const { resolveAvailableModels } = await import('../services/model-catalog.js');
+  const providerEnv = await assembleLlmProviderEnv(c.get('db'), c.env);
+  const validationEnv = { ...c.env, ...providerEnv } as Env;
+  const modelErrors = validateAgainstAvailableModels(body.draft, await resolveAvailableModels(c.get('db'), validationEnv));
+  if (modelErrors.length > 0) {
+    return c.json({ error: 'invalid_draft', ...groupWorkflowValidationResults(modelErrors) }, 400);
+  }
+  try {
+    const { updatedAt } = await saveDraft(
+      c.get('db'),
+      id,
+      body.draft,
+      body.ui,
+      body.expectedUpdatedAt !== undefined ? { expectedUpdatedAt: body.expectedUpdatedAt } : undefined,
+    );
+    return c.json({ ok: true, updatedAt });
+  } catch (err) {
+    if (err instanceof WorkflowVersionError && err.code === 'not_found') {
+      throw new NotFoundError('Workflow', idOrSlug);
+    }
+    if (err instanceof WorkflowVersionError && err.code === 'conflict') {
+      return c.json({ error: 'conflict', message: err.message }, 409);
+    }
+    throw err;
+  }
+});
 
-  const result = await workflowService.rollbackWorkflow(c.get('db'), user.id, id, body.targetWorkflowHash, {
-    version: body.version,
-    notes: body.notes,
-  });
+workflowsRouter.post('/:id/validate', async (c) => {
+  const { id: idOrSlug } = c.req.param();
+  const user = c.get('user');
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'viewer');
+  const { getDraft, WorkflowVersionError } = await import('../services/workflow-versions.js');
+  const { validateDefinition, validateAgainstEnvironment, groupWorkflowValidationResults } = await import('../lib/workflow-dag/validator.js');
+  let result;
+  try {
+    result = await getDraft(c.get('db'), id);
+  } catch (err) {
+    if (err instanceof WorkflowVersionError && err.code === 'not_found') {
+      throw new NotFoundError('Workflow', idOrSlug);
+    }
+    throw err;
+  }
+  if (!result.draft) {
+    return c.json({ errors: [{ scope: 'workflow', code: 'no_draft', path: '/', message: 'no draft to validate' }], warnings: [] });
+  }
+  // Both validators are total — no try/catch needed.
+  const structuralErrors = validateDefinition(result.draft);
+  const { assembleLlmProviderEnv } = await import('../lib/llm/provider-env.js');
+  const { resolveAvailableModels } = await import('../services/model-catalog.js');
+  const providerEnv = await assembleLlmProviderEnv(c.get('db'), c.env);
+  const validationEnv = { ...c.env, ...providerEnv } as Env;
+  const availableModels = await resolveAvailableModels(c.get('db'), validationEnv);
+  const envErrors = validateAgainstEnvironment(result.draft, validationEnv, { availableModels });
+  return c.json(groupWorkflowValidationResults([...structuralErrors, ...envErrors]));
+});
 
-  if (result.alreadyAtVersion) {
-    return c.json({
-      success: true,
-      message: 'Workflow already at requested version',
-      workflow: result.workflow,
+workflowsRouter.post('/:id/publish', zValidator('json', publishSchema), async (c) => {
+  const { id: idOrSlug } = c.req.param();
+  const user = c.get('user');
+  const body = c.req.valid('json');
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
+  const { publishDraft, WorkflowVersionError } = await import('../services/workflow-versions.js');
+  const { assembleLlmProviderEnv } = await import('../lib/llm/provider-env.js');
+  const { resolveAvailableModels } = await import('../services/model-catalog.js');
+  const providerEnv = await assembleLlmProviderEnv(c.get('db'), c.env);
+  const validationEnv = { ...c.env, ...providerEnv } as Env;
+  const availableModels = await resolveAvailableModels(c.get('db'), validationEnv);
+  try {
+    const result = await publishDraft(c.get('db'), id, {
+      userId: user.id,
+      env: validationEnv,
+      availableModels,
+      ...(body.publishNote ? { publishNote: body.publishNote } : {}),
     });
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof WorkflowVersionError) {
+      if (err.code === 'not_found') throw new NotFoundError('Workflow', idOrSlug);
+      if (err.code === 'publish_contention') {
+        // Concurrent publishes raced through the version retry loop;
+        // signal "service-side contention" + ask the client to retry.
+        return c.json({ error: err.message, code: err.code }, 503, { 'Retry-After': '1' });
+      }
+      return c.json({ error: err.message, code: err.code, errors: err.errors }, 400);
+    }
+    throw err;
   }
+});
 
-  return c.json({
-    success: true,
-    workflow: result.workflow,
-  });
+workflowsRouter.post('/:id/test-run', zValidator('json', testRunSchema), async (c) => {
+  const { id: idOrSlug } = c.req.param();
+  const user = c.get('user');
+  const body = c.req.valid('json');
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
+  const { createExecution, WorkflowExecutionStartError } = await import('../services/workflow-executions.js');
+  const clientRequestId = body.clientRequestId ?? crypto.randomUUID();
+  // Test-run dedupe: if the same client (editor) double-clicks, return
+  // the existing execution rather than spawning a second one. Scoped
+  // to test-run by including 'test' in the key.
+  const idempotencyKey = `test-run:${id}:${user.id}:${clientRequestId}`;
+  const { checkIdempotencyKey } = await import('../lib/db.js');
+  const existing = await checkIdempotencyKey(c.env.DB, id, user.id, idempotencyKey);
+  if (existing) {
+    return c.json({ executionId: existing.id as string, status: existing.status as string, deduplicated: true });
+  }
+  try {
+    const result = await createExecution(c.env, {
+      workflowId: id,
+      user,
+      trigger: {
+        type: 'manual',
+        timestamp: new Date().toISOString(),
+        data: body.triggerData ?? {},
+        metadata: { mode: 'test', initiatedBy: user.id, clientRequestId },
+      },
+      mode: 'test',
+      definitionSource: 'draft',
+      idempotencyKey,
+    });
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof WorkflowExecutionStartError) {
+      if (err.code === 'not_found') throw new NotFoundError('Workflow', idOrSlug);
+      const statusCode = err.code === 'rate_limited' ? 429 : 400;
+      return c.json({ error: err.message, code: err.code, details: err.details }, statusCode);
+    }
+    throw err;
+  }
+});
+
+workflowsRouter.get('/:id/versions', async (c) => {
+  const { id: idOrSlug } = c.req.param();
+  const user = c.get('user');
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'viewer');
+  const { listVersions } = await import('../services/workflow-versions.js');
+  const versions = await listVersions(c.get('db'), id);
+  return c.json({ versions });
+});
+
+workflowsRouter.post('/:id/versions/:versionId/restore', async (c) => {
+  const { id: idOrSlug, versionId } = c.req.param();
+  const user = c.get('user');
+  const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
+  const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
+  const { restoreVersion, WorkflowVersionError } = await import('../services/workflow-versions.js');
+  try {
+    const result = await restoreVersion(c.get('db'), id, versionId);
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof WorkflowVersionError && err.code === 'not_found') {
+      throw new NotFoundError('WorkflowVersion', versionId);
+    }
+    throw err;
+  }
 });

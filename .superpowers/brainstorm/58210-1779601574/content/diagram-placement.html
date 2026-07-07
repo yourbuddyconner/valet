@@ -1,0 +1,152 @@
+<h2>Where does the diagram go?</h2>
+<p class="subtitle">Timeline cards are primary. The workflow diagram is useful but doesn't need 50% of the screen anymore. Four placements:</p>
+
+<style>
+  .grid4 { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+  .frame { background:var(--surface-2,#0f1115); border:1px solid var(--border,#222); border-radius:10px; padding:0; height: 340px; display:flex; flex-direction:column; overflow:hidden; }
+  .frame-header { padding:6px 10px; background:#0b0d12; border-bottom:1px solid #222; font-size:10px; font-family:ui-monospace, monospace; color:#9ca3af; display:flex; justify-content:space-between; }
+  .frame-body { flex:1; display:flex; min-height:0; }
+  .timeline-col { flex:1; padding:10px; display:flex; flex-direction:column; gap:6px; overflow:hidden; }
+  .step { background:#06080c; border-left:2px solid #10b981; border-radius:4px; padding:5px 8px; font-family:ui-monospace, monospace; font-size:10px; color:#e5e7eb; }
+  .step.fail { border-left-color:#ef4444; }
+  .step.run { border-left-color:#f59e0b; }
+  .diagram-col { background:#06080c; border-left:1px solid #222; padding:10px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; }
+  .node { background:#1f2937; color:#e5e7eb; font-family:ui-monospace, monospace; font-size:9px; padding:3px 8px; border-radius:3px; }
+  .node.sel { background:#3b82f6; }
+  .node.ok { border-left:2px solid #10b981; }
+  .arrow { color:#4b5563; font-size:9px; }
+
+  /* Option A: header strip */
+  .header-strip { display:flex; align-items:center; gap:8px; padding:6px 10px; background:#0b0d12; border-bottom:1px solid #222; overflow-x:auto; }
+  .strip-node { background:#1f2937; color:#e5e7eb; font-family:ui-monospace, monospace; font-size:9px; padding:2px 6px; border-radius:3px; flex-shrink:0; }
+  .strip-node.ok { border-bottom:2px solid #10b981; }
+  .strip-node.fail { border-bottom:2px solid #ef4444; }
+
+  /* Option B: minimap */
+  .minimap { position:absolute; bottom:10px; right:10px; background:#0b0d12; border:1px solid #2a2f3a; border-radius:4px; padding:6px; display:flex; flex-direction:column; gap:2px; box-shadow: 0 4px 12px rgba(0,0,0,.4); }
+  .mini-node { width: 80px; height: 8px; background:#1f2937; border-radius:2px; }
+  .mini-node.ok { background:#10b981; opacity:.7; }
+  .mini-node.fail { background:#ef4444; }
+  .mini-node.sel { outline:1px solid #3b82f6; outline-offset:1px; }
+
+  .options { display:grid; grid-template-columns: 1fr 1fr; gap:14px; margin-top:14px; }
+  .option-block { padding:10px; border-radius:8px; border:1px solid #222; cursor:pointer; transition: all .15s; }
+  .option-block:hover { background:#0f1115; border-color:#3b82f6; }
+  .opt-title { font-size:13px; font-weight:600; color:#f9fafb; }
+  .opt-sub { font-size:11px; color:#9ca3af; }
+</style>
+
+<div class="grid4">
+  <!-- A: drop entirely -->
+  <div class="frame">
+    <div class="frame-header"><span>A · No diagram on execution page</span><span>(link → workflow detail)</span></div>
+    <div class="frame-body">
+      <div class="timeline-col" style="flex:1;">
+        <div class="step">LOOP · over personas <span style="color:#6b7280">3 iters</span></div>
+        <div class="step" style="margin-left:12px">AGENT · personaResult #1</div>
+        <div class="step" style="margin-left:12px">AGENT · personaResult #2</div>
+        <div class="step" style="margin-left:12px">AGENT · personaResult #3</div>
+        <div class="step">BASH · envOutput</div>
+        <div class="step">BASH · timestampOutput</div>
+        <div class="step fail">NOTIFY · notify-both-responded</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- B: compact header strip -->
+  <div class="frame">
+    <div class="frame-header"><span>B · Compact strip in header</span><span>horizontal flow</span></div>
+    <div class="header-strip">
+      <span class="strip-node ok">trigger</span><span class="arrow">→</span>
+      <span class="strip-node ok">loop[3]</span><span class="arrow">→</span>
+      <span class="strip-node ok">env</span><span class="arrow">→</span>
+      <span class="strip-node ok">ts</span><span class="arrow">→</span>
+      <span class="strip-node fail">notify</span>
+    </div>
+    <div class="frame-body">
+      <div class="timeline-col">
+        <div class="step">LOOP · over personas</div>
+        <div class="step" style="margin-left:12px">AGENT · personaResult #1</div>
+        <div class="step" style="margin-left:12px">AGENT · personaResult #2</div>
+        <div class="step" style="margin-left:12px">AGENT · personaResult #3</div>
+        <div class="step">BASH · envOutput</div>
+        <div class="step">BASH · timestampOutput</div>
+        <div class="step fail">NOTIFY · notify-both-responded</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- C: split view (timeline + diagram side by side, diagram smaller) -->
+  <div class="frame">
+    <div class="frame-header"><span>C · Split, timeline primary</span><span>diagram ~30% width</span></div>
+    <div class="frame-body">
+      <div class="timeline-col" style="flex:1.6;">
+        <div class="step">LOOP · over personas</div>
+        <div class="step" style="margin-left:12px">AGENT · #1</div>
+        <div class="step" style="margin-left:12px">AGENT · #2</div>
+        <div class="step" style="margin-left:12px">AGENT · #3</div>
+        <div class="step">BASH · envOutput</div>
+        <div class="step fail">NOTIFY · failure</div>
+      </div>
+      <div class="diagram-col" style="flex:1;">
+        <span class="node ok">trigger</span>
+        <span class="arrow">↓</span>
+        <span class="node ok">loop</span>
+        <span class="arrow">↓</span>
+        <span class="node ok sel">agent</span>
+        <span class="arrow">↓</span>
+        <span class="node ok">bash</span>
+        <span class="arrow">↓</span>
+        <span class="node" style="border:1px solid #ef4444;">notify ✗</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- D: toggle view -->
+  <div class="frame" style="position:relative;">
+    <div class="frame-header">
+      <span>D · Tab toggle (Timeline / Graph)</span>
+      <span style="display:flex;gap:4px;">
+        <span style="background:#3b82f6;color:#fff;font-size:9px;padding:2px 6px;border-radius:3px;">Timeline</span>
+        <span style="background:#1f2937;color:#9ca3af;font-size:9px;padding:2px 6px;border-radius:3px;">Graph</span>
+      </span>
+    </div>
+    <div class="frame-body">
+      <div class="timeline-col" style="flex:1;">
+        <div class="step">LOOP · over personas</div>
+        <div class="step" style="margin-left:12px">AGENT · personaResult #1</div>
+        <div class="step" style="margin-left:12px">AGENT · personaResult #2</div>
+        <div class="step" style="margin-left:12px">AGENT · personaResult #3</div>
+        <div class="step">BASH · envOutput</div>
+        <div class="step">BASH · timestampOutput</div>
+        <div class="step fail">NOTIFY · notify-both-responded</div>
+      </div>
+    </div>
+    <div class="minimap">
+      <div style="font-size:8px;color:#6b7280;margin-bottom:2px;">graph</div>
+      <div class="mini-node ok"></div>
+      <div class="mini-node ok sel"></div>
+      <div class="mini-node ok"></div>
+      <div class="mini-node fail"></div>
+    </div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option-block option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="opt-title">A · Drop diagram from execution page</div>
+    <div class="opt-sub">Timeline-only. Add a "View workflow definition →" link in the header. Maximum space for what users care about (results). Diagram lives where it's edited.</div>
+  </div>
+  <div class="option-block option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="opt-title">B · Compact strip in header</div>
+    <div class="opt-sub">Skinny horizontal strip showing step pills with status. Click to scroll-jump in timeline. Cheap structural overview without stealing space.</div>
+  </div>
+  <div class="option-block option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="opt-title">C · Split (timeline + diagram)</div>
+    <div class="opt-sub">Both visible. Timeline ~60%, diagram ~40%. Diagram and timeline scroll-sync (click in one → highlight in other). Most info-dense, least focused.</div>
+  </div>
+  <div class="option-block option" data-choice="d" onclick="toggleSelect(this)">
+    <div class="opt-title">D · Tab toggle (Timeline / Graph)</div>
+    <div class="opt-sub">Two views in one URL. Default to timeline; users with a "graph brain" can flip. Optionally show a minimap in the timeline view as a teaser.</div>
+  </div>
+</div>

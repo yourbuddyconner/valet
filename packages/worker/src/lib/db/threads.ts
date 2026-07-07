@@ -1,18 +1,81 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { SessionThread, ThreadStatus } from '@valet/shared';
 
+export interface ThreadOriginInput {
+  originType?: string;
+  originChannelType?: string;
+  originChannelId?: string;
+  originTriggerId?: string;
+  originTriggerType?: string;
+}
+
+export interface CreateThreadInput extends ThreadOriginInput {
+  id: string;
+  sessionId: string;
+  opencodeSessionId?: string;
+}
+
+interface ThreadRow {
+  id: string;
+  session_id: string;
+  opencode_session_id?: string | null;
+  origin_type?: string | null;
+  origin_channel_type?: string | null;
+  origin_channel_id?: string | null;
+  origin_trigger_id?: string | null;
+  origin_trigger_type?: string | null;
+  title?: string | null;
+  summary_additions?: number | null;
+  summary_deletions?: number | null;
+  summary_files?: number | null;
+  status?: string | null;
+  message_count?: number | null;
+  first_message_preview?: string | null;
+  channel_type?: string | null;
+  channel_id?: string | null;
+  created_at: string;
+  last_active_at: string;
+}
+
+function normalizeThreadStatus(status?: string | null): ThreadStatus {
+  return status === 'archived' ? 'archived' : 'active';
+}
+
+function isMissingOriginColumnError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  const message = error.message.toLowerCase();
+  const originColumns = [
+    'origin_type',
+    'origin_channel_type',
+    'origin_channel_id',
+    'origin_trigger_id',
+    'origin_trigger_type',
+  ];
+
+  return (
+    originColumns.some((column) => message.includes(column)) &&
+    (message.includes('no column') || message.includes('no such column'))
+  );
+}
+
 // ─── Row-to-Domain Converter ────────────────────────────────────────────────
 
-function rowToThread(row: any): SessionThread {
+function rowToThread(row: ThreadRow): SessionThread {
   return {
     id: row.id,
     sessionId: row.session_id,
     opencodeSessionId: row.opencode_session_id || undefined,
+    originType: row.origin_type || undefined,
+    originChannelType: row.origin_channel_type || undefined,
+    originChannelId: row.origin_channel_id || undefined,
+    originTriggerId: row.origin_trigger_id || undefined,
+    originTriggerType: row.origin_trigger_type || undefined,
     title: row.title ?? undefined,
     summaryAdditions: row.summary_additions ?? 0,
     summaryDeletions: row.summary_deletions ?? 0,
     summaryFiles: row.summary_files ?? 0,
-    status: (row.status as ThreadStatus) || 'active',
+    status: normalizeThreadStatus(row.status),
     messageCount: row.message_count ?? 0,
     firstMessagePreview: row.first_message_preview || undefined,
     channelType: row.channel_type || undefined,
@@ -26,19 +89,48 @@ function rowToThread(row: any): SessionThread {
 
 export async function createThread(
   db: D1Database,
-  data: { id: string; sessionId: string; opencodeSessionId?: string }
+  data: CreateThreadInput
 ): Promise<SessionThread> {
-  await db
-    .prepare(
-      'INSERT INTO session_threads (id, session_id, opencode_session_id) VALUES (?, ?, ?)'
-    )
-    .bind(data.id, data.sessionId, data.opencodeSessionId || null)
-    .run();
+  const originType = data.originType ?? 'web';
+
+  try {
+    await db
+      .prepare(
+        `INSERT INTO session_threads (
+          id, session_id, opencode_session_id,
+          origin_type, origin_channel_type, origin_channel_id,
+          origin_trigger_id, origin_trigger_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        data.id,
+        data.sessionId,
+        data.opencodeSessionId ?? null,
+        originType,
+        data.originChannelType ?? null,
+        data.originChannelId ?? null,
+        data.originTriggerId ?? null,
+        data.originTriggerType ?? null
+      )
+      .run();
+  } catch (error) {
+    if (!isMissingOriginColumnError(error)) throw error;
+
+    await db
+      .prepare('INSERT INTO session_threads (id, session_id, opencode_session_id) VALUES (?, ?, ?)')
+      .bind(data.id, data.sessionId, data.opencodeSessionId ?? null)
+      .run();
+  }
 
   return {
     id: data.id,
     sessionId: data.sessionId,
     opencodeSessionId: data.opencodeSessionId,
+    originType,
+    originChannelType: data.originChannelType,
+    originChannelId: data.originChannelId,
+    originTriggerId: data.originTriggerId,
+    originTriggerType: data.originTriggerType,
     summaryAdditions: 0,
     summaryDeletions: 0,
     summaryFiles: 0,
@@ -56,7 +148,7 @@ export async function getThread(
   const row = await db
     .prepare('SELECT * FROM session_threads WHERE id = ?')
     .bind(threadId)
-    .first();
+    .first<ThreadRow>();
 
   return row ? rowToThread(row) : null;
 }
@@ -70,7 +162,7 @@ export async function getActiveThread(
       "SELECT * FROM session_threads WHERE session_id = ? AND status = 'active' ORDER BY last_active_at DESC LIMIT 1"
     )
     .bind(sessionId)
-    .first();
+    .first<ThreadRow>();
 
   return row ? rowToThread(row) : null;
 }
@@ -99,21 +191,26 @@ export async function listThreads(
       ctm.channel_type,
       ctm.channel_id
     FROM session_threads t
-    LEFT JOIN (
-      SELECT DISTINCT thread_id, channel_type, channel_id
-      FROM channel_thread_mappings
-    ) ctm ON ctm.thread_id = t.id`;
+    LEFT JOIN channel_thread_mappings ctm
+      ON ctm.id = (
+        SELECT id
+        FROM channel_thread_mappings
+        WHERE thread_id = t.id
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1
+      )`;
 
   let whereClause = '';
   const params: (string | number)[] = [];
 
   if (crossSession) {
+    const userId = options.userId;
     whereClause += `
     WHERE t.session_id IN (
       SELECT id FROM sessions
       WHERE user_id = ? AND purpose = 'orchestrator'
     )`;
-    params.push(options.userId!);
+    if (userId) params.push(userId);
   } else {
     whereClause += `
     WHERE t.session_id = ?`;
@@ -138,9 +235,9 @@ export async function listThreads(
     const pageRowsResult = await db
       .prepare(`${previewJoin} ${whereClause} ORDER BY t.last_active_at DESC LIMIT ? OFFSET ?`)
       .bind(...params, pageSize, offset)
-      .all();
+      .all<ThreadRow>();
     const pageRows = pageRowsResult.results || [];
-    const threads = pageRows.map((row: any) => rowToThread(row));
+    const threads = pageRows.map(rowToThread);
 
     return {
       threads,
@@ -162,19 +259,18 @@ export async function listThreads(
   query += ' ORDER BY t.last_active_at DESC LIMIT ?';
   params.push(limit + 1);
 
-  const result = await db.prepare(query).bind(...params).all();
+  const result = await db.prepare(query).bind(...params).all<ThreadRow>();
   const rows = result.results || [];
 
   const hasMore = rows.length > limit;
   const pageRows = rows.slice(0, limit);
 
-  const threads = pageRows.map((row: any) => rowToThread(row));
+  const threads = pageRows.map(rowToThread);
+  const cursorRow = pageRows[pageRows.length - 1];
 
   return {
     threads,
-    cursor: hasMore
-      ? String((pageRows[pageRows.length - 1] as any).last_active_at)
-      : undefined,
+    cursor: hasMore && cursorRow ? String(cursorRow.last_active_at) : undefined,
     hasMore,
   };
 }
@@ -267,6 +363,6 @@ export async function incrementThreadMessageCount(
   const row = await db
     .prepare('SELECT message_count FROM session_threads WHERE id = ?')
     .bind(threadId)
-    .first();
-  return (row?.message_count as number) ?? 0;
+    .first<{ message_count?: number }>();
+  return row?.message_count ?? 0;
 }

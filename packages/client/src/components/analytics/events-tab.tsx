@@ -140,9 +140,9 @@ export function EventsTab({ period }: { period: number }) {
                   <th className="py-3 pl-6 pr-4 text-left font-mono text-2xs font-semibold uppercase tracking-wider text-neutral-400">Time</th>
                   <th className="py-3 px-4 text-left font-mono text-2xs font-semibold uppercase tracking-wider text-neutral-400">User</th>
                   <th className="py-3 px-4 text-left font-mono text-2xs font-semibold uppercase tracking-wider text-neutral-400">Event Type</th>
-                  <th className="py-3 px-4 text-right font-mono text-2xs font-semibold uppercase tracking-wider text-neutral-400">Duration</th>
+                  <th className="hidden md:table-cell py-3 px-4 text-right font-mono text-2xs font-semibold uppercase tracking-wider text-neutral-400">Duration</th>
                   <th className="py-3 px-4 text-left font-mono text-2xs font-semibold uppercase tracking-wider text-neutral-400">Details</th>
-                  <th className="py-3 pr-6 pl-4 text-left font-mono text-2xs font-semibold uppercase tracking-wider text-neutral-400">Session</th>
+                  <th className="hidden md:table-cell py-3 pr-6 pl-4 text-left font-mono text-2xs font-semibold uppercase tracking-wider text-neutral-400">Session</th>
                 </tr>
               </thead>
               <tbody>
@@ -175,10 +175,10 @@ export function EventsTab({ period }: { period: number }) {
                           </span>
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-right font-mono text-xs tabular-nums text-neutral-600 dark:text-neutral-300">
+                      <td className="hidden md:table-cell py-3 px-4 text-right font-mono text-xs tabular-nums text-neutral-600 dark:text-neutral-300">
                         {formatDuration(event.durationMs)}
                       </td>
-                      <td className="py-3 px-4 max-w-[400px]">
+                      <td className="py-3 px-4 max-w-[200px] md:max-w-[400px]">
                         {detail ? (
                           <span className="text-xs text-neutral-500 dark:text-neutral-400" title={detail}>
                             {truncate(detail, 80)}
@@ -187,7 +187,7 @@ export function EventsTab({ period }: { period: number }) {
                           <span className="text-xs text-neutral-300 dark:text-neutral-600">-</span>
                         )}
                       </td>
-                      <td className="py-3 pr-6 pl-4 whitespace-nowrap">
+                      <td className="hidden md:table-cell py-3 pr-6 pl-4 whitespace-nowrap">
                         <Link
                           to="/sessions/$sessionId"
                           params={{ sessionId: event.sessionId }}

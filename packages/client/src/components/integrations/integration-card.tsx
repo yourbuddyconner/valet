@@ -1,11 +1,11 @@
-import type { Integration } from '@/api/types';
+import type { IntegrationListItem } from '@/api/integrations';
 import { useDeleteIntegration } from '@/api/integrations';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { getServiceIcon } from './service-icons';
 
 interface IntegrationCardProps {
-  integration: Integration;
+  integration: IntegrationListItem;
 }
 
 const serviceLabels: Record<string, string> = {
@@ -23,7 +23,7 @@ const serviceLabels: Record<string, string> = {
   grafana: 'Grafana Cloud',
 };
 
-const statusText: Record<Integration['status'], { label: string; className: string }> = {
+const statusText: Record<IntegrationListItem['status'], { label: string; className: string }> = {
   active: { label: 'Connected', className: 'text-green-600 dark:text-green-400' },
   pending: { label: 'Pending', className: 'text-amber-600 dark:text-amber-400' },
   error: { label: 'Error', className: 'text-red-600 dark:text-red-400' },
@@ -34,6 +34,7 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
   const deleteIntegration = useDeleteIntegration();
   const Icon = getServiceIcon(integration.service);
   const status = statusText[integration.status];
+  const label = integration.displayName ?? serviceLabels[integration.service] ?? integration.service;
 
   return (
     <Card>
@@ -44,7 +45,7 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
           </div>
           <div>
             <CardTitle className="text-base">
-              {serviceLabels[integration.service] ?? integration.service}
+              {label}
             </CardTitle>
             <p className={`text-xs ${status.className}`}>
               {status.label}
@@ -55,7 +56,7 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
       <CardContent>
         <div className="flex items-center justify-between">
           <p className="text-xs text-neutral-500 dark:text-neutral-400">
-            OAuth connected
+            {getIntegrationConnectionLabel(integration)}
           </p>
           <Button
             variant="secondary"
@@ -69,4 +70,14 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
       </CardContent>
     </Card>
   );
+}
+
+export function getIntegrationConnectionLabel(integration: IntegrationListItem): string {
+  if (integration.isOrgManagedConnector) return 'Org-managed connector';
+  if (integration.isCustomConnector) {
+    if (integration.authType === 'api_key') return 'API key connected';
+    if (integration.authType === 'bearer') return 'Bearer token connected';
+    return 'OAuth connected';
+  }
+  return 'OAuth connected';
 }

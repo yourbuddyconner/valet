@@ -1,5 +1,6 @@
 import type { Env } from '../env.js';
 import type { EventBusEvent, EventBusEventType } from '@valet/shared';
+import { createDoTracer, type DoTracer } from '../lib/do-tracing.js';
 
 /**
  * EventBusDO — centralized real-time event broadcasting hub.
@@ -13,10 +14,26 @@ import type { EventBusEvent, EventBusEventType } from '@valet/shared';
 export class EventBusDO {
   private ctx: DurableObjectState;
   private env: Env;
+  // DO-scoped batched tracer (created once; see do-tracing.ts). EventBus has no alarm, so its
+  // buffered broadcast spans flush on the size threshold and on webSocketClose / webSocketError.
+  private doTracerPromise?: Promise<DoTracer>;
 
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
     this.env = env;
+  }
+
+  private getTracer(): Promise<DoTracer> {
+    return (this.doTracerPromise ??= createDoTracer(this.env, this.ctx, 'valet-event-bus-do'));
+  }
+
+  /** Drain buffered spans now (webSocketClose). Best-effort — never throws. */
+  private async flushTraces(): Promise<void> {
+    try {
+      await (await this.getTracer()).forceFlush();
+    } catch {
+      // tracing is best-effort
+    }
   }
 
   // ─── Entry Point ─────────────────────────────────────────────────────────
@@ -24,22 +41,29 @@ export class EventBusDO {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // WebSocket upgrade for browser clients
+    // WebSocket upgrade for browser clients (not traced — returns a 101 hijack)
     if (request.headers.get('Upgrade') === 'websocket') {
       return this.handleWebSocketUpgrade(url);
     }
 
-    // Internal HTTP endpoints (called by other DOs / worker routes)
-    if (url.pathname === '/publish' && request.method === 'POST') {
-      return this.handlePublish(request);
-    }
+    const tracer = await this.getTracer();
+    // flushOnEnd=false: /publish is the hub's hot path — batch broadcast spans instead of one
+    // POST per publish (flushed on the size threshold and on webSocketClose).
+    return tracer.traceFetch(request, `EventBusDO ${url.pathname}`, async (span) => {
+      span.setAttribute('do.path', url.pathname);
 
-    if (url.pathname === '/health') {
-      const sockets = this.ctx.getWebSockets();
-      return Response.json({ connected: sockets.length });
-    }
+      // Internal HTTP endpoints (called by other DOs / worker routes)
+      if (url.pathname === '/publish' && request.method === 'POST') {
+        return this.handlePublish(request, tracer);
+      }
 
-    return new Response('Not found', { status: 404 });
+      if (url.pathname === '/health') {
+        const sockets = this.ctx.getWebSockets();
+        return Response.json({ connected: sockets.length });
+      }
+
+      return new Response('Not found', { status: 404 });
+    }, false);
   }
 
   // ─── WebSocket Upgrade ───────────────────────────────────────────────────
@@ -66,7 +90,7 @@ export class EventBusDO {
    * Body: { userId?: string, event: EventBusEvent }
    * If userId is provided, broadcasts to that user only. Otherwise broadcasts to all.
    */
-  private async handlePublish(request: Request): Promise<Response> {
+  private async handlePublish(request: Request, tracer: DoTracer): Promise<Response> {
     const body = await request.json() as {
       userId?: string;
       event: EventBusEvent;
@@ -83,43 +107,49 @@ export class EventBusDO {
       event.timestamp = new Date().toISOString();
     }
 
-    if (userId) {
-      this.broadcast(userId, event);
-    } else {
-      this.broadcastAll(event);
-    }
-
-    return Response.json({ ok: true });
+    return tracer.span('broadcast', (span) => {
+      span.setAttribute('event.type', event.type);
+      span.setAttribute('broadcast.scope', userId ? 'user' : 'all');
+      const recipients = userId ? this.broadcast(userId, event) : this.broadcastAll(event);
+      span.setAttribute('broadcast.recipients', recipients);
+      return Response.json({ ok: true });
+    });
   }
 
   // ─── Broadcasting ────────────────────────────────────────────────────────
 
-  /** Send an event to all WebSockets tagged with a specific userId. */
-  private broadcast(userId: string, event: EventBusEvent): void {
+  /** Send an event to all WebSockets tagged with a specific userId. Returns recipient count. */
+  private broadcast(userId: string, event: EventBusEvent): number {
     const sockets = this.ctx.getWebSockets(`user:${userId}`);
     const payload = JSON.stringify(event);
 
+    let delivered = 0;
     for (const ws of sockets) {
       try {
         ws.send(payload);
+        delivered++;
       } catch {
         // Socket likely closed — hibernation will clean it up
       }
     }
+    return delivered;
   }
 
-  /** Send an event to all connected WebSockets. */
-  private broadcastAll(event: EventBusEvent): void {
+  /** Send an event to all connected WebSockets. Returns recipient count. */
+  private broadcastAll(event: EventBusEvent): number {
     const sockets = this.ctx.getWebSockets();
     const payload = JSON.stringify(event);
 
+    let delivered = 0;
     for (const ws of sockets) {
       try {
         ws.send(payload);
+        delivered++;
       } catch {
         // Socket likely closed
       }
     }
+    return delivered;
   }
 
   // ─── Hibernation Handlers ────────────────────────────────────────────────
@@ -151,11 +181,15 @@ export class EventBusDO {
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    // Drain buffered broadcast spans before the DO can hibernate after this disconnect —
+    // EventBus has no alarm, so close/error are the only lifecycle flush drivers.
+    this.ctx.waitUntil(this.flushTraces());
     ws.close(code, reason);
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
     console.error('EventBus WebSocket error:', error);
+    this.ctx.waitUntil(this.flushTraces());
     ws.close(1011, 'Internal error');
   }
 }

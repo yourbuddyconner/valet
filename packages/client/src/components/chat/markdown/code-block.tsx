@@ -77,7 +77,7 @@ function CopyButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={handleCopy}
-      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-neutral-500 opacity-0 transition-opacity hover:text-neutral-700 group-hover/code:opacity-100 dark:text-neutral-400 dark:hover:text-neutral-200"
+      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-neutral-500 opacity-100 transition-opacity hover:text-neutral-700 md:opacity-0 md:group-hover/code:opacity-100 dark:text-neutral-400 dark:hover:text-neutral-200"
     >
       {copied ? (
         <>

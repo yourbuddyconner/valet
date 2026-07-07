@@ -1,11 +1,13 @@
-import type { D1Database, R2Bucket, DurableObjectNamespace } from '@cloudflare/workers-types';
+import type { D1Database, R2Bucket, DurableObjectNamespace, Workflow } from '@cloudflare/workers-types';
 import type { AppDb } from './lib/drizzle.js';
 
 export interface Env {
   // Durable Objects
   SESSIONS: DurableObjectNamespace;
   EVENT_BUS: DurableObjectNamespace;
-  WORKFLOW_EXECUTOR: DurableObjectNamespace;
+
+  // Cloudflare Workflows — DAG interpreter for the dag/v1 runtime.
+  WORKFLOW_INTERPRETER: Workflow;
 
   // Storage
   DB: D1Database;
@@ -18,7 +20,6 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;
   GOOGLE_API_KEY?: string;
-  PARALLEL_API_KEY?: string;
 
   // GitHub App (configured via D1 org_service_configs, not env vars)
   // All GitHub credentials are managed through the admin UI manifest flow.
@@ -33,12 +34,13 @@ export interface Env {
   // Frontend URL (for OAuth redirects)
   FRONTEND_URL: string;
 
+  // Optional host suffix for frontend preview deployments.
+  // Example: dev-valet-client.pages.dev allows https://pr-123.dev-valet-client.pages.dev.
+  FRONTEND_PREVIEW_ORIGIN_SUFFIX?: string;
+
   // Optional public API origin for runner/DO websocket URLs.
   // Example: https://api.example.com
   API_PUBLIC_URL?: string;
-
-  // Optional Worker name fallback (used when FRONTEND_URL is a Pages domain).
-  WORKER_NAME?: string;
 
   // Slack integration
   SLACK_SIGNING_SECRET?: string;
@@ -48,6 +50,11 @@ export interface Env {
 
   // Email allowlist (comma-separated). If unset, all emails are allowed.
   ALLOWED_EMAILS?: string;
+
+  // OpenTelemetry tracing. A no-op (zero network) when OTEL_EXPORTER_OTLP_ENDPOINT
+  // is unset, so it is safe to ship dark.
+  OTEL_EXPORTER_OTLP_ENDPOINT?: string; // OTLP/HTTP base, e.g. http://localhost:4318
+  OTEL_EXPORTER_OTLP_HEADERS?: string; // "key=value,key2=value2" auth headers for the endpoint
 }
 
 /** Read a string-valued env var by dynamic key name. Returns undefined for missing or non-string values. */

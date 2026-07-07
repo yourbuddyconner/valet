@@ -221,4 +221,4 @@ Resolution (whichever comes first):
 - Denial reason prompts via Slack modals
 - Telegram interactive button implementation (follows same interface when added)
 - Changes to the action policy resolution logic itself
-- Workflow approval gates (separate system in WorkflowExecutorDO)
+- Workflow approval gates (separate system; see docs/specs/workflows.md)

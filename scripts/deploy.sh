@@ -31,12 +31,15 @@ set -a; source "$DEPLOY_CONFIG"; set +a
 # Derived names (all overridable via config file)
 CF_WORKER_NAME="${CF_WORKER_NAME:-$PROJECT_NAME}"
 PAGES_PROJECT_NAME="${PAGES_PROJECT_NAME:-${PROJECT_NAME}-client}"
+PAGES_DEPLOY_BRANCH="${PAGES_DEPLOY_BRANCH:-main}"
+FRONTEND_PREVIEW_ORIGIN_SUFFIX="${FRONTEND_PREVIEW_ORIGIN_SUFFIX:-${PAGES_PROJECT_NAME}.pages.dev}"
 D1_DATABASE_NAME="${D1_DATABASE_NAME:-${PROJECT_NAME}-db}"
 R2_BUCKET_NAME="${R2_BUCKET_NAME:-${PROJECT_NAME}-storage}"
 MODAL_APP_NAME="${MODAL_APP_NAME:-${PROJECT_NAME}-backend}"
 MODAL_LABEL_PREFIX="${MODAL_LABEL_PREFIX:-${ENVIRONMENT}-}"
 ALLOWED_EMAILS="${ALLOWED_EMAILS:-}"
 MODAL_DEPLOY_CMD="${MODAL_DEPLOY_CMD:-uv run --project backend modal deploy}"
+API_PUBLIC_URL="${API_PUBLIC_URL:-}"
 
 # ─── Shared Helpers ──────────────────────────────────────────────────────────
 
@@ -102,12 +105,24 @@ discover_modal_url() {
     fi
 }
 
+resolve_worker_url() {
+    if [ -n "${API_PUBLIC_URL:-}" ]; then
+        WORKER_URL="${API_PUBLIC_URL}"
+    else
+        echo -e "${RED}API_PUBLIC_URL is required in ${DEPLOY_CONFIG}.${NC}"
+        echo "Set it to the public Worker origin, e.g. https://${CF_WORKER_NAME}.<account>.workers.dev"
+        exit 1
+    fi
+}
+
 generate_wrangler_config() {
     sed -e "s|\${CF_WORKER_NAME}|${CF_WORKER_NAME}|g" \
         -e "s|\${D1_DATABASE_NAME}|${D1_DATABASE_NAME}|g" \
         -e "s|\${D1_DATABASE_ID}|${D1_DATABASE_ID}|g" \
         -e "s|\${R2_BUCKET_NAME}|${R2_BUCKET_NAME}|g" \
         -e "s|\${ALLOWED_EMAILS}|${ALLOWED_EMAILS}|g" \
+        -e "s|\${API_PUBLIC_URL}|${API_PUBLIC_URL}|g" \
+        -e "s|\${FRONTEND_PREVIEW_ORIGIN_SUFFIX}|${FRONTEND_PREVIEW_ORIGIN_SUFFIX}|g" \
         -e "s|\${MODAL_BACKEND_URL}|${MODAL_BACKEND_URL}|g" \
         packages/worker/wrangler.toml > packages/worker/wrangler.deploy.toml
 }
@@ -126,6 +141,64 @@ preflight() {
     echo -e "${GREEN}✓ Cloudflare${NC}"
 }
 
+build_client() {
+    local worker_url="$1"
+    local build_commit_hash
+    local build_version_tag=""
+    local build_args=()
+
+    build_commit_hash=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
+
+    if [ "${ENVIRONMENT}" = "prod" ]; then
+        build_version_tag=$(git describe --tags --exact-match HEAD 2>/dev/null || true)
+        if [ -z "${build_version_tag}" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            build_version_tag="${GITHUB_REF_NAME:-}"
+        fi
+    else
+        build_args=(-- --mode development)
+        echo -e "${YELLOW}Building client in development mode (ENVIRONMENT=${ENVIRONMENT})${NC}"
+    fi
+
+    echo -e "${GREEN}✓ Build metadata: env=${ENVIRONMENT}, commit=${build_commit_hash}${NC}"
+    if [ -n "${build_version_tag}" ]; then
+        echo -e "${GREEN}✓ Build version: ${build_version_tag}${NC}"
+    fi
+
+    (
+        cd packages/client
+        VITE_API_URL="${worker_url}/api" \
+        VITE_DEPLOY_ENVIRONMENT="${ENVIRONMENT}" \
+        VITE_BUILD_COMMIT_HASH="${build_commit_hash}" \
+        VITE_BUILD_VERSION_TAG="${build_version_tag}" \
+        pnpm run build "${build_args[@]}"
+    )
+}
+
+pages_branch_alias() {
+    echo "$1" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
+}
+
+pages_deployment_url() {
+    if [ "$PAGES_DEPLOY_BRANCH" = "main" ]; then
+        echo "https://${PAGES_PROJECT_NAME}.pages.dev"
+        return
+    fi
+
+    echo "https://$(pages_branch_alias "$PAGES_DEPLOY_BRANCH").${PAGES_PROJECT_NAME}.pages.dev"
+}
+
+deploy_client_pages() {
+    echo -e "${GREEN}✓ Deploying Pages branch: ${PAGES_DEPLOY_BRANCH}${NC}"
+    (
+        cd packages/client
+        wrangler pages deploy dist \
+            --project-name="$PAGES_PROJECT_NAME" \
+            --branch="$PAGES_DEPLOY_BRANCH"
+    )
+}
+
 # ─── Subcommands ─────────────────────────────────────────────────────────────
 
 cmd_worker() {
@@ -133,6 +206,7 @@ cmd_worker() {
     preflight wrangler jq bun
     discover_d1_id
     discover_modal_url
+    resolve_worker_url
     echo ""
 
     # Generate registries
@@ -146,12 +220,6 @@ cmd_worker() {
         exit 1
     }
     echo "$DEPLOY_OUT"
-
-    # Capture worker URL from deploy output
-    WORKER_URL=$(echo "$DEPLOY_OUT" | grep -o 'https://[^ ]*\.workers\.dev' | head -1) || true
-    if [ -z "${WORKER_URL:-}" ]; then
-        WORKER_URL="https://${CF_WORKER_NAME}.workers.dev"
-    fi
     echo -e "${GREEN}✓ Worker: ${WORKER_URL}${NC}"
 }
 
@@ -177,34 +245,13 @@ cmd_client() {
     echo -e "${GREEN}Building and deploying client...${NC}"
     preflight wrangler pnpm
 
-    # Discover worker URL: use WORKER_PROD_URL override, or ask wrangler for the deployed URL
-    if [ -n "${WORKER_PROD_URL:-}" ]; then
-        WORKER_URL="${WORKER_PROD_URL}"
-    else
-        # Try to get the URL from the existing deployment
-        WORKER_URL=$(wrangler deployments list --name "${CF_WORKER_NAME}" 2>/dev/null \
-            | grep -o 'https://[^ ]*\.workers\.dev' | head -1) || true
-        if [ -z "${WORKER_URL:-}" ]; then
-            # Fall back to subdomain discovery via wrangler deploy --dry-run isn't available,
-            # so use the standard pattern. The user can override with WORKER_PROD_URL.
-            echo -e "${YELLOW}Could not auto-detect worker URL. Using https://${CF_WORKER_NAME}.workers.dev${NC}"
-            echo -e "${YELLOW}Set WORKER_PROD_URL in .env.deploy if this is wrong.${NC}"
-            WORKER_URL="https://${CF_WORKER_NAME}.workers.dev"
-        fi
-    fi
+    resolve_worker_url
     echo -e "${GREEN}✓ Using API URL: ${WORKER_URL}/api${NC}"
     echo ""
 
-    # Build in development mode for non-prod environments — preserves component
-    # names, React DevTools support, and readable stack traces.
-    local VITE_MODE_FLAG=""
-    if [ "${ENVIRONMENT}" != "prod" ]; then
-        VITE_MODE_FLAG="-- --mode development"
-        echo -e "${YELLOW}Building client in development mode (ENVIRONMENT=${ENVIRONMENT})${NC}"
-    fi
-    (cd packages/client && VITE_API_URL="${WORKER_URL}/api" pnpm run build ${VITE_MODE_FLAG})
-    (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME")
-    echo -e "${GREEN}✓ Client deployed: https://${PAGES_PROJECT_NAME}.pages.dev${NC}"
+    build_client "${WORKER_URL}"
+    deploy_client_pages
+    echo -e "${GREEN}✓ Client deployed: $(pages_deployment_url)${NC}"
 }
 
 cmd_all() {
@@ -215,6 +262,7 @@ cmd_all() {
 
     preflight wrangler jq pnpm bun
     discover_modal_url
+    resolve_worker_url
 
     # --- Step 1: Ensure D1 database ---
     echo "Step 1/7: D1 database..."
@@ -247,11 +295,6 @@ cmd_all() {
         exit 1
     }
     echo "$DEPLOY_OUT"
-
-    WORKER_URL=$(echo "$DEPLOY_OUT" | grep -o 'https://[^ ]*\.workers\.dev' | head -1) || true
-    if [ -z "${WORKER_URL:-}" ]; then
-        WORKER_URL="https://${CF_WORKER_NAME}.workers.dev"
-    fi
     echo -e "${GREEN}✓ Worker: ${WORKER_URL}${NC}"
 
     # --- Step 5: Run D1 migrations ---
@@ -269,13 +312,8 @@ cmd_all() {
     # --- Step 7: Build and deploy client ---
     echo ""
     echo "Step 7/7: Building and deploying client..."
-    local VITE_MODE_FLAG=""
-    if [ "${ENVIRONMENT}" != "prod" ]; then
-        VITE_MODE_FLAG="-- --mode development"
-        echo -e "${YELLOW}Building client in development mode (ENVIRONMENT=${ENVIRONMENT})${NC}"
-    fi
-    (cd packages/client && VITE_API_URL="${WORKER_URL}/api" pnpm run build ${VITE_MODE_FLAG})
-    (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME")
+    build_client "${WORKER_URL}"
+    deploy_client_pages
     echo -e "${GREEN}✓ Client deployed${NC}"
 
     # --- Summary ---
@@ -285,7 +323,7 @@ cmd_all() {
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo "  Worker:  ${WORKER_URL}"
-    echo "  Client:  https://${PAGES_PROJECT_NAME}.pages.dev"
+    echo "  Client:  $(pages_deployment_url)"
     echo ""
     echo -e "${YELLOW}If this is your first deploy, set worker secrets:${NC}"
     echo "  wrangler secret put ENCRYPTION_KEY --name ${CF_WORKER_NAME}"

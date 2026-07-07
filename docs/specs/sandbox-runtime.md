@@ -112,11 +112,16 @@ Data flows bidirectionally: user prompts go DO -> Runner -> OpenCode. Agent resp
 ```bash
 export DISPLAY=:99
 export HOME=/workspace
+export TMPDIR=/tmp
 export OPENCODE_RUNTIME_DIR=/tmp/valet-opencode
 export VALET_PERSONA_DIR=/tmp/valet-opencode/persona
+export AGENT_BROWSER_HOME=/tmp/valet-agent-browser
+export AGENT_BROWSER_PROFILE=/workspace/.agent-browser-profile
 ```
 
 Sets display for VNC, keeps the terminal/user home on the durable workspace, and points runner-generated OpenCode/persona files at ephemeral sandbox storage. OpenCode itself is spawned later with XDG paths, `OPENCODE_CONFIG_DIR`, and `OPENCODE_DB` under `OPENCODE_RUNTIME_DIR`.
+
+`agent-browser` is split deliberately: `AGENT_BROWSER_HOME` stays on local `/tmp` because the daemon binds a Unix domain socket there, while `AGENT_BROWSER_PROFILE` stays under `/workspace` so browser cookies and profile data can persist with the workspace volume.
 
 ### Step 2 — VNC Stack
 
@@ -181,7 +186,7 @@ exec bun run src/bin.ts \
 | Variable | Required | Source | Purpose |
 |----------|----------|--------|---------|
 | `SESSION_ID` | Yes | Modal secrets | Session identifier |
-| `DO_WS_URL` | Yes | Modal secrets | WebSocket URL to SessionAgent DO |
+| `DO_WS_URL` | Yes | Modal secrets | WebSocket URL to SessionAgent DO. The Worker constructs deployed sandbox URLs from `API_PUBLIC_URL`; local development may derive from localhost request URLs. Non-local request hosts and synthetic internal URLs such as workflow dispatch URLs are never trusted as sandbox network origins. |
 | `RUNNER_TOKEN` | Yes | Modal secrets | Auth token for DO connection |
 | `JWT_SECRET` | Yes | Modal secrets | Per-session HMAC key for gateway JWT validation, derived as `HMAC-SHA256(ENCRYPTION_KEY, sessionId)` — the raw `ENCRYPTION_KEY` is never sent to sandboxes (see `auth-access.md`) |
 | `OPENCODE_SERVER_PASSWORD` | Yes | Modal secrets | OpenCode server auth |
@@ -326,7 +331,7 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
 3. Finalize any pending response on the channel.
 4. Ensure channel has an OpenCode session (create via `POST /session` if needed).
 5. Build model failover chain from `modelPreferences`.
-6. Transcribe audio attachments via whisper.cpp if present.
+6. Transcribe audio attachments via whisper.cpp if present. Audio preprocessing happens before the OpenCode sync prompt timeout starts, so `ffmpeg` conversion and `whisper-cli` transcription each drain subprocess output and enforce their own ceilings (`VALET_AUDIO_FFMPEG_TIMEOUT_MS`, default 60s; `VALET_AUDIO_WHISPER_TIMEOUT_MS`, default 120s). The runner uses `VALET_WHISPER_MODEL_PATH` when set, otherwise `/models/whisper/ggml-base.en.bin`. If the model is missing, or if conversion/transcription times out or fails, the runner strips the raw audio from the OpenCode payload and continues with the original prompt text plus a diagnostic fallback note instead of leaving the channel busy indefinitely.
 7. Materialize PDF attachments to `/workspace/.valet/attachments` by default (or `VALET_PROMPT_ATTACHMENT_DIR` when set): the runner writes the original `.pdf`, parses text with LiteParse, writes a sibling `.txt` when parsing succeeds, strips the raw PDF attachment, and appends a concise note telling the agent it can read the parsed text file from disk.
 8. Send `agentStatus: thinking` to DO.
 9. POST `/session/:id/message` to OpenCode with attributed content and model selection.
