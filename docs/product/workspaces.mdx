@@ -5,11 +5,11 @@ description: Every session runs in an isolated Linux sandbox with a real file sy
 
 import { MascotNote } from '/snippets/mascot-note.mdx';
 
-When Valet needs to do more than talk — run code, edit files, open a browser, produce a document — it works inside a **sandbox**: an isolated Linux environment with its own file system, dedicated to one [session](/product/tasks). This page explains what the sandbox is, how you look inside it, and how files move in and out.
+When Valet needs to do more than talk — run code, edit files, open a browser, produce a document — it works inside a **sandbox**: an isolated Linux environment with its own file system, dedicated to one [session](/product/sessions). This page explains what the sandbox is, how you look inside it, and how files move in and out.
 
 <MascotNote
   title="Sandbox"
-  heading="A real computer, scoped to one task"
+  heading="A real computer, scoped to one session"
   image="/images/characters/laptop.png"
   alt="Valet working at a laptop"
 >
@@ -20,9 +20,9 @@ When Valet needs to do more than talk — run code, edit files, open a browser, 
 
 Each session that needs to do real work gets its own sandbox — a container running a full dev environment. Inside it, Valet has a working directory at `/workspace` that persists for the life of the session: when a repository is involved, it's cloned into `/workspace`, and any files Valet creates or downloads live there too.
 
-The sandbox is **isolated per session**. One task's sandbox can't see another's, and when a session is deleted the sandbox and its files go with it. Sessions that go idle hibernate to save resources and restore transparently when you return — the workspace files come back with them.
+The sandbox is **isolated per session**. One session's sandbox can't see another's, and when a session is deleted the sandbox and its files go with it. Sessions that go idle hibernate to save resources and restore transparently when you return — the workspace files come back with them.
 
-Not every task surfaces a sandbox. A quick "summarize these issues" request answers in the thread. But engineering work, [child sessions](/product/child-sessions), and your always-on [orchestrator](/product/what-is-valet) all run on top of one.
+Not every session surfaces a sandbox. A quick "summarize these issues" request answers in the thread. But engineering work, [child sessions](/product/child-sessions), and your always-on [orchestrator](/product/what-is-valet) all run on top of one.
 
 ## Looking inside
 
@@ -71,8 +71,8 @@ Sessions also keep durable artifacts, so a file Valet produced is retrievable af
 ## Good habits
 
 - Point Valet at specific files by pasting a path or a link rather than describing them.
-- For anything that should outlive the task, ask Valet to deliver it to a connected system — don't leave the only copy in the sandbox.
-- Keep sensitive files in [private tasks](/product/access); anyone who can view a task can inspect its workspace.
+- For anything that should outlive the session, ask Valet to deliver it to a connected system — don't leave the only copy in the sandbox.
+- Keep sensitive files in [private sessions](/product/access); anyone who can view a session can inspect its workspace.
 - Use [approvals](/product/approvals) to gate actions that push workspace files outward — commits, sends, uploads.
 
 ## Under the hood

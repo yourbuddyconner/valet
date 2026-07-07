@@ -9,7 +9,7 @@ description: Give a group of people a shared Valet orchestrator, shared memory, 
 
 A team is a named group of people inside your organization that owns resources together. Read this page if you're an admin or team lead deciding how to set one up: it covers what a team owns, who can manage it, how team memory works, and how a team shares a Slack channel with Valet.
 
-Without teams, everything in Valet belongs to one person — your orchestrator, your memory, your channel bindings. A team moves that ownership up a level, so the platform team's Slack channel, its long-running context, and the tasks it delegates to Valet belong to the team rather than to whoever happened to set them up.
+Without teams, everything in Valet belongs to one person — your orchestrator, your memory, your channel bindings. A team moves that ownership up a level, so the platform team's Slack channel, its long-running context, and the sessions it delegates to Valet belong to the team rather than to whoever happened to set them up.
 
 ## The team orchestrator
 
@@ -18,7 +18,7 @@ Every team gets its own orchestrator: a shared, always-on agent that any member 
 Two behaviors make that workable with several people talking at once:
 
 - **Attribution.** The orchestrator knows who said what. Every prompt carries its author, so it can answer each person in their own context — and tell Bob "Alice asked me to look into the deploy failure" when he checks in.
-- **Queued turn-taking.** On your personal orchestrator, a new message can redirect what Valet is already doing. On a team orchestrator, prompts from different members queue instead: Bob's message waits its turn rather than interrupting the task Alice kicked off mid-flight. The team chat shows what's queued and from whom.
+- **Queued turn-taking.** On your personal orchestrator, a new message can redirect what Valet is already doing. On a team orchestrator, prompts from different members queue instead: Bob's message waits its turn rather than interrupting the session Alice kicked off mid-flight. The team chat shows what's queued and from whom.
 
 Child sessions the team orchestrator spawns belong to the team too, so every member can open them, watch progress, and join in.
 
@@ -26,7 +26,7 @@ Child sessions the team orchestrator spawns belong to the team too, so every mem
 
 A team owns its resources the way an individual user owns theirs:
 
-- **Tasks and sessions** — the team orchestrator's conversation and every child session it spawns. Visible to all members.
+- **Sessions** — the team orchestrator's conversation and every child session it spawns. Visible to all members.
 - **Memory** — a team-scoped memory the orchestrator builds up over time (see below).
 - **Channel bindings** — Slack channels routed to the team's orchestrator.
 - **Integrations and credentials** — connections a member shares to the team, so team work can act on external services. When the sourcing member disconnects or leaves, the shared connection is marked broken and any other member can re-connect it.
@@ -37,7 +37,7 @@ A team owns its resources the way an individual user owns theirs:
 Teams have two roles: **admin** and **member**.
 
 - **Team admins** manage membership, team settings, channel bindings, shared integrations, and the team orchestrator itself (identity, restart, deletion). They can also edit and delete team memory.
-- **Members** talk to the orchestrator, see all team-owned tasks and sessions, and read team memory.
+- **Members** talk to the orchestrator, see all team-owned sessions, and read team memory.
 
 Anyone in your organization can create a team, and the creator becomes its first admin. Organization admins can manage any team, whether or not they're a member of it.
 

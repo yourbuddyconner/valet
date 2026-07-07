@@ -23,7 +23,7 @@ When Valet asks, you may be able to:
 | Choice | Meaning |
 | --- | --- |
 | Allow | Run this one action. |
-| Allow for this task | Allow the same action while this task continues. |
+| Allow for Session | Allow the same action while this session continues. |
 | Always allow | Remember this exact action as safe. |
 | Cancel | Do not run the action. |
 
@@ -49,10 +49,10 @@ The three "allow" choices look similar, but they last for very different amounts
 | Choice | Scope | Expires |
 | --- | --- | --- |
 | Allow | This single action only. | Immediately after the action runs. |
-| Allow for this task | The same action, for as long as the task is alive. | When the session ends or hibernates (sessions hibernate after a period of inactivity). |
+| Allow for Session | The same action, for as long as the session is alive. | When the session ends or hibernates (sessions hibernate after a period of inactivity). |
 | Always allow | The same action, every time, until you remove it. | Only when you delete the rule from settings. |
 
-"Allow for this task" is good for the moment — for example, you are watching Valet draft three Linear tickets and don't want to approve each one, but you do want the rule to disappear when the task is done.
+"Allow for Session" is good for the moment — for example, you are watching Valet draft three Linear tickets and don't want to approve each one, but you do want the rule to disappear when the session is done.
 
 "Always allow" is good for repeat work you trust — for example, Valet always reads your inbox to triage email. Use it for narrow, specific actions, not for a whole service.
 
@@ -83,16 +83,16 @@ Review the rules in **Settings → Agent → Auto-approval rules** every so ofte
 
 ### Quiet a noisy session, but only for now
 
-You're working through a long task and approving the same action over and over is slowing you down — but you do not want to make a permanent rule.
+You're working through a long session and approving the same action over and over is slowing you down — but you do not want to make a permanent rule.
 
-Choose **Allow for this task** the next time Valet asks. The rule applies for the rest of that task and disappears when the task ends. The next task will start clean.
+Choose **Allow for Session** the next time Valet asks. The rule applies for the rest of that session and disappears when the session ends. The next session will start clean.
 
 ## Where the controls live
 
 Your personal approval rules live in **Settings → Agent**:
 
 - **Auto-approval rules** — durable allow rules that skip the prompt for a specific action, an entire service, or a risk level. This is where "Always allow" choices end up; edit or delete them here.
-- **Active runtime grants** — the ephemeral approvals from "Allow for this task" and per-run approvals. They expire on their own, but you can revoke one early here.
+- **Active runtime grants** — the ephemeral approvals from "Allow for Session" and per-run approvals. They expire on their own, but you can revoke one early here.
 
 Admin controls live in **Settings → Organization**:
 
@@ -119,7 +119,7 @@ You can review and remove your own "Always allow" rules at any time in **Setting
 
 - Read the action before approving it.
 - Use "always allow" only for narrow, repeatable actions.
-- Use "allow for this task" when you want quiet now but strict later.
+- Use "Allow for Session" when you want quiet now but strict later.
 - Cancel when Valet lacks the information it needs.
 - Ask Valet to explain what it is about to do if the prompt is unclear.
 

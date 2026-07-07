@@ -81,7 +81,7 @@
           {
             "group": "Work in Valet",
             "pages": [
-              "product/tasks",
+              "product/sessions",
               "product/workspaces",
               "product/child-sessions",
               "product/software-workflow",
@@ -216,6 +216,10 @@
     {
       "source": "/product/google-workspace",
       "destination": "/product/integrations/google-workspace"
+    },
+    {
+      "source": "/product/tasks",
+      "destination": "/product/sessions"
     }
   ]
 }

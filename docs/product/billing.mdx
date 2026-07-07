@@ -5,7 +5,7 @@ description: How Valet uses model provider credits, what common quota errors mea
 
 import { MascotNote } from '/snippets/mascot-note.mdx';
 
-Valet runs on language model providers — Anthropic, OpenAI, and Google. Every task you run consumes model usage from one of those providers. This page explains how that usage is paid for, what error messages mean, and who to ask when something is blocked.
+Valet runs on language model providers — Anthropic, OpenAI, and Google. Every session you run consumes model usage from one of those providers. This page explains how that usage is paid for, what error messages mean, and who to ask when something is blocked.
 
 <MascotNote
   title="Org-managed"
@@ -18,10 +18,10 @@ Valet runs on language model providers — Anthropic, OpenAI, and Google. Every 
 
 ## How usage is paid for
 
-Valet calls model providers using API keys configured at the **org level**. When you run a task:
+Valet calls model providers using API keys configured at the **org level**. When you run a session:
 
 1. Valet picks a model (Anthropic Claude, OpenAI GPT, Google Gemini, or another approved provider).
-2. The task uses the org's API key for that provider.
+2. The session uses the org's API key for that provider.
 3. Usage shows up on your org's bill or credit balance with that provider.
 
 The org admin is responsible for setting up provider keys and keeping credits or billing active. Individual users do not need to bring their own keys for normal use.
@@ -30,7 +30,7 @@ Keys live in **Settings → Organization → LLM API Keys** (Anthropic, OpenAI, 
 
 ## "Credit balance is too low" or "quota exceeded"
 
-If a task fails with a message like "credit balance is too low," "insufficient quota," "exceeded quota," "payment required," or "billing not active," the problem is with the **org's account at the model provider**, not with your individual user.
+If a session fails with a message like "credit balance is too low," "insufficient quota," "exceeded quota," "payment required," or "billing not active," the problem is with the **org's account at the model provider**, not with your individual user.
 
 What it means in practice:
 
@@ -52,26 +52,26 @@ There can be exceptions in custom setups — for example, if your org has chosen
 
 ## Sandbox and platform usage
 
-Model API calls are not the only cost. When Valet starts a [child session](/product/child-sessions) for code or long-running work, that workspace also uses compute time on Valet's platform. Like model usage, sandbox usage is tracked at the org level, and users can adjust the CPU and memory allocated to new sandboxes in **Settings → Agent → Sandbox Resources** (higher allocations cost more compute). Sessions that finish their work and report back free up that capacity for the next task.
+Model API calls are not the only cost. When Valet starts a [child session](/product/child-sessions) for code or long-running work, that workspace also uses compute time on Valet's platform. Like model usage, sandbox usage is tracked at the org level, and users can adjust the CPU and memory allocated to new sandboxes in **Settings → Agent → Sandbox Resources** (higher allocations cost more compute). Sessions that finish their work and report back free up that capacity for the next session.
 
-You do not need to manage sandboxes directly. If a session is taking too long or no longer needed, ending it in the task thread is enough.
+You do not need to manage sandboxes directly. If a session is taking too long or no longer needed, ending it in the session is enough.
 
 ## What to do when usage is blocked
 
-If you hit a credit or quota error in the middle of a task:
+If you hit a credit or quota error in the middle of a session:
 
 1. Note the exact error message and which model was in use.
 2. Ask your Valet admin to check the relevant provider account.
-3. Once the admin fixes the underlying balance, retry the task — Valet does not need to be restarted.
+3. Once the admin fixes the underlying balance, retry the session — Valet does not need to be restarted.
 
-If the same task keeps failing the same way, see [troubleshooting](/product/troubleshooting) for general recovery steps.
+If the same session keeps failing the same way, see [troubleshooting](/product/troubleshooting) for general recovery steps.
 
 ## For admins
 
 If you are the admin for your org, the provider keys and limits you set determine what every user can do. Practical guidance:
 
 - Use business-tier accounts at each provider so usage is not used for model training.
-- Keep at least one fallback provider configured so a single outage does not stop all tasks.
-- Watch for low-balance and rate-limit signals proactively. Valet surfaces these as task errors, but the underlying alerts come from the provider.
+- Keep at least one fallback provider configured so a single outage does not stop all sessions.
+- Watch for low-balance and rate-limit signals proactively. Valet surfaces these as session errors, but the underlying alerts come from the provider.
 - Configure keys in **Settings → Organization → LLM API Keys**; add self-hosted or OpenAI-compatible providers under **Custom LLM Providers** on the same page.
 - Track spend in **Settings → Usage & Cost** — token usage and cost broken down by user and model.

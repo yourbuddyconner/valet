@@ -5,7 +5,7 @@ description: Playbook for engineering teams — PR review on every pull request,
 
 This playbook is for engineering teams that want Valet to own recurring repository work — reviewing pull requests, triaging issues, shipping scoped changes, and watching CI — so engineers spend their time on the changes that need human judgment. After reading it you can pick a play, wire up the trigger and integrations it needs, and set the approval gates that keep it safe.
 
-Valet works like an engineering teammate with a hosted workspace. It inspects repositories, prepares changes in an isolated [child session](/product/child-sessions), runs checks, and keeps a [task](/product/tasks) alive in the background until the work lands. It never commits directly to your base branch: it works on a separate branch, opens or updates a pull request, and lets your CI and branch protection rules apply as they would for any human PR. The [software engineering workflow](/product/software-workflow) page covers the branch and PR policy in detail.
+Valet works like an engineering teammate with a hosted workspace. It inspects repositories, prepares changes in an isolated [child session](/product/child-sessions), runs checks, and keeps a [session](/product/sessions) alive in the background until the work lands. It never commits directly to your base branch: it works on a separate branch, opens or updates a pull request, and lets your CI and branch protection rules apply as they would for any human PR. The [software engineering workflow](/product/software-workflow) page covers the branch and PR policy in detail.
 
 Each play below names the trigger, the steps Valet runs, the integrations involved, and where an [approval](/product/approvals) pauses the work.
 
@@ -31,13 +31,13 @@ For each new issue, Valet:
 1. Reads the issue and searches for duplicates and related history with `github.search_issues`.
 2. Checks the code the report touches (`github.search_code`, `github.read_repo_file`) to judge severity and point at a likely owner.
 3. Applies labels and assignees with `github.update_issue`, or files a linked ticket in [Linear](/product/integrations/linear) if that is where your team plans work.
-4. Posts a triage summary — what came in, what it did, what needs a human decision — to the task thread or a Slack channel.
+4. Posts a triage summary — what came in, what it did, what needs a human decision — to the session or a Slack channel.
 
 Reading is low risk and runs freely. Writes — labeling, assigning, creating Linear issues — are medium risk, so you can start with an approval gate on every write and relax it once the triage quality is proven.
 
 ## Play: ship a scoped change end to end
 
-**Trigger:** manual — a task in the web UI, or a mention of Valet in a bound [Slack](/product/integrations/slack) channel: "add rate limiting to the invite endpoint, base off `main`."
+**Trigger:** manual — a session in the web UI, or a mention of Valet in a bound [Slack](/product/integrations/slack) channel: "add rate limiting to the invite endpoint, base off `main`."
 
 This is the core coding loop, and it runs in a child session so the repo checkout, terminal, and build never touch your conversation:
 
@@ -45,9 +45,9 @@ This is the core coding loop, and it runs in a child session so the repo checkou
 2. It reads the relevant code, plans the change, and creates a working branch.
 3. It edits, commits, runs whatever checks it can inside the sandbox, and pushes the branch.
 4. It opens a pull request into the base branch — or pushes to an existing PR if you pointed it at one.
-5. Your CI runs on the PR. Valet watches the results, reports them in the task thread, and can attempt a fix on the same branch if CI fails.
+5. Your CI runs on the PR. Valet watches the results, reports them in the session, and can attempt a fix on the same branch if CI fails.
 
-Approvals gate the sensitive steps: pushing to a remote, opening or updating the PR, and merging (high risk) can each require sign-off depending on your policy. The task is not done until the branch is pushed and the PR exists — if a push or PR step fails, Valet reports the blocker instead of claiming success.
+Approvals gate the sensitive steps: pushing to a remote, opening or updating the PR, and merging (high risk) can each require sign-off depending on your policy. The session is not done until the branch is pushed and the PR exists — if a push or PR step fails, Valet reports the blocker instead of claiming success.
 
 <Note>
   Un-pushed work in a child session can be lost if the sandbox ends. Ask Valet to commit and push early — once a commit reaches your remote, it is safe. See [recovering from interrupted sessions](/product/software-workflow#recovering-from-interrupted-sessions).
@@ -76,13 +76,13 @@ Valet:
 1. Reads the Sentry issue and its events — stack traces, frequency, affected releases — through the Sentry integration.
 2. Correlates the first occurrence with recent history: `github.list_commits` on the affected paths and recently merged PRs.
 3. Writes up the likely cause with the suspect commit or PR linked, and files a tracking issue in GitHub or Linear — a write gated by approval.
-4. If you confirm the diagnosis, it can start the fix as a scoped-change task using the play above, carrying the investigation context with it.
+4. If you confirm the diagnosis, it can start the fix as a scoped-change session using the play above, carrying the investigation context with it.
 
 The Sentry integration is read-oriented, so the investigation itself is safe to run unattended; only the issue-filing and fixing steps touch approval gates.
 
 ## Where this work accumulates
 
-Two surfaces make these plays compound over time. [Memory](/product/memory) keeps repo conventions, review preferences, and past decisions available across tasks, so the tenth PR review reflects what you corrected in the first nine. And each workflow is versioned, so you can tighten instructions and approval placement as you learn what the runs actually look like.
+Two surfaces make these plays compound over time. [Memory](/product/memory) keeps repo conventions, review preferences, and past decisions available across sessions, so the tenth PR review reflects what you corrected in the first nine. And each workflow is versioned, so you can tighten instructions and approval placement as you learn what the runs actually look like.
 
 <Note>
   Teams are rolling out: a team can own these workflows, integrations, and a shared team orchestrator that members reach in bound Slack channels. Team roles are admin and member today, with richer role-based access in progress.
@@ -94,8 +94,8 @@ Two surfaces make these plays compound over time. [Memory](/product/memory) keep
   <Step title="Connect GitHub">
     Connect the [GitHub integration](/product/integrations/github), plus [Linear](/product/integrations/linear) or [Sentry](/product/integrations/sentry) if your plays use them. See [Connect tools](/product/tools).
   </Step>
-  <Step title="Run one play as a task first">
-    Ask Valet to review one PR or triage one issue as a normal [task](/product/tasks). Check the output quality before automating anything.
+  <Step title="Run one play as a session first">
+    Ask Valet to review one PR or triage one issue as a normal [session](/product/sessions). Check the output quality before automating anything.
   </Step>
   <Step title="Turn it into a workflow">
     Create a [workflow](/product/workflows) with the right [trigger](/product/triggers) — a GitHub webhook for PR and issue events, a schedule for reports and sweeps.
