@@ -12,6 +12,7 @@ vi.mock('./api.js', () => ({
 }));
 
 import { slackActions, resolveToSlackTimestamp } from './actions.js';
+import { SLACK_TEXT_LIMIT } from '../message-chunking.js';
 
 function slackResponse(data: Record<string, unknown>): Response {
   return new Response(JSON.stringify({ ok: true, ...data }), { status: 200 });
@@ -532,5 +533,137 @@ describe('slackActions send_message', () => {
     const body = mocks.slackFetch.mock.calls[0][2] as Record<string, unknown>;
     expect(body.unfurl_links).toBe(true);
     expect(body).not.toHaveProperty('unfurl_media');
+  });
+});
+
+describe('slackActions update_message', () => {
+  beforeEach(() => {
+    mocks.slackGet.mockReset();
+    mocks.slackFetch.mockReset();
+  });
+
+  function mockPublicChannel(): void {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ channel: { is_private: false } }));
+  }
+
+  it('edits via chat.update and clears blocks so short text fully replaces block-formatted content', async () => {
+    mockPublicChannel();
+    mocks.slackFetch.mockResolvedValueOnce(slackResponse({ ts: '1780887543.189519', channel: 'C001', text: 'fixed' }));
+
+    const result = await slackActions.execute('slack.update_message', {
+      channel: 'C001',
+      ts: '1780887543.189519',
+      text: 'fixed',
+    }, actionContext());
+
+    expect(mocks.slackFetch).toHaveBeenCalledWith('chat.update', 'xoxb-token', {
+      channel: 'C001',
+      ts: '1780887543.189519',
+      text: 'fixed',
+      blocks: [],
+    });
+    expect(result).toEqual({
+      success: true,
+      data: { ok: true, ts: '1780887543.189519', channel: 'C001', text: 'fixed' },
+    });
+  });
+
+  it('chunks long replacement text into blocks with a truncated notification fallback', async () => {
+    mockPublicChannel();
+    mocks.slackFetch.mockResolvedValueOnce(slackResponse({ ts: '1780887543.189519', channel: 'C001' }));
+
+    const longText = 'x'.repeat(SLACK_TEXT_LIMIT + 100);
+    await slackActions.execute('slack.update_message', {
+      channel: 'C001',
+      ts: '1780887543.189519',
+      text: longText,
+    }, actionContext());
+
+    const body = mocks.slackFetch.mock.calls[0][2] as Record<string, unknown>;
+    expect(Array.isArray(body.blocks)).toBe(true);
+    expect((body.blocks as unknown[]).length).toBeGreaterThan(0);
+    expect(body.text).toBe(longText.slice(0, SLACK_TEXT_LIMIT));
+  });
+
+  it('maps cant_update_message to an own-messages-only error', async () => {
+    mockPublicChannel();
+    mocks.slackFetch.mockResolvedValueOnce(slackFailure('cant_update_message'));
+
+    const result = await slackActions.execute('slack.update_message', {
+      channel: 'C001',
+      ts: '1780887543.189519',
+      text: 'nope',
+    }, actionContext());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('can only edit its own messages');
+  });
+
+  it('denies private channels without a linked owner identity before calling chat.update', async () => {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ channel: { is_private: true } }));
+
+    const result = await slackActions.execute('slack.update_message', {
+      channel: 'C0PRIVATE',
+      ts: '1780887543.189519',
+      text: 'edit',
+    }, actionContext());
+
+    expect(result.success).toBe(false);
+    expect(mocks.slackFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('slackActions delete_message', () => {
+  beforeEach(() => {
+    mocks.slackGet.mockReset();
+    mocks.slackFetch.mockReset();
+  });
+
+  function mockPublicChannel(): void {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ channel: { is_private: false } }));
+  }
+
+  it('deletes via chat.delete and returns the deleted ts/channel', async () => {
+    mockPublicChannel();
+    mocks.slackFetch.mockResolvedValueOnce(slackResponse({ ts: '1780887543.189519', channel: 'C001' }));
+
+    const result = await slackActions.execute('slack.delete_message', {
+      channel: 'C001',
+      ts: '1780887543.189519',
+    }, actionContext());
+
+    expect(mocks.slackFetch).toHaveBeenCalledWith('chat.delete', 'xoxb-token', {
+      channel: 'C001',
+      ts: '1780887543.189519',
+    });
+    expect(result).toEqual({
+      success: true,
+      data: { ok: true, ts: '1780887543.189519', channel: 'C001' },
+    });
+  });
+
+  it('maps cant_delete_message to an own-messages-only error', async () => {
+    mockPublicChannel();
+    mocks.slackFetch.mockResolvedValueOnce(slackFailure('cant_delete_message'));
+
+    const result = await slackActions.execute('slack.delete_message', {
+      channel: 'C001',
+      ts: '1780887543.189519',
+    }, actionContext());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('can only delete its own messages');
+  });
+
+  it('denies private channels without a linked owner identity before calling chat.delete', async () => {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ channel: { is_private: true } }));
+
+    const result = await slackActions.execute('slack.delete_message', {
+      channel: 'C0PRIVATE',
+      ts: '1780887543.189519',
+    }, actionContext());
+
+    expect(result.success).toBe(false);
+    expect(mocks.slackFetch).not.toHaveBeenCalled();
   });
 });

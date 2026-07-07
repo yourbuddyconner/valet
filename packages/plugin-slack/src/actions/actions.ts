@@ -137,6 +137,25 @@ const slackPostMessageOutputSchema = {
   },
 } satisfies Record<string, unknown>;
 
+const slackUpdateMessageOutputSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean', description: 'Always true on success' },
+    ts: { type: 'string', description: 'Timestamp of the edited message (unchanged by the edit)' },
+    channel: { type: 'string', description: 'Channel ID the message lives in' },
+    text: { type: 'string', description: 'The new message text as stored by Slack' },
+  },
+} satisfies Record<string, unknown>;
+
+const slackDeleteMessageOutputSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean', description: 'Always true on success' },
+    ts: { type: 'string', description: 'Timestamp of the deleted message' },
+    channel: { type: 'string', description: 'Channel ID the message was deleted from' },
+  },
+} satisfies Record<string, unknown>;
+
 // ─── Action Definitions ──────────────────────────────────────────────────────
 
 const dmOwner: ActionDefinition = {
@@ -502,10 +521,37 @@ const sendMessage: ActionDefinition = {
   outputSchema: slackPostMessageOutputSchema,
 };
 
+const updateMessage: ActionDefinition = {
+  id: 'slack.update_message',
+  name: 'Update Message',
+  description: 'Edit a message Valet previously posted. Only works on messages sent by Valet itself — Slack rejects bot edits to anyone else\'s messages. Use the channel and ts returned by send_message / dm_owner / dm_user. The new text fully replaces the previous content.',
+  riskLevel: 'medium',
+  params: z.object({
+    channel: z.string().describe('Channel ID (C..., or D... for DMs) returned when the message was sent. Channel names are not accepted — use the ID from the send result.'),
+    ts: z.string().describe('Timestamp (ts) of the message to edit, as returned by send_message/dm_owner/dm_user (e.g. "1780887543.189519")'),
+    text: z.string().describe('New message body — fully replaces the previous content. Supports Slack mrkdwn formatting (bold: *text*, italic: _text_, code: `code`, links: <url|label>).'),
+  }),
+  outputSchema: slackUpdateMessageOutputSchema,
+};
+
+const deleteMessage: ActionDefinition = {
+  id: 'slack.delete_message',
+  name: 'Delete Message',
+  description: 'Delete a message Valet previously posted. Only works on messages sent by Valet itself — Slack rejects bot deletes of anyone else\'s messages. Irreversible: prefer update_message when the content just needs correcting.',
+  riskLevel: 'medium',
+  params: z.object({
+    channel: z.string().describe('Channel ID (C..., or D... for DMs) the message was posted to'),
+    ts: z.string().describe('Timestamp (ts) of the message to delete, as returned by send_message/dm_owner/dm_user'),
+  }),
+  outputSchema: slackDeleteMessageOutputSchema,
+};
+
 const allActions: ActionDefinition[] = [
   dmOwner,
   dmUser,
   sendMessage,
+  updateMessage,
+  deleteMessage,
   addReaction,
   listChannels,
   readHistory,
@@ -925,6 +971,60 @@ async function executeAction(
         if (!res.ok) return slackError(res);
         const data = (await res.json()) as { ok: boolean; error?: string; ts?: string; channel?: string };
         if (!data.ok) return slackError(res, data);
+
+        return { success: true, data: { ok: true, ts: data.ts, channel: data.channel } };
+      }
+
+      case 'slack.update_message': {
+        const p = updateMessage.params.parse(params);
+        const denied = await guardPrivateChannel(token, p.channel, ctx);
+        if (denied) return denied;
+
+        const body: Record<string, unknown> = { channel: p.channel, ts: p.ts, text: p.text };
+        // chat.update retains a message's existing blocks unless the field is sent,
+        // so always send blocks: replacement content for long text, an explicit []
+        // otherwise — editing a previously block-formatted (long) message down to a
+        // short text must not leave the stale blocks rendering.
+        if (p.text.length > SLACK_TEXT_LIMIT) {
+          body.blocks = buildContentBlocks(p.text, p.text);
+          body.text = p.text.slice(0, SLACK_TEXT_LIMIT);
+        } else {
+          body.blocks = [];
+        }
+
+        const res = await slackFetch('chat.update', token, body);
+        if (!res.ok) return slackError(res);
+        const data = (await res.json()) as { ok: boolean; error?: string; ts?: string; channel?: string; text?: string };
+        if (!data.ok) {
+          if (data.error === 'cant_update_message') {
+            return { success: false, error: 'Slack rejected the edit (cant_update_message): Valet can only edit its own messages. Check that ts belongs to a message Valet sent.' };
+          }
+          if (data.error === 'message_not_found') {
+            return { success: false, error: 'Message not found — check the channel and ts (the message may have been deleted).' };
+          }
+          return slackError(res, data);
+        }
+
+        return { success: true, data: { ok: true, ts: data.ts, channel: data.channel, text: data.text } };
+      }
+
+      case 'slack.delete_message': {
+        const p = deleteMessage.params.parse(params);
+        const denied = await guardPrivateChannel(token, p.channel, ctx);
+        if (denied) return denied;
+
+        const res = await slackFetch('chat.delete', token, { channel: p.channel, ts: p.ts });
+        if (!res.ok) return slackError(res);
+        const data = (await res.json()) as { ok: boolean; error?: string; ts?: string; channel?: string };
+        if (!data.ok) {
+          if (data.error === 'cant_delete_message') {
+            return { success: false, error: 'Slack rejected the delete (cant_delete_message): Valet can only delete its own messages.' };
+          }
+          if (data.error === 'message_not_found') {
+            return { success: false, error: 'Message not found — check the channel and ts (it may already be deleted).' };
+          }
+          return slackError(res, data);
+        }
 
         return { success: true, data: { ok: true, ts: data.ts, channel: data.channel } };
       }
