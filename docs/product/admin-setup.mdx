@@ -3,25 +3,33 @@ title: Admin Setup
 description: Prepare Valet for a team by setting access, tools, approvals, channels, skills, and workflows.
 ---
 
-Admins prepare Valet so a team can use it safely.
+This is the day-one checklist for org admins: the decisions to make and settings to configure before your team starts using Valet. Almost everything below lives in one place: **Settings → Organization** (the **Manage** button on the Settings page). For the full access model behind these settings, see [Access and sharing](/product/access).
 
 ## Setup checklist
 
 <Steps>
+  <Step title="Configure model keys">
+    Nothing runs without a model. In **Settings → Organization → LLM API Keys**, add at least one provider key (Anthropic, OpenAI, or Google) — org-level keys are used for all sandboxes. Then set the failover order under **Default Model Preferences**: if a model hits a billing, rate-limit, or auth error, Valet fails over to the next one in the list.
+
+    ![The LLM API Keys panel in Settings → Organization: a row per provider (Anthropic, OpenAI, Google, Parallel) showing whether a key is set, with Configure models and Set/Update controls.](/images/product/llm-api-keys.png)
+  </Step>
   <Step title="Choose who can join">
-    Decide which teammates can use Valet and who should be an admin.
+    In **Settings → Organization → Access Control**, restrict sign-ups to your email domain or an allowlist — **if nothing is enabled, sign-ups are open to anyone who can reach your Valet URL**. Create invite links (with Member or Admin role) under **Invites**, choose which login providers appear (Google, GitHub, email/password) under **Login Providers**, and manage roles under **Members**. The first person to sign in is an admin automatically. Details: [Access and sharing](/product/access).
   </Step>
   <Step title="Connect the first tools">
-    Start with the systems needed for the team's first real use case, such as Slack, GitHub, Linear, Gmail, Google Workspace, or Notion.
+    Start with the systems needed for the team's first real use case, such as Slack, GitHub, Linear, Gmail, Google Workspace, or Notion. Org-level apps (the Slack workspace app, the GitHub App) are installed once from the **Slack** and **GitHub** sections of **Settings → Organization**; individual users then connect their own accounts from the **Integrations** page in the sidebar.
   </Step>
   <Step title="Set approval rules">
-    Decide which actions Valet can do on its own and which actions should ask first.
+    Decide which actions Valet can do on its own and which should ask first. System defaults are sensible (low risk runs, medium/high asks, critical is denied); add org-wide overrides in **Settings → Organization → Action Policies**, and audit everything after the fact in the **Action Log**. Details: [Approvals](/product/approvals).
   </Step>
   <Step title="Choose channels">
     Decide where people can talk to Valet and where Valet should send updates.
   </Step>
   <Step title="Create shared skills and workflows">
     Capture repeated work as skills and workflows so the team does not reinvent the same process.
+  </Step>
+  <Step title="Set up teams (rolling out)">
+    If teams are available in your organization, create one for each group that should share an orchestrator, memory, and a Slack channel. See [Teams](/product/teams).
   </Step>
 </Steps>
 
@@ -31,23 +39,31 @@ For the first rollout:
 
 - Enable one or two tools.
 - Require approval for write actions.
+- Keep the default session visibility private; loosen it later if the org wants shared-by-default work.
 - Start in the web app.
 - Add Slack or Telegram once the team knows where updates should go.
 - Create one workflow only after the team has done the work manually.
 
+## Watch spend
+
+**Settings → Usage & Cost** shows token usage and cost broken down by user and model, plus performance and event analytics. Model usage bills to the provider accounts behind your org keys, so keep an eye on both. Details: [Billing and usage](/product/billing).
+
 ## Review after real use
 
-After a few tasks, review:
+After a few sessions, review:
 
 - Which approvals were helpful.
 - Which approvals were noisy.
 - Which tools Valet was missing.
-- Which repeated tasks should become workflows.
+- Which repeated work should become workflows.
 - Which instructions should become shared skills.
 - Which channels need tighter rules.
+- Whether a group has outgrown personal orchestrators and should become a [team](/product/teams).
 
 ## Useful next pages
 
+- [Access and sharing](/product/access)
+- [Teams](/product/teams)
 - [Connect tools](/product/tools)
 - [Approvals](/product/approvals)
 - [Channels](/product/channels)

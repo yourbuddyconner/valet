@@ -62,7 +62,7 @@ When Valet needs your approval to run a sensitive action, the approval prompt is
 | Button | Meaning |
 | --- | --- |
 | Allow | Run this one action. |
-| Allow for this task | Allow the same action while this task continues. |
+| Allow for Session | Allow the same action while this session continues. |
 | Always allow | Remember this exact action as safe. |
 | Cancel / Deny | Do not run the action. |
 
@@ -86,7 +86,7 @@ To remove the integration, open the Telegram card on the **Integrations** page a
 
 **"Invalid bot token" when connecting.** The token must come from BotFather and start with a numeric ID followed by a colon (for example `123456:...`). Tokens are revoked if you ask BotFather to regenerate them — use the most recent one.
 
-**Approval buttons don't do anything.** Approvals are tied to the live session. If the session has hibernated or expired, the prompt may no longer be actionable. Start a fresh task and try again.
+**Approval buttons don't do anything.** Approvals are tied to the live session. If the session has hibernated or expired, the prompt may no longer be actionable. Start a fresh session and try again.
 
 **Messages from a group chat are ignored.** If you set an owner Telegram user ID, only that user can drive the bot. Either send the message from the owner account or remove the owner restriction.
 
