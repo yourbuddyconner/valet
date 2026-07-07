@@ -18,12 +18,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.84",
-    "@ai-sdk/google": "^3.0.82",
-    "@ai-sdk/openai": "^3.0.71",
-    "@cf-wasm/resvg": "^0.3.3",
-    "@cf-wasm/satori": "^0.3.3",
-    "@hono/zod-validator": "^0.2.1",
+    "@ai-sdk/anthropic": "^4.0.8",
+    "@ai-sdk/google": "^4.0.8",
+    "@ai-sdk/openai": "^4.0.8",
+    "@cf-wasm/resvg": "^0.3.4",
+    "@cf-wasm/satori": "^0.3.6",
+    "@hono/zod-validator": "^0.8.0",
     "@microlabs/otel-cf-workers": "1.0.0-rc.52",
     "@opentelemetry/api": "^1.9.0",
     "@valet/plugin-cloudflare": "workspace:*",
@@ -49,22 +49,22 @@
     "@valet/plugin-typefully": "workspace:*",
     "@valet/sdk": "workspace:*",
     "@valet/shared": "workspace:*",
-    "ai": "^6.0.203",
+    "ai": "^7.0.16",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.23",
+    "hono": "^4.12.28",
     "octokit": "^5.0.5",
-    "zod": "^3.22.4"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240117.0",
-    "@opentelemetry/context-async-hooks": "^2.0.0",
-    "@opentelemetry/resources": "^2.0.0",
-    "@opentelemetry/sdk-trace-base": "^2.0.0",
+    "@cloudflare/workers-types": "^5.20260707.1",
+    "@opentelemetry/context-async-hooks": "^2.9.0",
+    "@opentelemetry/resources": "^2.9.0",
+    "@opentelemetry/sdk-trace-base": "^2.9.0",
     "@types/better-sqlite3": "^7.6.8",
-    "better-sqlite3": "^11.0.0",
-    "drizzle-kit": "^0.31.9",
-    "typescript": "^5.3.3",
-    "vitest": "^4.1.8",
-    "wrangler": "^3.28.0"
+    "better-sqlite3": "^12.11.1",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.107.0"
   }
 }
