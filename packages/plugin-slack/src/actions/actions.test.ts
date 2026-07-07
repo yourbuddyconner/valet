@@ -560,6 +560,7 @@ describe('slackActions update_message', () => {
       channel: 'C001',
       ts: '1780887543.189519',
       text: 'fixed',
+      parse: 'none',
       blocks: [],
     });
     expect(result).toEqual({
@@ -572,7 +573,9 @@ describe('slackActions update_message', () => {
     mockPublicChannel();
     mocks.slackFetch.mockResolvedValueOnce(slackResponse({ ts: '1780887543.189519', channel: 'C001' }));
 
-    const longText = 'x'.repeat(SLACK_TEXT_LIMIT + 100);
+    // TAIL-MARKER only survives past the truncation point if blocks are built
+    // from the full text — catches a regression to chunking the truncated text.
+    const longText = 'x'.repeat(SLACK_TEXT_LIMIT + 100) + 'TAIL-MARKER';
     await slackActions.execute('slack.update_message', {
       channel: 'C001',
       ts: '1780887543.189519',
@@ -581,8 +584,23 @@ describe('slackActions update_message', () => {
 
     const body = mocks.slackFetch.mock.calls[0][2] as Record<string, unknown>;
     expect(Array.isArray(body.blocks)).toBe(true);
-    expect((body.blocks as unknown[]).length).toBeGreaterThan(0);
+    expect(JSON.stringify(body.blocks)).toContain('TAIL-MARKER');
     expect(body.text).toBe(longText.slice(0, SLACK_TEXT_LIMIT));
+    expect(body.parse).toBe('none');
+  });
+
+  it('maps message_not_found to a clear error', async () => {
+    mockPublicChannel();
+    mocks.slackFetch.mockResolvedValueOnce(slackFailure('message_not_found'));
+
+    const result = await slackActions.execute('slack.update_message', {
+      channel: 'C001',
+      ts: '1780887543.189519',
+      text: 'edit',
+    }, actionContext());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Message not found');
   });
 
   it('maps cant_update_message to an own-messages-only error', async () => {
@@ -653,6 +671,19 @@ describe('slackActions delete_message', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('can only delete its own messages');
+  });
+
+  it('maps message_not_found to a clear error', async () => {
+    mockPublicChannel();
+    mocks.slackFetch.mockResolvedValueOnce(slackFailure('message_not_found'));
+
+    const result = await slackActions.execute('slack.delete_message', {
+      channel: 'C001',
+      ts: '1780887543.189519',
+    }, actionContext());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Message not found');
   });
 
   it('denies private channels without a linked owner identity before calling chat.delete', async () => {

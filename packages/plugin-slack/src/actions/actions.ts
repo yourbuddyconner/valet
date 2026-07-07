@@ -980,11 +980,13 @@ async function executeAction(
         const denied = await guardPrivateChannel(token, p.channel, ctx);
         if (denied) return denied;
 
-        const body: Record<string, unknown> = { channel: p.channel, ts: p.ts, text: p.text };
-        // chat.update retains a message's existing blocks unless the field is sent,
-        // so always send blocks: replacement content for long text, an explicit []
-        // otherwise — editing a previously block-formatted (long) message down to a
-        // short text must not leave the stale blocks rendering.
+        // chat.update re-parses the message on every edit and its parse default is
+        // 'client' (unlike chat.postMessage's 'none'), which breaks <url|label>
+        // markup — pin 'none' so edits keep the semantics the message was posted with.
+        const body: Record<string, unknown> = { channel: p.channel, ts: p.ts, text: p.text, parse: 'none' };
+        // Sending text without blocks already removes a message's existing blocks;
+        // the explicit [] is the docs-blessed clear, kept so the intent (short text
+        // replaces any previously chunked block content) survives refactors.
         if (p.text.length > SLACK_TEXT_LIMIT) {
           body.blocks = buildContentBlocks(p.text, p.text);
           body.text = p.text.slice(0, SLACK_TEXT_LIMIT);
