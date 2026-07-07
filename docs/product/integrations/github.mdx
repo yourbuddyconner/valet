@@ -22,7 +22,7 @@ Connect from the **Integrations** page in the sidebar — click **Connect Integr
 
 ## Actions
 
-29 actions are defined for GitHub. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
+31 actions are defined for GitHub. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
 
 | Action ID | What it does | Key params | Risk |
 | --- | --- | --- | --- |
@@ -55,6 +55,8 @@ Connect from the **Integrations** page in the sidebar — click **Connect Integr
 | `github.list_workflows` | List workflow definitions in a repository. Returns workflow names, file paths, and states. | `owner`, `repo` | low |
 | `github.trigger_workflow` | Manually trigger a workflow via workflow_dispatch event. The workflow must have a workflow_dispatch trigger configured. | `owner`, `repo`, `workflow_id`, `ref`, `inputs`? | medium |
 | `github.read_repo_file` | Read a file from a GitHub repository without cloning it | `owner`, `repo`, `path`, `ref`? | low |
+| `github.list_dependabot_alerts` | List Dependabot vulnerability alerts for a repository or organization. Pass `org` instead of `owner`+`repo` to list across an entire org. | `owner`?, `repo`?, `org`?, `state`?, `severity`? | low |
+| `github.get_dependabot_alert` | Get details of a single Dependabot alert including the vulnerable dependency, advisory, and remediation info. | `owner`, `repo`, `alert_number` | low |
 
 ## Action parameters
 

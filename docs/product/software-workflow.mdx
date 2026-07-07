@@ -1,6 +1,6 @@
 ---
 title: Software engineering workflow
-description: How Valet works on a repository — branches, pull requests, CI, approvals, review packets, and recovery from interrupted sessions.
+description: How Valet works on a repository — branches, pull requests, CI, approvals, and recovery from interrupted sessions.
 ---
 
 import { FeatureCard } from '/snippets/feature-card.mdx';
@@ -55,12 +55,6 @@ Valet pushes to a real branch, so your normal CI runs against its commits just l
 | On CI success | Reports the green status and waits for human review and merge. |
 
 Valet does not bypass required checks or branch protection. If your repo requires reviews, signed commits, or status checks before merge, those rules still apply.
-
-## Reviews before pull requests (optional)
-
-Some teams prefer an internal review pass before a PR is opened on the public repo. Valet supports a review-packet workflow where a structured summary of the diff is shared for human review first, and only then promoted to a real pull request.
-
-This is a workflow option, not a requirement. Default behavior is straight to a PR. If your org uses the review-packet flow, your admin or your project conventions will tell you when to expect it.
 
 ## Approvals on sensitive actions
 
