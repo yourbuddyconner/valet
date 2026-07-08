@@ -524,7 +524,7 @@ const sendMessage: ActionDefinition = {
 const updateMessage: ActionDefinition = {
   id: 'slack.update_message',
   name: 'Update Message',
-  description: 'Edit a message Valet previously posted. Only works on messages sent by Valet itself — Slack rejects bot edits to anyone else\'s messages. Use the channel and ts returned by send_message / dm_owner / dm_user. The new text fully replaces the previous content.',
+  description: 'Edit a message the bot previously posted. Only works on the bot\'s own messages — Slack rejects bot edits to anyone else\'s. Use the channel and ts returned by send_message / dm_owner / dm_user. The new text fully replaces the previous content.',
   riskLevel: 'medium',
   params: z.object({
     channel: z.string().describe('Channel ID (C..., or D... for DMs) returned when the message was sent. Channel names are not accepted — use the ID from the send result.'),
@@ -537,8 +537,8 @@ const updateMessage: ActionDefinition = {
 const deleteMessage: ActionDefinition = {
   id: 'slack.delete_message',
   name: 'Delete Message',
-  description: 'Delete a message Valet previously posted. Only works on messages sent by Valet itself — Slack rejects bot deletes of anyone else\'s messages. Irreversible: prefer update_message when the content just needs correcting.',
-  riskLevel: 'medium',
+  description: 'Delete a message the bot previously posted. Only works on the bot\'s own messages — Slack rejects bot deletes of anyone else\'s. Irreversible: prefer update_message when the content just needs correcting.',
+  riskLevel: 'high',
   params: z.object({
     channel: z.string().describe('Channel ID (C..., or D... for DMs) the message was posted to'),
     ts: z.string().describe('Timestamp (ts) of the message to delete, as returned by send_message/dm_owner/dm_user'),
@@ -999,7 +999,7 @@ async function executeAction(
         const data = (await res.json()) as { ok: boolean; error?: string; ts?: string; channel?: string; text?: string };
         if (!data.ok) {
           if (data.error === 'cant_update_message') {
-            return { success: false, error: 'Slack rejected the edit (cant_update_message): Valet can only edit its own messages. Check that ts belongs to a message Valet sent.' };
+            return { success: false, error: 'Slack rejected the edit (cant_update_message): the bot can only edit its own messages. Check that ts belongs to a message the bot sent.' };
           }
           if (data.error === 'message_not_found') {
             return { success: false, error: 'Message not found — check the channel and ts (the message may have been deleted).' };
@@ -1020,7 +1020,7 @@ async function executeAction(
         const data = (await res.json()) as { ok: boolean; error?: string; ts?: string; channel?: string };
         if (!data.ok) {
           if (data.error === 'cant_delete_message') {
-            return { success: false, error: 'Slack rejected the delete (cant_delete_message): Valet can only delete its own messages.' };
+            return { success: false, error: 'Slack rejected the delete (cant_delete_message): the bot can only delete its own messages.' };
           }
           if (data.error === 'message_not_found') {
             return { success: false, error: 'Message not found — check the channel and ts (it may already be deleted).' };

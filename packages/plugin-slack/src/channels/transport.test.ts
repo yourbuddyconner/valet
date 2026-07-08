@@ -1157,6 +1157,7 @@ describe('SlackTransport', () => {
       expect(body.channel).toBe('C456');
       expect(body.ts).toBe('1234567890.123456');
       expect(body.text).toBe('updated');
+      expect(body.parse).toBe('none');
     });
 
     it('returns error on failure', async () => {
@@ -1337,6 +1338,7 @@ describe('SlackTransport', () => {
       expect(url).toBe('https://slack.com/api/chat.update');
       const body = JSON.parse(opts.body);
       expect(body.text).toContain('Allowed for session by Alice');
+      expect(body.parse).toBe('none');
     });
 
     it('renders cancel resolution status', async () => {

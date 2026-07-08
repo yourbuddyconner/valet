@@ -591,10 +591,14 @@ export class SlackTransport implements ChannelTransport {
     const text = message.markdown || message.text || '';
     const formatted = this.formatMarkdown(text);
 
+    // chat.update defaults parse to 'client' (unlike chat.postMessage) and
+    // overwrites the message's stored parse setting on every edit, which
+    // re-renders <url|label> markup as literal text — pin 'none'.
     const result = await slackApiCall('chat.update', {
       channel: target.channelId,
       ts: messageId,
       text: formatted,
+      parse: 'none',
     }, ctx.token);
 
     if (!result.ok) {
@@ -910,6 +914,8 @@ export class SlackTransport implements ChannelTransport {
       ts: ref.messageId,
       text: statusText,
       blocks,
+      // pin parse — chat.update defaults to 'client' and stores it on every edit
+      parse: 'none',
     }, ctx.token);
 
     if (!result.ok) {

@@ -29,8 +29,8 @@ Bot token — an admin pastes a bot token issued by the provider during connecti
 | `slack.dm_owner` | Send a direct message to the session owner on Slack. No user lookup needed. | `text` | low |
 | `slack.dm_user` | Send a direct message to a Slack user by their user ID (U...). Use list_users to find IDs. | `user`, `text` | low |
 | `slack.send_message` | Post a message to a Slack channel or thread. Returns `ts` so you can thread follow-up messages. Use this for arbitrary channel posts — use `channel_reply` only when replying on the specific channel a user wrote from. | `channel`, `text`, `thread_ts`?, `blocks`? | medium |
-| `slack.update_message` | Edit a message Valet previously posted. Only works on Valet's own messages — Slack rejects bot edits to anyone else's. The new text fully replaces the previous content. | `channel`, `ts`, `text` | medium |
-| `slack.delete_message` | Delete a message Valet previously posted. Only works on Valet's own messages. Irreversible — prefer `update_message` when the content just needs correcting. | `channel`, `ts` | medium |
+| `slack.update_message` | Edit a message the bot previously posted. Only works on the bot's own messages — Slack rejects bot edits to anyone else's. The new text fully replaces the previous content. | `channel`, `ts`, `text` | medium |
+| `slack.delete_message` | Delete a message the bot previously posted. Only works on the bot's own messages. Irreversible — prefer `update_message` when the content just needs correcting. | `channel`, `ts` | high |
 | `slack.add_reaction` | Add an emoji reaction to a message | `channel`, `timestamp`, `name` | low |
 | `slack.list_channels` | List Slack channels. By default lists only channels the bot has joined. Set scope to "all" to discover all public channels in the workspace. Use prefix to filter by channel name prefix (e.g. "eng-" or "team-"). | `scope`?, `prefix`? | low |
 | `slack.read_history` | Read recent messages from a Slack channel the bot has joined. Use list_channels to get channel IDs. Each message ts can be used as thread_ts for replies. Use oldest/latest to narrow to a time window. | `channel`, `limit`?, `cursor`?, `oldest`?, `latest`?, `filter`?, `threads_only`?, `include_subtypes`? | low |
@@ -94,7 +94,7 @@ call_tool("slack.send_message", { channel: "C0...", text: "• Item 1\n• Item 
 
 ### `slack.update_message`
 
-Edit a message Valet previously posted. Only works on messages sent by Valet itself — Slack rejects bot edits to anyone else's messages. Use the `channel` and `ts` returned by `send_message` / `dm_owner` / `dm_user`. The new text fully replaces the previous content (including block-formatted content from a long `send_message`).
+Edit a message the bot previously posted. Only works on the bot's own messages — Slack rejects bot edits to anyone else's. Use the `channel` and `ts` returned by `send_message` / `dm_owner` / `dm_user`. The new text fully replaces the previous content (including block-formatted content from a long `send_message`).
 
 | Param | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -104,7 +104,7 @@ Edit a message Valet previously posted. Only works on messages sent by Valet its
 
 ### `slack.delete_message`
 
-Delete a message Valet previously posted. Only works on messages sent by Valet itself — Slack rejects bot deletes of anyone else's messages. Irreversible: prefer `update_message` when the content just needs correcting.
+Delete a message the bot previously posted. Only works on the bot's own messages — Slack rejects bot deletes of anyone else's. Irreversible: prefer `update_message` when the content just needs correcting.
 
 | Param | Type | Required | Description |
 | --- | --- | --- | --- |
