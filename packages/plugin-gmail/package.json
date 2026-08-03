@@ -16,12 +16,12 @@
   "dependencies": {
     "@valet/sdk": "workspace:*",
     "@valet/shared": "workspace:*",
-    "markdown-it": "^14.1.0",
-    "zod": "^3.22.4"
+    "markdown-it": "^15.0.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
-    "typescript": "^5.3.3",
-    "vitest": "^4.1.8"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }
