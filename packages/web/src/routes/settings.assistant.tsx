@@ -1,12 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Section } from "~/components/settings/section";
+import { useMe, usePatchMe } from "~/api/settings";
 import { FieldRow } from "~/components/settings/field-row";
 import { ModelCombobox } from "~/components/settings/model-combobox";
 import { ReasoningSelect } from "~/components/settings/reasoning-select";
-import { IdentityFields } from "~/components/assistant/identity-fields";
-import { Spinner } from "~/components/primitives";
-import { useOrchestratorInfo } from "~/api/orchestrator";
-import { useMe, usePatchMe } from "~/api/settings";
+import { Section } from "~/components/settings/section";
 
 /**
  * `/settings/assistant` — You · Assistant. Name + personality (shared
@@ -20,31 +17,11 @@ export const Route = createFileRoute("/settings/assistant")({
 });
 
 export function AssistantPage() {
-  const infoQ = useOrchestratorInfo();
   const meQ = useMe();
   const patchMe = usePatchMe();
 
   return (
-    <Section title="Assistant" description="Your assistant's name and personality, and the default model for sessions you start.">
-      {infoQ.isLoading && (
-        <div className="flex items-center gap-2 py-4 text-sm text-muted">
-          <Spinner size={14} /> Loading…
-        </div>
-      )}
-      {infoQ.error && (
-        <div className="py-4 text-sm text-danger-500">Failed to load your assistant.</div>
-      )}
-      {infoQ.data && (
-        <div className="py-4">
-          <IdentityFields
-            variant="settings"
-            hideHeading
-            initialName={infoQ.data.name}
-            initialPersonality={infoQ.data.personality}
-          />
-        </div>
-      )}
-
+    <Section title="Thread defaults" description="Defaults for new conversations in your personal space.">
       <FieldRow
         label="Default model"
         hint="New sessions you start use this model or size. Existing sessions keep theirs. Switch the model per thread in the chat header. Shared team assistants do not use it."

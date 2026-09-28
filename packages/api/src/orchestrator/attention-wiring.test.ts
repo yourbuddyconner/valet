@@ -5,14 +5,14 @@
  * cares about the event shape and the durable session rows) and asserts
  * the resulting `notifications` rows.
  */
-import { describe, it, expect, afterEach } from "vitest";
+import { assistantSessionId, type BusEvent, type SessionData } from "@valet/engine";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { assistantSessionId, type BusEvent, type SessionData } from "@valet/engine";
+import { afterEach, describe, expect, it } from "vitest";
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
+import { notifications } from "../schema/index.js";
 import { wireAttentionRouter } from "./attention-wiring.js";
 import type { AttentionEvent } from "./attention.js";
-import { notifications } from "../schema/index.js";
 
 let api: TestApi | undefined;
 let unsub: (() => void) | undefined;
@@ -332,7 +332,7 @@ describe("wireAttentionRouter", () => {
     // that does not list it. The `?assistant=` form also carries the owner
     // implicitly, so the reader lands in the right context instead of
     // looking at a conversation their current scope excludes.
-    expect(rows[0]?.href).toBe("/chat?assistant=asst_attention&thread=th-1");
+    expect(rows[0]?.href).toBe("/chat?workspace=user&thread=th-1");
   });
 
   it("marks a gate's notification read when the gate resolves, and only that gate's", async () => {

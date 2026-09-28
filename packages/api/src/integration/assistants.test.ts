@@ -15,24 +15,23 @@
  * `test-member` is a plain org member reached with the
  * `x-valet-test-user-id` impersonation header.
  */
-import { describe, it, expect, afterEach, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { bootTestApi, type TestApi } from "./_setup.js";
-import { assistants, teamMembers, teams } from "../schema/index.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  archiveAssistant,
   ArchivedAssistantError,
+  createAssistant,
   loadAssistant,
   patchAssistant,
   retireAssistant,
+  toAssistantSummary,
 } from "../assistants/service.js";
-import { setApprovedModels } from "../services/approved-models.js";
-import { setOrgReasoningSettings } from "../services/reasoning.js";
+import { assistants, teamMembers, teams } from "../schema/index.js";
 import type {
   AssistantSummary,
-  CreateAssistantResponse,
-  ListAssistantsResponse,
-  PatchAssistantResponse,
+  ListAssistantsResponse
 } from "../wire/types.js";
+import { bootTestApi, type TestApi } from "./_setup.js";
 
 let api: TestApi | undefined;
 
@@ -49,19 +48,10 @@ afterEach(async () => {
 const MEMBER_HEADERS = { "x-valet-test-user-id": "test-member" };
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
-/** POSTs an assistant and returns the created row's wire summary. */
-async function create(
-  target: TestApi,
-  body: Record<string, unknown>,
-  headers: Record<string, string> = {},
-): Promise<AssistantSummary> {
-  const res = await fetch(`${target.baseUrl}/api/assistants`, {
-    method: "POST",
-    headers: { ...JSON_HEADERS, ...headers },
-    body: JSON.stringify(body),
-  });
-  expect(res.status).toBe(201);
-  return (await res.json()) as CreateAssistantResponse;
+/** Seed historical profiles directly. Public initialization no longer creates custom profiles. */
+async function create(target: TestApi, body: { name?: string; owner?: { type: "user" | "team"; id: string } }, headers: Record<string, string> = {}): Promise<AssistantSummary> {
+  return toAssistantSummary(await createAssistant(target.providers.db, "local-org",
+    body.owner ?? { type: "user", id: headers["x-valet-test-user-id"] ?? "local-user" }, body.name ?? null));
 }
 
 async function list(target: TestApi, query = "", headers: Record<string, string> = {}): Promise<AssistantSummary[]> {
@@ -77,64 +67,6 @@ async function seedTeam(target: TestApi, userId: string, role: "admin" | "member
     .values({ id: "team_1", orgId: "local-org", name: "Platform", createdAt: Date.now() });
   await target.providers.db.insert(teamMembers).values({ teamId: "team_1", userId, role });
 }
-
-describe("POST /api/assistants", () => {
-  it("the first assistant a principal owns becomes its default", async () => {
-    api = await bootTestApi();
-
-    const created = await create(api, { name: "Research" });
-    expect(created.id).toMatch(/^asst_/);
-    expect(created.sessionId).toBe(`assistant:${created.id}`);
-    expect(created.name).toBe("Research");
-    expect(created.owner).toEqual({ type: "user", id: "local-user" });
-    expect(created.isDefault).toBe(true);
-  });
-
-  it("later assistants are not default, and the address is per-assistant", async () => {
-    api = await bootTestApi();
-
-    const first = await create(api, { name: "Research" });
-    const second = await create(api, { name: "Triage" });
-
-    expect(second.isDefault).toBe(false);
-    expect(second.id).not.toBe(first.id);
-    expect(second.sessionId).not.toBe(first.sessionId);
-  });
-
-  it("names are optional — an unnamed assistant carries no name at all", async () => {
-    api = await bootTestApi();
-
-    const created = await create(api, {});
-    expect(created.name).toBeUndefined();
-  });
-
-  it("a team admin creates the team's assistant; a plain member cannot", async () => {
-    api = await bootTestApi();
-    await seedTeam(api, "test-member", "member");
-
-    // `local-user` is an org admin, which `canAdministerTeam` admits.
-    const created = await create(api, { name: "Platform bot", owner: { type: "team", id: "team_1" } });
-    expect(created.owner).toEqual({ type: "team", id: "team_1" });
-
-    const refused = await fetch(`${api.baseUrl}/api/assistants`, {
-      method: "POST",
-      headers: { ...JSON_HEADERS, ...MEMBER_HEADERS },
-      body: JSON.stringify({ owner: { type: "team", id: "team_1" } }),
-    });
-    expect(refused.status).toBe(404);
-  });
-
-  it("refuses an owner the caller cannot administer", async () => {
-    api = await bootTestApi();
-
-    const res = await fetch(`${api.baseUrl}/api/assistants`, {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ owner: { type: "user", id: "test-member" } }),
-    });
-    expect(res.status).toBe(404);
-  });
-});
 
 describe("GET /api/assistants", () => {
   it("lists the caller's own assistants, default first", async () => {
@@ -191,203 +123,12 @@ describe("GET /api/assistants", () => {
     await create(api, { name: "Keep" });
     const archived = await create(api, { name: "Drop" });
 
-    const res = await fetch(`${api.baseUrl}/api/assistants/${archived.id}`, { method: "DELETE" });
-    expect(res.status).toBe(200);
+    const row = await loadAssistant(api.providers.db, archived.id);
+    if (!row) throw new Error("missing historical fixture");
+    await archiveAssistant(api.providers.db, row);
 
     const rows = await list(api);
     expect(rows.map((r) => r.id)).not.toContain(archived.id);
-  });
-});
-
-describe("PATCH /api/assistants/:id — promotion is atomic", () => {
-  it("promoting one demotes the previous default in the same write", async () => {
-    api = await bootTestApi();
-    const first = await create(api, { name: "Research" });
-    const second = await create(api, { name: "Triage" });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${second.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ isDefault: true }),
-    });
-    expect(res.status).toBe(200);
-    const patched = (await res.json()) as PatchAssistantResponse;
-    expect(patched.isDefault).toBe(true);
-
-    const rows = await api.providers.db
-      .select()
-      .from(assistants)
-      .where(eq(assistants.ownerId, "local-user"));
-    expect(rows.filter((r) => r.isDefault).map((r) => r.id)).toEqual([second.id]);
-    expect(rows.find((r) => r.id === first.id)?.isDefault).toBe(false);
-  });
-
-  // The invariant automation depends on: exactly one default at all times,
-  // never zero. A principal with no default strands every workflow node,
-  // event subscription and channel binding that targets it.
-  it("the principal holds exactly one default after every promotion", async () => {
-    api = await bootTestApi();
-    const first = await create(api, { name: "Research" });
-    const second = await create(api, { name: "Triage" });
-    const third = await create(api, { name: "Inbox" });
-
-    for (const target of [second.id, third.id, first.id, first.id]) {
-      const res = await fetch(`${api.baseUrl}/api/assistants/${target}`, {
-        method: "PATCH",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ isDefault: true }),
-      });
-      expect(res.status).toBe(200);
-
-      const defaults = (
-        await api.providers.db.select().from(assistants).where(eq(assistants.ownerId, "local-user"))
-      ).filter((r) => r.isDefault);
-      expect(defaults).toHaveLength(1);
-      expect(defaults[0]?.id).toBe(target);
-    }
-  });
-
-  it("renames without touching the default", async () => {
-    api = await bootTestApi();
-    const first = await create(api, { name: "Research" });
-    const second = await create(api, { name: "Triage" });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${second.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ name: "Renamed" }),
-    });
-    expect(res.status).toBe(200);
-    const patched = (await res.json()) as PatchAssistantResponse;
-    expect(patched.name).toBe("Renamed");
-    expect(patched.isDefault).toBe(false);
-
-    const rows = await api.providers.db.select().from(assistants).where(eq(assistants.id, first.id));
-    expect(rows[0]?.isDefault).toBe(true);
-  });
-
-  it("refuses a caller who cannot administer the owner", async () => {
-    api = await bootTestApi();
-    const mine = await create(api, { name: "Research" });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${mine.id}`, {
-      method: "PATCH",
-      headers: { ...JSON_HEADERS, ...MEMBER_HEADERS },
-      body: JSON.stringify({ name: "Hijacked" }),
-    });
-    expect(res.status).toBe(404);
-  });
-
-  it("404s an unknown id", async () => {
-    api = await bootTestApi();
-    const res = await fetch(`${api.baseUrl}/api/assistants/asst_nope`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ name: "x" }),
-    });
-    expect(res.status).toBe(404);
-  });
-});
-
-describe("DELETE /api/assistants/:id — archive, not destroy", () => {
-  it("archives a non-default assistant and keeps its row", async () => {
-    api = await bootTestApi();
-    await create(api, { name: "Research" });
-    const second = await create(api, { name: "Triage" });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${second.id}`, { method: "DELETE" });
-    expect(res.status).toBe(200);
-
-    const rows = await api.providers.db.select().from(assistants).where(eq(assistants.id, second.id));
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.archivedAt).not.toBeNull();
-  });
-
-  it("refuses to archive the default and names the corrective action", async () => {
-    api = await bootTestApi();
-    const first = await create(api, { name: "Research" });
-    await create(api, { name: "Triage" });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${first.id}`, { method: "DELETE" });
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: string; code: string };
-    expect(body.code).toBe("assistant_is_default");
-    expect(body.error).toContain("Promote another assistant to default first");
-
-    const rows = await api.providers.db.select().from(assistants).where(eq(assistants.id, first.id));
-    expect(rows[0]?.archivedAt).toBeNull();
-    expect(rows[0]?.isDefault).toBe(true);
-  });
-
-  it("promoting another first is what makes the archive succeed", async () => {
-    api = await bootTestApi();
-    const first = await create(api, { name: "Research" });
-    const second = await create(api, { name: "Triage" });
-
-    await fetch(`${api.baseUrl}/api/assistants/${second.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ isDefault: true }),
-    });
-    const res = await fetch(`${api.baseUrl}/api/assistants/${first.id}`, { method: "DELETE" });
-    expect(res.status).toBe(200);
-
-    const defaults = (
-      await api.providers.db.select().from(assistants).where(eq(assistants.ownerId, "local-user"))
-    ).filter((r) => r.isDefault);
-    expect(defaults.map((r) => r.id)).toEqual([second.id]);
-  });
-
-  it("refuses to promote an archived assistant back to default", async () => {
-    api = await bootTestApi();
-    await create(api, { name: "Research" });
-    const second = await create(api, { name: "Triage" });
-    await fetch(`${api.baseUrl}/api/assistants/${second.id}`, { method: "DELETE" });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${second.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ isDefault: true }),
-    });
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: string; code: string };
-    expect(body.code).toBe("assistant_archived");
-  });
-});
-
-describe("the default assistant is the machine-driven target", () => {
-  // `POST /api/orchestrator` resolves the caller's default. Promote a
-  // different assistant and the same route must follow the promotion —
-  // that is the whole reason the default exists.
-  it("POST /api/orchestrator follows the current default", async () => {
-    api = await bootTestApi();
-    const first = await create(api, { name: "Research" });
-    const second = await create(api, { name: "Triage" });
-
-    const before = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
-    expect(((await before.json()) as { sessionId: string }).sessionId).toBe(first.sessionId);
-
-    await fetch(`${api.baseUrl}/api/assistants/${second.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ isDefault: true }),
-    });
-
-    const after = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
-    expect(((await after.json()) as { sessionId: string }).sessionId).toBe(second.sessionId);
-  });
-
-  it("a principal reached before it owned anything gets a default created for it", async () => {
-    api = await bootTestApi();
-
-    const res = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
-    expect(res.status).toBe(200);
-    const { sessionId } = (await res.json()) as { sessionId: string };
-
-    const rows = await list(api);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.isDefault).toBe(true);
-    expect(rows[0]?.sessionId).toBe(sessionId);
   });
 });
 
@@ -434,7 +175,7 @@ describe("POST /api/assistants/:id/session", () => {
       await fetch(`${api.baseUrl}/api/assistants`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "Release notes" }),
+        body: "{}",
       })
     ).json()) as AssistantSummary;
 
@@ -462,7 +203,7 @@ describe("POST /api/assistants/:id/session", () => {
       await fetch(`${api.baseUrl}/api/assistants`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "Twice" }),
+        body: "{}",
       })
     ).json()) as AssistantSummary;
 
@@ -490,395 +231,6 @@ describe("POST /api/assistants/:id/session", () => {
       headers: { "x-valet-test-user-id": "test-member" },
     });
     expect(res.status).toBe(404);
-  });
-});
-
-describe("personality and behavior config", () => {
-  const BEHAVIOR = {
-    skills: { mode: "allowlist" as const, names: ["gh-triage"] },
-    integrations: {
-      mode: "allowlist" as const,
-      entries: [{ service: "github", excludeActions: ["github.delete_repo"] }],
-    },
-  };
-
-  it("create-with-config round-trips through the summary", async () => {
-    api = await bootTestApi();
-    const created = await create(api, {
-      name: "Triage",
-      personality: "Terse. Cites sources.",
-      behavior: BEHAVIOR,
-    });
-    expect(created.personality).toBe("Terse. Cites sources.");
-    expect(created.behavior).toEqual(BEHAVIOR);
-
-    const listed = await list(api);
-    const row = listed.find((a) => a.id === created.id);
-    expect(row?.behavior).toEqual(BEHAVIOR);
-  });
-
-  it("PATCH writes both fields, and null clears them", async () => {
-    api = await bootTestApi();
-    const created = await create(api, { name: "Triage" });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ personality: "Blunt.", behavior: BEHAVIOR }),
-    });
-    expect(res.status).toBe(200);
-    const patched = (await res.json()) as PatchAssistantResponse;
-    expect(patched.personality).toBe("Blunt.");
-    expect(patched.behavior).toEqual(BEHAVIOR);
-
-    const cleared = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ personality: null, behavior: null }),
-    });
-    expect(cleared.status).toBe(200);
-    const clearedBody = (await cleared.json()) as PatchAssistantResponse;
-    // An explicit personality clear stores "" (the neutral persona), not
-    // null — null would fall back to the legacy memory file at wake and
-    // resurrect a persona the editor never displayed.
-    expect(clearedBody.personality).toBe("");
-    expect(clearedBody.behavior).toBeUndefined();
-  });
-
-  it("rejects a malformed behavior with a corrective message", async () => {
-    api = await bootTestApi();
-    const created = await create(api, {});
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ behavior: { skills: { mode: "some" } } }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toMatch(/skills\.mode must be 'all' or 'allowlist'/);
-  });
-
-  it("a PATCH that changes persona inputs evicts the cached engine session; a no-op does not", async () => {
-    api = await bootTestApi();
-    const created = await create(api, {});
-    const evict = vi.spyOn(api.providers.engineHost, "evictCache");
-
-    await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ personality: "Blunt." }),
-    });
-    expect(evict).toHaveBeenCalledWith(created.sessionId);
-
-    // A rename evicts too: the name is baked into the cached session's
-    // "You are {name}." persona prefix, and the rail's Rename dialog sends
-    // name alone.
-    evict.mockClear();
-    await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ name: "Renamed only" }),
-    });
-    expect(evict).toHaveBeenCalledWith(created.sessionId);
-
-    // Re-sending the stored values changes nothing, so the cached session
-    // (and the full rebuild the next wake would pay) survives.
-    evict.mockClear();
-    await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ name: "Renamed only", personality: "Blunt." }),
-    });
-    expect(evict).not.toHaveBeenCalled();
-  });
-
-  it("a plain team member cannot write a team assistant's behavior", async () => {
-    api = await bootTestApi();
-    await seedTeam(api, "test-member", "member");
-    const created = await create(api, { owner: { type: "team", id: "team_1" } });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: { ...JSON_HEADERS, ...MEMBER_HEADERS },
-      body: JSON.stringify({ personality: "Mine now." }),
-    });
-    expect(res.status).toBe(404);
-  });
-
-  it("POST with explicit null behavior and personality treats them as absent", async () => {
-    api = await bootTestApi();
-    // A client that always sends every field explicitly may send null for
-    // optional fields. null must not reach validateAssistantBehavior or the
-    // personality type guard — it should be treated the same as omitting the
-    // field entirely.
-    const created = await create(api, { name: "Null-fields", behavior: null, personality: null });
-    expect(created.behavior).toBeUndefined();
-    expect(created.personality).toBeUndefined();
-  });
-
-  it("POST normalizes a whitespace-only personality to absent", async () => {
-    api = await bootTestApi();
-    // POST stored the raw value before, so `""` disabled the memory-file
-    // fallback at wake. It must trim to null the same way PATCH does.
-    const created = await create(api, { name: "Blank", personality: "   " });
-    expect(created.personality).toBeUndefined();
-  });
-
-  it("PATCH writes avatarUrl, and null clears it (TKAI-387)", async () => {
-    api = await bootTestApi();
-    const created = await create(api, { name: "Ledger" });
-    expect(created.avatarUrl).toBeUndefined();
-
-    const set = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ avatarUrl: "https://cdn.example.com/ledger.png" }),
-    });
-    expect(set.status).toBe(200);
-    const patched = (await set.json()) as PatchAssistantResponse;
-    expect(patched.avatarUrl).toBe("https://cdn.example.com/ledger.png");
-
-    const clear = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ avatarUrl: null }),
-    });
-    expect(clear.status).toBe(200);
-    const cleared = (await clear.json()) as PatchAssistantResponse;
-    expect(cleared.avatarUrl).toBeUndefined();
-  });
-
-  it.each([
-    "http://cdn.example.com/ledger.png",
-    "https://",
-    "https://not a url",
-    "https://cdn.example.com/ledger.png\ninvalid",
-  ])("PATCH rejects malformed avatarUrl %j and names the fix", async (avatarUrl) => {
-    api = await bootTestApi();
-    const created = await create(api, { name: "Ledger" });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ avatarUrl }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("https://");
-  });
-
-  it("PATCH name null clears the name", async () => {
-    api = await bootTestApi();
-    const created = await create(api, { name: "Triage" });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ name: null }),
-    });
-    expect(res.status).toBe(200);
-    const patched = (await res.json()) as PatchAssistantResponse;
-    // Absent on the wire: the UI falls back to its placeholder label, the
-    // session to the neutral persona.
-    expect(patched.name).toBeUndefined();
-  });
-
-  it("PATCH treats a whitespace-only personality as an explicit clear", async () => {
-    api = await bootTestApi();
-    const created = await create(api, { name: "Triage", personality: "Blunt." });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ personality: "   " }),
-    });
-    expect(res.status).toBe(200);
-    const patched = (await res.json()) as PatchAssistantResponse;
-    // "" = explicitly cleared (neutral persona, no memory-file fallback).
-    expect(patched.personality).toBe("");
-  });
-
-  it("POST rejects a personality over the injection cap and names the limit", async () => {
-    api = await bootTestApi();
-    const res = await fetch(`${api.baseUrl}/api/assistants`, {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ name: "Wordy", personality: "x".repeat(501) }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("limited to 500 characters");
-  });
-
-  it("PATCH rejects a personality over the injection cap and names the limit", async () => {
-    api = await bootTestApi();
-    const created = await create(api, { name: "Triage" });
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ personality: "x".repeat(501) }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("limited to 500 characters");
-  });
-});
-
-describe("model and reasoning config (model-selector-overhaul Task 9)", () => {
-  it("PATCH writes both fields, and null clears them", async () => {
-    api = await bootTestApi();
-    const created = await create(api, { name: "Triage" });
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ model: "l", reasoning: "High" }),
-    });
-    expect(res.status).toBe(200);
-    const patched = (await res.json()) as PatchAssistantResponse;
-    expect(patched.model).toBe("l");
-    // Stored normalized (trim + lowercase), same as PATCH /api/org/reasoning.
-    expect(patched.reasoning).toBe("high");
-
-    const listed = await list(api);
-    const row = listed.find((a) => a.id === created.id);
-    expect(row?.model).toBe("l");
-    expect(row?.reasoning).toBe("high");
-
-    const cleared = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ model: null, reasoning: null }),
-    });
-    expect(cleared.status).toBe(200);
-    const clearedBody = (await cleared.json()) as PatchAssistantResponse;
-    expect(clearedBody.model).toBeNull();
-    expect(clearedBody.reasoning).toBeNull();
-  });
-
-  it("rejects a malformed model or reasoning type", async () => {
-    api = await bootTestApi();
-    const created = await create(api, {});
-
-    const badModel = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ model: 123 }),
-    });
-    expect(badModel.status).toBe(400);
-    expect(((await badModel.json()) as { error: string }).error).toContain("model must be a string");
-
-    const badReasoning = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ reasoning: 123 }),
-    });
-    expect(badReasoning.status).toBe(400);
-    expect(((await badReasoning.json()) as { error: string }).error).toContain("reasoning must be a string");
-  });
-
-  it("rejects a model id that does not exist in the catalog and names the model list", async () => {
-    api = await bootTestApi();
-    const created = await create(api, {});
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ model: "anthropic/clade-opus-4-7" }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    // Same corrective-action wording as `validateDefaultModelId` (me.ts/teams.ts):
-    // names GET /api/models as the place to pick a real id.
-    expect(body.error).toContain("GET /api/models");
-
-    // The row was never written — confirms the 400 happened before any patch.
-    const listed = await list(api);
-    expect(listed.find((a) => a.id === created.id)?.model).toBeNull();
-  });
-
-  it("rejects an unknown reasoning level and names the valid ones", async () => {
-    api = await bootTestApi();
-    const created = await create(api, {});
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ reasoning: "extreme" }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("Unknown reasoning level");
-  });
-
-  it("rejects a reasoning level above the org max", async () => {
-    api = await bootTestApi();
-    await setOrgReasoningSettings(api.providers.db, "local-org", { max: "medium" });
-    const created = await create(api, {});
-
-    const res = await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ reasoning: "high" }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("exceeds the org max");
-  });
-
-  it("a plain member is held to the org's approved-models list; an org admin bypasses it", async () => {
-    // A real (non-tier) namespaced id must be catalog-active to pass the
-    // new `validateDefaultModelId` gate before the approved-list check even
-    // runs — zero-config anthropic needs an env key present.
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test-stub");
-    api = await bootTestApi();
-    await setApprovedModels(api.providers.db, "local-org", ["anthropic/claude-haiku-4-5"]);
-    const memberOwned = await create(api, {}, MEMBER_HEADERS);
-
-    // `test-member` is a plain member: an unapproved model is refused.
-    const refused = await fetch(`${api.baseUrl}/api/assistants/${memberOwned.id}`, {
-      method: "PATCH",
-      headers: { ...JSON_HEADERS, ...MEMBER_HEADERS },
-      body: JSON.stringify({ model: "anthropic/claude-opus-4-7" }),
-    });
-    expect(refused.status).toBe(400);
-    const body = (await refused.json()) as { error: string };
-    expect(body.error).toContain("not in the org's approved list");
-
-    // A tier token always bypasses the approved-models gate.
-    const tiered = await fetch(`${api.baseUrl}/api/assistants/${memberOwned.id}`, {
-      method: "PATCH",
-      headers: { ...JSON_HEADERS, ...MEMBER_HEADERS },
-      body: JSON.stringify({ model: "l" }),
-    });
-    expect(tiered.status).toBe(200);
-
-    // `local-user` is an org admin: the same unapproved model is accepted.
-    const adminOwned = await create(api, {});
-    const allowed = await fetch(`${api.baseUrl}/api/assistants/${adminOwned.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ model: "anthropic/claude-opus-4-7" }),
-    });
-    expect(allowed.status).toBe(200);
-    expect(((await allowed.json()) as PatchAssistantResponse).model).toBe("anthropic/claude-opus-4-7");
-  });
-
-  it("a PATCH that only sets model/reasoning does not evict the cached engine session", async () => {
-    api = await bootTestApi();
-    const created = await create(api, {});
-    const evict = vi.spyOn(api.providers.engineHost, "evictCache");
-
-    // Model/reasoning are consulted only at session BUILD time, and
-    // restore-no-clobber means an already-built session's persisted model
-    // stays put regardless — same as a team or org default-model change,
-    // which also does not evict (`routes/teams.ts`).
-    await fetch(`${api.baseUrl}/api/assistants/${created.id}`, {
-      method: "PATCH",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ model: "l", reasoning: "medium" }),
-    });
-    expect(evict).not.toHaveBeenCalled();
   });
 });
 

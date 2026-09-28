@@ -24,21 +24,21 @@
  * would claim the row.) A crash mid-delivery leaves the row pending; it
  * becomes due again when the lease lapses.
  */
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
-import type { RunHost, RunParams, WorkflowStore, WorkflowTriggerPayload } from "@valet/workflow";
 import type { ChannelOrigin, SignalContent, ValetPlugin } from "@valet/engine";
+import type { RunHost, RunParams, WorkflowStore, WorkflowTriggerPayload } from "@valet/workflow";
+import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { AppDb } from "../lib/drizzle.js";
-import { allCatalogEntries } from "./ingest.js";
-import { buildPromptValues, hasPromptConfig, renderEventPrompt } from "./prompt-template.js";
 import { eventDeliveries, events, eventSubscriptions, workflowDefinitions, workflowRuns } from "../schema/index.js";
 import { definitionVersionId } from "../workflows/definition-version.js";
+import { findFollowedThread, upsertFollowedThread } from "./followed-threads.js";
+import { allCatalogEntries } from "./ingest.js";
+import { buildPromptValues, hasPromptConfig, renderEventPrompt } from "./prompt-template.js";
 import {
   followBindingAuthorized,
   isTeamAssistantMention,
   mentionAudience,
   teamMentionActor,
 } from "./team-slack-gate.js";
-import { findFollowedThread, upsertFollowedThread } from "./followed-threads.js";
 
 /** Retry backoff per failed attempt; a failure past the last entry is dead. */
 const BACKOFF_MS = [30_000, 120_000, 600_000, 1_800_000];
@@ -64,8 +64,6 @@ export interface OrchestratorDeliverFn {
     actorUserId: string;
     signal: SignalContent;
     dispatchId: string;
-    /** Which of the owner's assistants answers. Absent → the owner's default. */
-    assistantId?: string;
   }): Promise<void>;
 }
 
@@ -114,8 +112,6 @@ function channelText(payload: unknown): string | undefined {
 interface SubscriptionTarget {
   kind: "workflow" | "orchestrator" | "signal";
   workflowId?: string;
-  /** Which of the owner's assistants answers. Absent → the owner's default. */
-  assistantId?: string;
   /** When true, an orchestrator channel delivery follows the thread: later
    * messages route to the assistant without a re-mention. */
   follow?: boolean;
@@ -289,7 +285,6 @@ export class EventDispatcher {
             origin: origin ?? undefined,
           },
           dispatchId: `event:${delivery.id}`,
-          assistantId: target.assistantId,
         });
         // Bind the thread only AFTER the delivery lands, so a mention whose
         // delivery fails does not leave a followed thread with no listener. The
@@ -325,9 +320,6 @@ export class EventDispatcher {
               // rule id is what it needs.
               ...(teamMention ? { subscriptionId: sub.id } : {}),
               preserveBinding,
-              // Whichever assistant just answered keeps the thread, so a later
-              // overheard message does not fall back to the owner's default.
-              assistantId: target.assistantId,
               // The mention itself is the last message the assistant has seen,
               // so the follow-router's gap re-hydration starts right after it.
               lastSeenTs: origin.messageTs,

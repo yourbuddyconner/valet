@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
+import type { TeamSummary } from "@valet/api/wire";
 import { Check, ChevronsUpDown, User, Users } from "lucide-react";
-import type { AssistantSummary, TeamSummary } from "@valet/api/wire";
 import {
   Button,
   DropdownMenu,
@@ -42,10 +42,7 @@ export interface WorkspaceOption {
   key: string;
   label: string;
   isTeam: boolean;
-  /** That workspace's default assistant. Where selecting it navigates FROM
-   * `/chat`; absent when the workspace owns none, in which case switching
-   * re-scopes without moving. */
-  defaultAssistantId?: string;
+
 }
 
 /**
@@ -57,30 +54,10 @@ export interface WorkspaceOption {
  * whole job is to enumerate where you can work — the reader would conclude
  * they had been removed from the team.
  */
-export function workspaceOptions(
-  assistants: AssistantSummary[] | undefined,
-  teams: TeamSummary[],
-): WorkspaceOption[] {
-  // Falls back to the owner's first assistant when none is marked default —
-  // the same rule `defaultAssistantFor` applies. Requiring `isDefault` here
-  // made a workspace with assistants read as one with none, so selecting it
-  // from `/chat` CREATED a duplicate assistant instead of opening one that
-  // already existed.
-  const defaultFor = (type: "user" | "team", id?: string): string | undefined => {
-    const owned = (assistants ?? []).filter(
-      (a) => a.owner.type === type && (id === undefined || a.owner.id === id),
-    );
-    return (owned.find((a) => a.isDefault) ?? owned[0])?.id;
-  };
-
+export function workspaceOptions(teams: TeamSummary[]): WorkspaceOption[] {
   return [
-    { key: "user", label: "Personal", isTeam: false, defaultAssistantId: defaultFor("user") },
-    ...teams.map((t) => ({
-      key: t.id,
-      label: t.name,
-      isTeam: true,
-      defaultAssistantId: defaultFor("team", t.id),
-    })),
+    { key: "user", label: "Personal", isTeam: false },
+    ...teams.map(t => ({ key: t.id, label: t.name, isTeam: true })),
   ];
 }
 
@@ -90,24 +67,19 @@ export function WorkspaceSwitcher({
   onSelect,
   /** True on `/chat`, where the open conversation must follow the scope. */
   navigateOnSelect,
-  /** Called from `/chat` when the chosen workspace owns no assistant yet.
-   * The host creates one and opens it; without that the selection cannot
-   * take effect, because the open assistant re-derives the scope. */
-  onCreateAssistant,
 }: {
   options: WorkspaceOption[];
   activeKey: string;
   onSelect: (key: string) => void;
   navigateOnSelect: boolean;
-  onCreateAssistant: (workspace: WorkspaceOption) => void;
 }) {
   const navigate = useNavigate();
 
   // One workspace is not a choice. A solo user sees the logo alone, exactly
   // as before teams existed.
-  if (options.length < 2) return null;
+  if (options.length < 2 && options.some(o => o.key === activeKey)) return null;
 
-  const active = options.find((o) => o.key === activeKey) ?? options[0];
+  const active = options.find((o) => o.key === activeKey) ?? { key: activeKey, label: "Unavailable workspace", isTeam: true };
   if (!active) return null;
 
   return (
@@ -141,20 +113,10 @@ export function WorkspaceSwitcher({
               // navigating would take the reader somewhere they did not ask
               // to go.
               if (!navigateOnSelect) return;
-              if (o.defaultAssistantId) {
-                void navigate({
-                  to: "/chat",
-                  search: { assistant: o.defaultAssistantId, thread: undefined, child: undefined },
-                });
-                return;
-              }
-              // The workspace owns no assistant yet. Returning here used to
-              // leave `/chat` showing the PREVIOUS workspace's conversation,
-              // which then re-derived the scope and wrote the selection back
-              // out — so choosing a team did nothing at all and said nothing
-              // about why. Create the workspace's assistant and open it, so
-              // the selection means what it says.
-              onCreateAssistant(o);
+              void navigate({
+                to: "/chat",
+                search: { workspace: o.key, thread: undefined, child: undefined },
+              });
             }}
           >
             <span className={cn("flex w-full items-center gap-2", o.key === activeKey && "font-medium")}>

@@ -1,25 +1,5 @@
-/**
- * Which workspace you are working in — your own, or one of your teams.
- *
- * This used to be derived from the open assistant alone, which is correct on
- * `/chat` and useless everywhere else: `/skills`, `/workflows` and `/events`
- * have no assistant in the URL, so the switcher always read "Personal" there
- * and every one of those pages was implicitly personal. The gap showed up as
- * a second Owner dropdown inside each create form, asking again what the
- * switcher in the nav already claimed to answer.
- *
- * So the scope is held here and persisted, and the surfaces read it.
- *
- * The open assistant still WINS when there is one. That keeps the property
- * the derived version had and which a plain persisted value would lose: the
- * control cannot disagree with what is on screen. Following a notification
- * into a team conversation moves the scope on arrival, rather than leaving
- * the nav insisting you are somewhere else.
- *
- * A stored key naming a team you have left resolves back to your own
- * workspace. The alternative is a scope pointing at a workspace whose every
- * list answers 404.
- */
+import { useSearch } from "@tanstack/react-router";
+
 import {
   createContext,
   useCallback,
@@ -29,9 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useSearch } from "@tanstack/react-router";
-import type { AssistantSummary, TeamSummary } from "@valet/api/wire";
-import { useAssistants } from "~/api/assistants";
+
 import { useOrg, useTeams } from "~/api/settings";
 import { eligibleTeams } from "~/components/session/assistant-rail";
 
@@ -67,27 +45,6 @@ export interface WorkspaceScope {
 }
 
 const WorkspaceScopeContext = createContext<WorkspaceScope | null>(null);
-
-/**
- * The workspace the open assistant belongs to, or `undefined` when no
- * assistant is open — which is every route except `/chat`.
- *
- * A team assistant counts only when its team is one the caller may open
- * (`eligibleTeams`). The list still carries the row for a team you left, or
- * one the `organizations` flag hides, and `?assistant=` can name it from a
- * stale bookmark. Scoping to that team would put `/chat` on a workspace
- * with no group, which the page reads as an empty team: no name, no create
- * action, and the rail drops the thread tree. So the stored key stands.
- */
-export function workspaceOfAssistant(
-  active: AssistantSummary | undefined,
-  teams: readonly TeamSummary[],
-): string | undefined {
-  if (!active) return undefined;
-  if (active.owner.type !== "team") return PERSONAL;
-  const teamId = active.owner.id;
-  return teams.some((t) => t.id === teamId) ? teamId : undefined;
-}
 
 /**
  * Which workspace is active, given what is currently known.
@@ -129,22 +86,20 @@ export function WorkspaceScopeProvider({ children }: { children: ReactNode }) {
   // `strict: false` because this provider sits above the route tree and must
   // read the same search param from any route, including those that declare
   // none.
-  const search = (useSearch({ strict: false }) ?? {}) as { assistant?: string };
-  const assistantsQ = useAssistants();
+  const search = (useSearch({ strict: false }) ?? {}) as { workspace?: string };
   const teamsQ = useTeams();
   const orgQ = useOrg();
 
   const teams = eligibleTeams(teamsQ.data?.teams, orgQ.data?.features.organizations);
   const available = useMemo(() => [PERSONAL, ...teams.map((t) => t.id)], [teams]);
 
-  const open = (assistantsQ.data?.assistants ?? []).find((a) => a.id === search.assistant);
-  const derived = workspaceOfAssistant(open, teams);
+  const derived = search.workspace;
 
   // Both queries, not either: `available` is derived from the two together.
   const membershipKnown = teamsQ.data !== undefined && orgQ.data !== undefined;
   const key = resolveWorkspaceKey({ derived, stored, available, membershipKnown });
 
-  // Persist what the open assistant decided, so leaving `/chat` keeps the
+  // Persist the explicit workspace, so leaving `/chat` keeps the
   // workspace you were last actually in.
   useEffect(() => {
     if (key !== stored) setKey(key);
@@ -196,8 +151,8 @@ export function useWorkspaceScope(): WorkspaceScope {
  * arrived with the nav still on Personal while the page belonged to a team.
  *
  * This is the same "the thing you have open decides the workspace" rule the
- * scope provider already applies to the open assistant on `/chat`, extended
- * to detail pages that carry no `?assistant=`. A user-owned resource adopts
+ * scope provider already applies to the workspace URL on `/chat`, extended
+ * to detail pages that carry no `?workspace=`. A user-owned resource adopts
  * your personal workspace for the same reason.
  *
  * Keyed on the owner, so a manual switch made afterward on the same page is

@@ -4,25 +4,24 @@
  * runs; this module owns validation and the cron math so both the loop and
  * the agent tools share one implementation.
  */
-import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
-import { CronExpressionParser } from "cron-parser";
 import type { WorkflowDefinition } from "@valet/workflow";
+import { CronExpressionParser } from "cron-parser";
+import { and, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import type { AppDb } from "../lib/drizzle.js";
 import { workflowDefinitions, workflowSchedules } from "../schema/index.js";
-import { teamArmBlock, type TeamServiceReadinessDeps } from "./team-service-readiness.js";
+import { withAuthorizedTeamOwnership } from "../services/teams.js";
 import {
+  armableDefinitionRow,
   canAccessTriggerRow,
   canAccessTriggerRowInScope,
-  armableDefinitionRow,
   scopedTriggerAccess,
   triggerAccessSets,
   type TriggerAccessSets,
   type WorkflowOwner,
   type WorkflowOwnerRef,
 } from "./service.js";
-import { checkAssistantForOwner } from "../assistants/service.js";
-import { withAuthorizedTeamOwnership } from "../services/teams.js";
+import { teamArmBlock, type TeamServiceReadinessDeps } from "./team-service-readiness.js";
 
 export interface WorkflowScheduleSummary {
   scheduleId: string;
@@ -196,16 +195,8 @@ export async function createWorkflowSchedule(
     scheduleOwner = { ownerType: "team", ownerId: input.teamId };
   }
 
-  // The owner is only settled above, so the assistant pairing is checked here
-  // rather than in the route. Same rule the event subscriptions use.
-  if (hasPrompt && input.assistantId !== undefined) {
-    const bad = await checkAssistantForOwner(
-      db,
-      owner.orgId,
-      { type: scheduleOwner.ownerType, id: scheduleOwner.ownerId },
-      input.assistantId,
-    );
-    if (bad) return { ok: false, error: bad };
+  if (input.assistantId !== undefined) {
+    return { ok: false, error: "Assistant selection is not supported. Choose the schedule workspace instead." };
   }
 
   const values = {
@@ -218,7 +209,7 @@ export async function createWorkflowSchedule(
     prompt: hasPrompt ? input.prompt! : null,
     // A workflow target has no assistant to name, so the column stays null
     // there whatever the caller sent.
-    assistantId: hasPrompt ? (input.assistantId ?? null) : null,
+    assistantId: null,
     name: input.name,
     cron: input.cron,
     timezone,
@@ -252,9 +243,6 @@ export async function createWorkflowSchedule(
             ));
           if (!target) return [];
         }
-        if (values.assistantId && await checkAssistantForOwner(
-          tx, owner.orgId, { type: scheduleOwner.ownerType, id: scheduleOwner.ownerId }, values.assistantId,
-        )) return [];
         return tx.insert(workflowSchedules).values(values).returning();
       },
     );

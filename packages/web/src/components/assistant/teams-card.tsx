@@ -1,33 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { Users } from "lucide-react";
 import type { TeamSummary } from "@valet/api/wire";
+import { Users } from "lucide-react";
 import { useOrg, useTeams } from "~/api/settings";
-import { defaultAssistantFor, useAssistants } from "~/api/assistants";
-import { eligibleTeams } from "~/components/session/assistant-rail";
 import { Spinner } from "~/components/primitives";
+import { eligibleTeams } from "~/components/session/assistant-rail";
 
-/**
- * Dashboard teams card — one row per team you belong to, each a direct
- * jump to that team's assistant.
- *
- * This exists because the `/chat` sidebar is collapsible and remembers it
- * (`valet:sidebar-collapsed`). The rail is the primary way teams stay
- * visible; a user who collapsed it would otherwise have no standing signal
- * that team assistants exist at all. The dashboard is the one surface
- * everyone lands on.
- *
- * Renders nothing when the caller belongs to no team, so a solo user's
- * dashboard is unchanged rather than showing empty scaffolding.
- */
-/**
- * One team, linking to its default assistant — the one a caller means when
- * it knows only the team. Without an assistant in the list there is no id to
- * link to, so the row states the team and waits rather than pointing at a
- * conversation it cannot name.
- */
+/** Links to each team workspace the caller may open. */
 function TeamRow({ team }: { team: TeamSummary }) {
-  const assistantsQ = useAssistants();
-  const assistant = defaultAssistantFor(assistantsQ.data?.assistants, "team", team.id);
   const body = (
     <>
       <Users className="h-4 w-4 shrink-0 text-muted" aria-hidden />
@@ -38,14 +17,10 @@ function TeamRow({ team }: { team: TeamSummary }) {
     </>
   );
 
-  if (assistant === undefined) {
-    return <div className="flex min-h-11 items-center gap-3 px-4 py-2.5 opacity-70">{body}</div>;
-  }
-
   return (
     <Link
       to="/chat"
-      search={{ assistant: assistant.id }}
+      search={{ workspace: team.id }}
       className="flex min-h-11 items-center gap-3 px-4 py-2.5 transition-colors hover:bg-ink-wash focus-visible:outline-none focus-visible:bg-ink-wash"
     >
       {body}

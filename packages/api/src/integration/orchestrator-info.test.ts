@@ -14,19 +14,16 @@
  *     `systemPrompt` contains the name and personality, AND the pre-existing
  *     transcript survives (proves eviction, not destruction).
  */
-import { describe, it, expect, afterEach } from "vitest";
-import { eq } from "drizzle-orm";
-import { bootTestApi, type TestApi } from "./_setup.js";
+import { afterEach, describe, expect, it } from "vitest";
 import { agentSessions, assistants, childWatches } from "../schema/index.js";
-import { defaultAssistantSessionFor } from "../test-helpers/assistant-session.js";
-import { addMember, createTeam } from "../services/teams.js";
 import { writeFile } from "../services/memory.js";
+import { addMember, createTeam } from "../services/teams.js";
+import { defaultAssistantSessionFor } from "../test-helpers/assistant-session.js";
 import type {
-  EnsureOrchestratorResponse,
   GetOrchestratorChildrenResponse,
-  GetOrchestratorInfoResponse,
-  PatchOrchestratorInfoResponse,
+  GetOrchestratorInfoResponse
 } from "../wire/types.js";
+import { bootTestApi, type TestApi } from "./_setup.js";
 
 let api: TestApi | undefined;
 
@@ -126,14 +123,14 @@ describe("GET /api/orchestrator/info", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "Wren" }),
     });
-    expect(patchRes.status).toBe(200);
+    expect(patchRes.status).toBe(409);
 
     const session = await defaultAssistantSessionFor(
       api.providers,
       { type: "user", id: "local-user" },
       { actorUserId: "local-user", orgId: "local-org" },
     );
-    expect(session.options.systemPrompt).toContain("You are Wren.\n\n");
+    expect(session.options.systemPrompt).not.toContain("You are Wren.");
     expect(session.options.systemPrompt).not.toContain("Team-wide corporate voice.");
   });
 
@@ -159,128 +156,6 @@ describe("GET /api/orchestrator/info", () => {
     const body = (await res.json()) as GetOrchestratorInfoResponse;
     expect(body.presence).toBe("idle");
     expect(body.activeChildren).toBe(0);
-  });
-});
-
-describe("PATCH /api/orchestrator/info", () => {
-  it("names the default assistant and writes the personality memory file BEFORE the engine session exists", async () => {
-    api = await bootTestApi();
-    const { db } = api.providers;
-
-    // No ensure has happened — no agent_sessions row for the assistant id.
-    const patchRes = await fetch(`${api.baseUrl}/api/orchestrator/info`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Wren", personality: "Warm and direct." }),
-    });
-    expect(patchRes.status).toBe(200);
-    const patchBody = (await patchRes.json()) as PatchOrchestratorInfoResponse;
-    expect(patchBody).toEqual({ ok: true });
-
-    const assistantRows = await db.select().from(assistants);
-    expect(assistantRows).toHaveLength(1);
-    expect(assistantRows[0]?.name).toBe("Wren");
-    expect(assistantRows[0]?.isDefault).toBe(true);
-
-    const infoRes = await fetch(`${api.baseUrl}/api/orchestrator/info`);
-    const infoBody = (await infoRes.json()) as GetOrchestratorInfoResponse;
-    expect(infoBody.name).toBe("Wren");
-    expect(infoBody.personality).toBe("Warm and direct.");
-
-    // The memory file is visible through the ordinary memory route too.
-    const memRes = await fetch(`${api.baseUrl}/api/memory?path=assistant/personality.md`);
-    expect(memRes.status).toBe(200);
-    const memBody = (await memRes.json()) as { kind: string; file: { content: string; pinned: boolean; origin: string } };
-    expect(memBody.kind).toBe("file");
-    expect(memBody.file.content).toBe("Warm and direct.");
-    expect(memBody.file.pinned).toBe(false);
-    expect(memBody.file.origin).toBe("user-stated");
-  });
-
-  // A rename must never mint a second assistant: the principal would then
-  // hold two, and the one automation targets would be the unnamed original.
-  it("a second PATCH renames the existing assistant rather than inserting a second one", async () => {
-    api = await bootTestApi();
-    const { db } = api.providers;
-
-    await fetch(`${api.baseUrl}/api/orchestrator/info`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Wren" }),
-    });
-    await fetch(`${api.baseUrl}/api/orchestrator/info`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Atlas" }),
-    });
-
-    const rows = await db.select().from(assistants);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.name).toBe("Atlas");
-    expect(rows[0]?.isDefault).toBe(true);
-  });
-
-  it("an editor-set personality column does not mute /info edits: the last write wins everywhere", async () => {
-    api = await bootTestApi();
-    const { db } = api.providers;
-
-    // Resolve the default row, then write its personality COLUMN the way the
-    // assistant editor does.
-    await fetch(`${api.baseUrl}/api/orchestrator/info`);
-    const rows = await db.select().from(assistants);
-    const assistantId = rows[0]?.id;
-    expect(assistantId).toBeDefined();
-    await fetch(`${api.baseUrl}/api/assistants/${assistantId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Wren", personality: "Formal." }),
-    });
-
-    // The legacy settings page edits through /info. Before the convergence
-    // this wrote only the memory file, which the column silently overrode.
-    const patchRes = await fetch(`${api.baseUrl}/api/orchestrator/info`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ personality: "Casual." }),
-    });
-    expect(patchRes.status).toBe(200);
-
-    const infoRes = await fetch(`${api.baseUrl}/api/orchestrator/info`);
-    const infoBody = (await infoRes.json()) as GetOrchestratorInfoResponse;
-    expect(infoBody.personality).toBe("Casual.");
-
-    const session = await defaultAssistantSessionFor(
-      api.providers,
-      { type: "user", id: "local-user" },
-      { actorUserId: "local-user", orgId: "local-org" },
-    );
-    expect(session.options.systemPrompt).toContain("You are Wren. Casual.");
-  });
-
-  it("evicts the cache (not destroy): the engine session row survives a PATCH after ensure", async () => {
-    api = await bootTestApi();
-
-    const ensureRes = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
-    const { sessionId } = (await ensureRes.json()) as EnsureOrchestratorResponse;
-    expect(api.providers.engineHost.isLive(sessionId)).toBe(true);
-
-    const patchRes = await fetch(`${api.baseUrl}/api/orchestrator/info`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Wren" }),
-    });
-    expect(patchRes.status).toBe(200);
-
-    // Cache dropped...
-    expect(api.providers.engineHost.isLive(sessionId)).toBe(false);
-    // ...but the underlying engine session row was never deleted (destroy()
-    // would have removed it) — a fresh wake restores, not creates.
-    const restored = await api.providers.engineHost.sessionFor(sessionId, {
-      userId: "local-user",
-      orgId: "local-org",
-      workspace: "/irrelevant",
-    });
-    expect(restored.id).toBe(sessionId);
   });
 });
 
@@ -400,59 +275,5 @@ describe("GET /api/orchestrator/children", () => {
     const res = await fetch(`${api.baseUrl}/api/orchestrator/children`);
     const body = (await res.json()) as GetOrchestratorChildrenResponse;
     expect(body.children).toHaveLength(0);
-  });
-});
-
-describe("Persona injection (decision 5): rename + personality survive a wake, transcript preserved", () => {
-  it("system prompt contains the new name and personality after a PATCH-triggered eviction, and the pre-existing transcript is intact", async () => {
-    api = await bootTestApi();
-    const { engineHost, engineStore } = api.providers;
-
-    // Ensure the orchestrator, seed a transcript entry directly (no LLM
-    // call needed — same pattern as messages.signal.test.ts).
-    const ensureRes = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
-    const { sessionId } = (await ensureRes.json()) as EnsureOrchestratorResponse;
-
-    const before = await defaultAssistantSessionFor(
-      api.providers,
-      { type: "user", id: "local-user" },
-      { actorUserId: "local-user", orgId: "local-org" },
-    );
-    // No name yet — neutral persona (the un-prefixed persona body itself
-    // legitimately starts with "You are this person's..." — assert the
-    // *named* prefix is absent, not the substring "You are").
-    expect(before.options.systemPrompt).not.toContain("You are Wren");
-
-    const thread = await before.ensureDefaultThread();
-    await engineStore.appendEntries(sessionId, thread.id, [
-      {
-        id: "e-preexisting",
-        sessionId,
-        threadId: thread.id,
-        parentId: null,
-        type: "message",
-        role: "user",
-        content: "hello before the rename",
-        createdAt: Date.now(),
-      },
-    ]);
-
-    const patchRes = await fetch(`${api.baseUrl}/api/orchestrator/info`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Wren", personality: "Warm and direct." }),
-    });
-    expect(patchRes.status).toBe(200);
-    expect(engineHost.isLive(sessionId)).toBe(false);
-
-    const after = await defaultAssistantSessionFor(
-      api.providers,
-      { type: "user", id: "local-user" },
-      { actorUserId: "local-user", orgId: "local-org" },
-    );
-    expect(after.options.systemPrompt).toContain("You are Wren. Warm and direct.");
-
-    const entries = (await after.readEntries("web:default")) ?? [];
-    expect(entries.some((e) => e.id === "e-preexisting")).toBe(true);
   });
 });

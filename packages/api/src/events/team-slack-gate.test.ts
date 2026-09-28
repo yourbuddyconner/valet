@@ -1,17 +1,17 @@
+import type { NormalizedEvent } from "@valet/engine";
+import slackPlugin from "@valet/plugin-slack/plugin";
+import type { RunHost } from "@valet/workflow";
+import { and, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { and, eq } from "drizzle-orm";
-import slackPlugin from "@valet/plugin-slack/plugin";
-import type { NormalizedEvent } from "@valet/engine";
-import type { RunHost } from "@valet/workflow";
-import { freshTestPgDb, type TestPgDb } from "../test-helpers/pg-test-db.js";
 import { eventDeliveries, eventDropLog, events, eventSubscriptions, orgMembers, teamMembers, teams, userIdentityLinks } from "../schema/index.js";
-import { __resetIngestDropThrottle, ingestEvent, catalogForService } from "./ingest.js";
-import { authorizedSubscriptionMatchesEvent } from "./team-slack-gate.js";
-import { EventDispatcher, type OrchestratorDeliverFn } from "./dispatcher.js";
+import { freshTestPgDb, type TestPgDb } from "../test-helpers/pg-test-db.js";
 import { PgWorkflowStore } from "../workflows/pg-store.js";
+import { EventDispatcher, type OrchestratorDeliverFn } from "./dispatcher.js";
 import { findFollowedThread } from "./followed-threads.js";
+import { __resetIngestDropThrottle, catalogForService, ingestEvent } from "./ingest.js";
 import { validateSubscriptionWrite } from "./subscription-write.js";
+import { authorizedSubscriptionMatchesEvent } from "./team-slack-gate.js";
 
 const ORG = "org-team-events";
 const channelFilter = { field: "channel", op: "eq", value: "C1" } as const;
@@ -58,7 +58,7 @@ describe("team assistant mentions through the org bot event pipeline", () => {
       id: randomUUID(), orgId: ORG, ownerType, ownerId: ownerType === "team" ? "team-1" : "member-a",
       createdBy: "member-a", name: "Team replies", eventKeys: ["slack.app_mention"],
       filters: legacy || ownerType === "user" || workflow ? [channelFilter, creatorFilter] : [channelFilter],
-      target: workflow ? { kind: "workflow", workflowId: "wf-1" } : { kind: "orchestrator", assistantId: "team-assistant", follow: true },
+      target: workflow ? { kind: "workflow", workflowId: "wf-1" } : { kind: "orchestrator", follow: true },
       audience,
       enabled: true, createdAt: Date.now(), updatedAt: Date.now(),
     }).returning();
@@ -91,14 +91,15 @@ describe("team assistant mentions through the org bot event pipeline", () => {
     const { host, deliver } = dispatcher();
     await host.pollOnce();
     expect(deliver).toHaveBeenCalledWith(expect.objectContaining({
-      orgId: ORG, ownerType: "team", ownerId: "team-1", actorUserId: "member-b", assistantId: "team-assistant",
+      orgId: ORG, ownerType: "team", ownerId: "team-1", actorUserId: "member-b",
       signal: expect.objectContaining({ body: "Help us", origin: { channelType: "slack", threadKey: "slack:C1:100.2", messageTs: "100.2" } }),
     }));
     const key = { orgId: ORG, channelType: "slack", channelId: "C1", threadTs: "100.2" };
-    expect(await findFollowedThread(tdb.appDb, key)).toMatchObject({ ownerType: "team", ownerId: "team-1", createdBy: "member-b", assistantId: "team-assistant" });
+    expect(await findFollowedThread(tdb.appDb, key)).toMatchObject({ ownerType: "team", ownerId: "team-1", createdBy: "member-b" });
     await ingest(mention("U_A", "C1", "100.2"));
     await host.pollOnce();
     expect(deliver).toHaveBeenCalledTimes(2);
+    expect(deliver.mock.calls[0][0]).not.toHaveProperty("assistantId");
     expect(await findFollowedThread(tdb.appDb, key)).toMatchObject({ createdBy: "member-b", ownerId: "team-1" });
   });
 
@@ -158,7 +159,7 @@ describe("team assistant mentions through the org bot event pipeline", () => {
     const { host, deliver } = dispatcher();
     await host.pollOnce();
     expect(deliver).toHaveBeenCalledWith(expect.objectContaining({
-      ownerType: "team", ownerId: "team-1", actorUserId: "member-c", assistantId: "team-assistant",
+      ownerType: "team", ownerId: "team-1", actorUserId: "member-c",
     }));
     // The follow names the rule it came from, or the router would re-check
     // team membership and drop every later message in the thread.

@@ -1,17 +1,8 @@
-/**
- * Problems tab — why events arrived but did not fire. The Activity feed shows
- * what ran; this shows what was dropped: a bad signature, the wrong workspace,
- * a missing credential, or (the common one) an event that matched no
- * subscription. It is the answer to "I set up a trigger and nothing happened."
- *
- * No payload is shown — the drop-log holds none. Each row names a corrective
- * action in its detail.
- */
-import { EmptyRow, ErrorRow, LoadingRow } from "~/components/primitives";
-import { Button } from "~/components/primitives";
-import { SearchInput } from "~/components/search-input";
+/** Recorded event problems. Some classifier rejections are not recorded,
+ * so an empty log does not establish that every provider event was handled. */
 import { useEventDrops } from "~/api/events";
-import { useState } from "react";
+import { Button, EmptyRow, ErrorRow, LoadingRow } from "~/components/primitives";
+import { SearchInput } from "~/components/search-input";
 import { relativeTime } from "~/lib/relative-time";
 
 /** Human labels for the reasons ingest and the webhook routes record. An
@@ -52,15 +43,15 @@ export function DropsPanel({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted">
-        Events that arrived but did not become an activity row. If a trigger did not fire, the
-        reason is here.
+        Recorded delivery and configuration problems. This list does not confirm that Slack delivered
+        every message. Some rejected events may not have a recorded problem.
       </p>
 
       {dropsQ.data && (
         <p className="text-xs text-muted">
           {dropsQ.data.lastEventAt !== null
             ? `Last event received ${relativeTime(dropsQ.data.lastEventAt)}.`
-            : "No event has reached Valet yet. Confirm the webhook URL is set in your integration's settings."}
+            : "No event receipt is recorded yet. Check the integration's delivery logs if a message is missing."}
         </p>
       )}
 
@@ -83,7 +74,7 @@ export function DropsPanel({
       )}
       {dropsQ.data && dropsQ.data.drops.length === 0 && (
         <EmptyRow>
-          {query ? "No problems match this search." : "No problems in the recent window. Every event that arrived was handled."}
+          {query ? "No problems match this search." : "No recorded problems in this window. If a workflow did not run, check its subscription and the integration's delivery logs."}
         </EmptyRow>
       )}
 
@@ -106,16 +97,14 @@ export function DropsPanel({
 }
 
 function DropRow({ drop }: { drop: { id: string; reason: string; detail: string; createdAt: number } }) {
-  const [expanded, setExpanded] = useState(false);
-  const detailsId = `problem-details-${drop.id}`;
-  return <li className="flex flex-col items-start justify-between gap-2 py-3 sm:flex-row sm:gap-3">
-    <div className="min-w-0 space-y-1">
+  return <li className="flex flex-col items-start justify-between gap-2 py-4 sm:flex-row sm:gap-4">
+    <div className="min-w-0 space-y-2">
       <div className="text-sm font-medium text-ink">{REASON_LABEL[drop.reason] ?? drop.reason}</div>
-      <button type="button" className="text-xs text-muted underline" aria-expanded={expanded} aria-controls={detailsId} onClick={() => setExpanded((value) => !value)}>
-        {expanded ? "Hide details" : "Details"}
-      </button>
-      {expanded && <p id={detailsId} className="break-words text-xs leading-relaxed text-muted">{drop.detail}</p>}
+      <p className="break-words text-sm leading-relaxed text-muted">{drop.detail}</p>
+      <span className="text-xs text-muted">Reference: {drop.id}</span>
     </div>
-    <span className="shrink-0 text-xs text-muted">{relativeTime(drop.createdAt)}</span>
+    <time dateTime={new Date(drop.createdAt).toISOString()} title={new Date(drop.createdAt).toLocaleString()} className="shrink-0 text-xs text-muted">
+      {relativeTime(drop.createdAt)}
+    </time>
   </li>;
 }

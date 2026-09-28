@@ -13,13 +13,12 @@
  * `?assistant=` — `/skills`, `/workflows` and `/events` all read as personal
  * no matter which workspace the reader was in.
  */
-import { describe, expect, it } from "vitest";
 import type { AssistantSummary, TeamSummary } from "@valet/api/wire";
+import { describe, expect, it } from "vitest";
 import {
   PERSONAL,
   resolveWorkspaceKey,
   workspaceKeyForOwner,
-  workspaceOfAssistant,
 } from "./workspace-scope";
 
 const ME = { type: "user", id: "u1" } as const;
@@ -46,45 +45,7 @@ function assistant(
   return { id, owner, sessionId: `assistant:${id}`, isDefault, createdAt: 0 };
 }
 
-describe("workspaceOfAssistant", () => {
-  it("reads the workspace off the open assistant's owner", () => {
-    expect(workspaceOfAssistant(assistant("p", { type: "team", id: "t1" }), [team("t1")])).toBe(
-      "t1",
-    );
-  });
 
-  it("treats one of your own assistants as Personal, default or not", () => {
-    expect(workspaceOfAssistant(assistant("mine", ME), [])).toBe(PERSONAL);
-    expect(workspaceOfAssistant(assistant("mine", ME, true), [])).toBe(PERSONAL);
-  });
-
-  it("answers undefined when nothing is open, so the stored key decides", () => {
-    // Not `PERSONAL`. Returning a workspace here would override the stored
-    // scope on every route that has no assistant in the URL — which is every
-    // route except /chat — and pin them all to Personal.
-    expect(workspaceOfAssistant(undefined, [team("t1")])).toBeUndefined();
-  });
-
-  it("ignores a team assistant whose team the caller may not open", () => {
-    // `?assistant=` still names the row (the list carries it), but the
-    // team is gone from the eligible list: left, or hidden by the
-    // organizations flag. Honouring it would scope `/chat` to a workspace
-    // with no group, and the page would read that as an empty team.
-    const theirs = assistant("p", { type: "team", id: "t1" });
-    expect(workspaceOfAssistant(theirs, [])).toBeUndefined();
-    expect(workspaceOfAssistant(theirs, [team("t2")])).toBeUndefined();
-  });
-});
-
-/**
- * The interesting case is a race, so the resolution is a pure function.
- *
- * The provider derives `available` from TWO queries — teams and org. While
- * either is loading, `available` holds the caller's own workspace alone.
- * Reading that as "the stored team is gone" drops a valid scope, and the
- * provider then persists the drop to localStorage, so the workspace is lost
- * for good rather than for a frame.
- */
 describe("resolveWorkspaceKey", () => {
   const TEAM = "team_1";
 

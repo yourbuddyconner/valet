@@ -5,30 +5,29 @@
  * cases seed rows under a second org id (stub auth pins the caller to
  * `local-org`, so "another org" is expressed in data, not identity).
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { and, eq } from "drizzle-orm";
+import type { ValetPlugin } from "@valet/engine";
 import githubPlugin from "@valet/plugin-github/plugin";
 import linearPlugin from "@valet/plugin-linear/plugin";
 import slackPlugin from "@valet/plugin-slack/plugin";
-import type { ValetPlugin } from "@valet/engine";
 import type { RunHost } from "@valet/workflow";
-import { bootTestApi, type TestApi } from "../integration/_setup.js";
-import { createAssistant, retireAssistant } from "../assistants/service.js";
+import { and, eq } from "drizzle-orm";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as assistantsService from "../assistants/service.js";
-import { deleteTeam } from "../services/teams.js";
-import * as teamsService from "../services/teams.js";
-import * as workflowService from "../workflows/service.js";
+import { createAssistant, retireAssistant } from "../assistants/service.js";
+import { bootTestApi, type TestApi } from "../integration/_setup.js";
 import {
   eventDeliveries,
   eventDropLog,
   events,
   eventSubscriptions,
-  teamMembers,
   orgMembers,
+  teamMembers,
   teams,
   userIdentityLinks,
   workflowDefinitions,
 } from "../schema/index.js";
+import * as teamsService from "../services/teams.js";
+import { deleteTeam } from "../services/teams.js";
 import type {
   CreateEventSubscriptionRequest,
   CreateEventSubscriptionResponse,
@@ -44,6 +43,7 @@ import type {
   PatchEventSubscriptionResponse,
   RedeliverEventResponse,
 } from "../wire/types.js";
+import * as workflowService from "../workflows/service.js";
 
 let api: TestApi | undefined;
 
@@ -1519,7 +1519,7 @@ describe("event-subscription assistant target", () => {
     return { mine: mine.id, foreign: foreign.id };
   }
 
-  it("stores a named assistant on the target and reads it back", async () => {
+  it("rejects selecting a named assistant", async () => {
     const a = await bootTestApi({ plugins: [githubPlugin] });
     const { mine } = await seedAssistants(a);
 
@@ -1532,9 +1532,8 @@ describe("event-subscription assistant target", () => {
         target: { kind: "orchestrator", orchestrator: "user", assistantId: mine },
       }),
     });
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as { target: { assistantId?: string } };
-    expect(body.target.assistantId).toBe(mine);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: expect.stringContaining("Choose the personal or team workspace") });
   });
 
   it("refuses an assistant owned by someone else, without saying it exists", async () => {
@@ -1553,10 +1552,10 @@ describe("event-subscription assistant target", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     // Same message an id that does not exist gets: existence stays hidden.
-    expect(body.error).toBe(`unknown assistant: ${foreign}`);
+    expect(body.error).toContain("Assistant selection is not supported");
   });
 
-  it("patches the assistant, and null restores the owner's default", async () => {
+  it("rejects assistant routing patches", async () => {
     const a = await bootTestApi({ plugins: [githubPlugin] });
     const { mine } = await seedAssistants(a);
 
@@ -1573,23 +1572,14 @@ describe("event-subscription assistant target", () => {
     ).json()) as { id: string; target: { assistantId?: string } };
     expect(created.target.assistantId).toBeUndefined();
 
-    const patched = (await (
-      await fetch(`${a.baseUrl}/api/event-subscriptions/${created.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ assistantId: mine }),
-      })
-    ).json()) as { target: { assistantId?: string } };
-    expect(patched.target.assistantId).toBe(mine);
-
-    const cleared = (await (
-      await fetch(`${a.baseUrl}/api/event-subscriptions/${created.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ assistantId: null }),
-      })
-    ).json()) as { target: { assistantId?: string } };
-    expect(cleared.target.assistantId).toBeUndefined();
+    for (const assistantId of [mine, null]) {
+      const res = await fetch(`${a.baseUrl}/api/event-subscriptions/${created.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ assistantId }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: expect.stringContaining("Assistant selection is not supported") });
+    }
   });
 
   it("refuses assistantId on a workflow target", async () => {

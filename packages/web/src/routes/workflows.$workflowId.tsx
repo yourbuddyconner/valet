@@ -1,14 +1,11 @@
-import type { WorkflowDefinitionSummary } from "@valet/api/wire";
-import { blobUrl } from "~/lib/blob-url";
-import { useMemo, useState } from "react";
 import { createFileRoute, Link, useBlocker, useNavigate } from "@tanstack/react-router";
-import { MoreHorizontal, ShieldAlert } from "lucide-react";
-import { triggerDataSchema, visibleTriggerFields, type WorkflowDefinition } from "@valet/workflow";
 import type {
   GetWorkflowPermissionsResponse,
-  ListWorkflowRunsResponse,
-  WorkflowNodePermissionWire,
+  ListWorkflowRunsResponse, WorkflowDefinitionSummary, WorkflowNodePermissionWire
 } from "@valet/api/wire";
+import { triggerDataSchema, visibleTriggerFields, type WorkflowDefinition } from "@valet/workflow";
+import { MoreHorizontal, ShieldAlert } from "lucide-react";
+import { useMemo, useState } from "react";
 import {
   downloadWorkflowFile,
   useAllowWorkflowPermissions,
@@ -22,17 +19,6 @@ import {
   useWorkflowVersions,
   type UpdateWorkflowMutation,
 } from "~/api/workflows";
-import { isWorkflowDefinitionShape } from "~/components/workflows/editor-model";
-import { ChangeOrchestratorDialog } from "~/components/workflows/change-orchestrator-dialog";
-import { useWorkspaceScope } from "~/lib/workspace-scope";
-import { RunWorkflowDialog } from "~/components/workflows/run-workflow-dialog";
-import { Editor } from "~/components/workflows/editor/editor";
-import { WorkflowAssistantPanel } from "~/components/workflows/editor/assistant-panel";
-import { TriggersPanel } from "~/components/workflows/triggers-drawer";
-import { WorkflowPreview } from "~/components/workflows/preview";
-import { RiskBadge } from "~/components/workflows/risk-badge";
-import { useWorkflowAssistant } from "~/hooks/use-workflow-assistant";
-import { useWorkflowPatchWatch } from "~/hooks/use-workflow-patch-watch";
 import {
   Button,
   ConfirmDialog,
@@ -45,10 +31,21 @@ import {
   DropdownMenuTrigger,
   Spinner,
 } from "~/components/primitives";
+import { isWorkflowDefinitionShape } from "~/components/workflows/editor-model";
+import { WorkflowAssistantPanel } from "~/components/workflows/editor/assistant-panel";
+import { Editor } from "~/components/workflows/editor/editor";
+import { WorkflowPreview } from "~/components/workflows/preview";
+import { RiskBadge } from "~/components/workflows/risk-badge";
+import { RunWorkflowDialog } from "~/components/workflows/run-workflow-dialog";
+import { TriggersPanel } from "~/components/workflows/triggers-drawer";
+import { useWorkflowAssistant } from "~/hooks/use-workflow-assistant";
+import { useWorkflowPatchWatch } from "~/hooks/use-workflow-patch-watch";
+import { blobUrl } from "~/lib/blob-url";
+import { cn } from "~/lib/cn";
 import { errorText, validationMessages } from "~/lib/error-text";
 import { relativeTime } from "~/lib/relative-time";
 import { runCountLabel } from "~/lib/run-count";
-import { cn } from "~/lib/cn";
+import { useAdoptWorkspaceScope, useWorkspaceScope } from "~/lib/workspace-scope";
 
 /**
  * `/workflows/$workflowId` — the visual editor page (plan decision 11):
@@ -68,6 +65,7 @@ function WorkflowEditorRoute() {
 
 export function WorkflowEditorPage({ workflowId }: { workflowId: string }) {
   const { data, isLoading, error } = useWorkflow(workflowId);
+  useAdoptWorkspaceScope(data ? { type: data.ownerType, id: data.ownerId } : undefined);
   const update = useUpdateWorkflow(workflowId);
   const startRun = useStartRun(workflowId);
   const runsQ = useWorkflowRuns(workflowId);
@@ -164,10 +162,9 @@ function WorkflowEditorPane({
   // its own: describing a change is the primary way to edit a workflow, so
   // the conversation is on screen from the moment the editor is.
   const scope = useWorkspaceScope();
-  const [changeOrchestrator, setChangeOrchestrator] = useState(false);
   const copy = useCopyWorkflow();
   const mirrored = origin === "repo";
-  const assistant = useWorkflowAssistant(workflowId, initialName, { assistantId: initialDefinition.assistantId, ownerType, ownerId });
+  const assistant = useWorkflowAssistant(workflowId, initialName, { ownerType, ownerId });
   // The one thing that makes a live edit visible: a completed patch in the
   // panel's conversation refetches the workflow, and `Editor` adopts it.
   useWorkflowPatchWatch(assistant.sessionId, assistant.threadId, workflowId);
@@ -323,16 +320,6 @@ function WorkflowEditorPane({
                 : `${gatingActions.length} actions need approval`}
             </button>
           ))}
-          {changeOrchestrator && (
-            <ChangeOrchestratorDialog
-              key={`${workflowId}:${ownerType}:${ownerId}`}
-              definition={initialDefinition}
-              ownerType={ownerType}
-              ownerId={ownerId}
-              save={async (definition) => { await update.mutateAsync({ definition }); }}
-              close={() => setChangeOrchestrator(false)}
-            />
-          )}
           {mirrored && (
             <Button
               size="sm"
@@ -361,7 +348,6 @@ function WorkflowEditorPane({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {!mirrored && <DropdownMenuItem disabled={unsaved || update.isPending} onSelect={() => setChangeOrchestrator(true)}>Change orchestrator{unsaved ? " (save or cancel edits first)" : ""}</DropdownMenuItem>}
               <DropdownMenuItem onSelect={() => setDrawer((d) => (d === "history" ? null : "history"))}>
                 Version history
               </DropdownMenuItem>

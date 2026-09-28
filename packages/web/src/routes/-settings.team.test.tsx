@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { useState, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { OrgDirectoryUserWire } from "@valet/api/wire";
+import { useState, type ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let teamId: string | undefined;
 let pathname = "/settings/profile";
@@ -52,10 +52,10 @@ beforeEach(() => {
 });
 
 describe("settings workspace routing", () => {
-  it("opens the team assistants list from Edit assistant", () => {
+  it("opens the team assistants list from Open threads", () => {
     teamId = "team_1";
     render(<TeamSettingsPage />);
-    expect(screen.getByRole("link", { name: "Edit assistant" }).getAttribute("href")).toBe("/assistants");
+    expect(screen.getByRole("link", { name: "Open threads" }).getAttribute("href")).toBe("/chat");
   });
   it("keeps personal navigation and forms unchanged", () => {
     render(<SettingsLayout />);

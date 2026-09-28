@@ -13,14 +13,14 @@
  * render outside a provider, so the page renders inside one here — the same
  * wrapper `session-header.test.tsx` uses.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   ListAllWorkflowRunsResponse,
   ListWorkflowActionRequiredResponse,
   WorkflowDefinitionSummary,
 } from "@valet/api/wire";
+import type { ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "~/components/primitives";
 
 // Annotated rather than inferred: the empty-list case reassigns `workflows`
@@ -175,7 +175,7 @@ vi.mock("@tanstack/react-router", () => ({
     params?: unknown;
     [key: string]: unknown;
   }) => (
-    <a data-params={JSON.stringify(params)} {...rest}>
+    <a data-params={JSON.stringify(params)} data-search={JSON.stringify(rest.search)} {...rest}>
       {children}
     </a>
   ),
@@ -302,8 +302,8 @@ vi.mock("~/components/workflows/template-gallery", () => ({
   TemplateGallery: () => <div data-testid="template-gallery" />,
 }));
 
-import { WorkflowsIndexPage } from "./workflows.index";
 import { PERSONAL, WorkspaceScopeProvider, useWorkspaceScope } from "~/lib/workspace-scope";
+import { WorkflowsIndexPage } from "./workflows.index";
 
 /** `workspace` selects the workspace the page is being read in — what the
  * nav's switcher sets. Seeded through localStorage, which is where the real
@@ -574,40 +574,9 @@ describe("WorkflowsIndexPage — team ownership", () => {
   it("badges a team-owned workflow with its assistant, linked to the assistant editor", () => {
     renderPage();
     const link = screen.getByText("Platform").closest("a");
-    expect(link?.getAttribute("to")).toBe("/assistants/$assistantId");
-    expect(JSON.parse(link?.getAttribute("data-params") ?? "null")).toEqual({
-      assistantId: "asst_team_1",
-    });
-  });
-
-  // The definition, not the owner, decides which assistant runs a workflow.
-  it("badges a workflow with the assistant its definition pins", () => {
-    renderPage();
-    const link = screen.getByText("Scribe").closest("a");
-    expect(link?.getAttribute("to")).toBe("/assistants/$assistantId");
-    expect(JSON.parse(link?.getAttribute("data-params") ?? "null")).toEqual({
-      assistantId: "asst_scribe",
-    });
-  });
-
-  // The approvals row badges the assistant the API reports from the RUN's
-  // definition snapshot. `wf_1` pins "asst_scribe" today, the parked run
-  // snapshotted "asst_archivist", and the row must read the run.
-  it("badges each approval from the run's own assistant, not the current definition", () => {
-    searchState = { tab: "action-required" };
-    renderPage();
-
-    const pinned = screen.getByText("Archivist").closest("a");
-    expect(pinned?.getAttribute("to")).toBe("/assistants/$assistantId");
-    expect(JSON.parse(pinned?.getAttribute("data-params") ?? "null")).toEqual({
-      assistantId: "asst_archivist",
-    });
-    expect(screen.queryByText("Scribe")).toBeNull();
-    // The team run's snapshot pins none, so its owner's default runs it and
-    // the row reads as the team.
-    const team = screen.getByText("Platform").closest("a");
-    expect(JSON.parse(team?.getAttribute("data-params") ?? "null")).toEqual({
-      assistantId: "asst_team_1",
+    expect(link?.getAttribute("to")).toBe("/chat");
+    expect(JSON.parse(link?.getAttribute("data-search") ?? "null")).toEqual({
+      workspace: "team_1",
     });
   });
 
@@ -627,7 +596,7 @@ describe("WorkflowsIndexPage — team ownership", () => {
       definition: { assistantId: string };
     };
     expect(call.teamId).toBe("team_1");
-    expect(call.definition.assistantId).toBe("asst_team_1");
+    expect(call.definition.assistantId).toBeUndefined();
   });
 
   it("sends no teamId in your own workspace", async () => {
@@ -641,7 +610,6 @@ describe("WorkflowsIndexPage — team ownership", () => {
       definition: { assistantId: string };
     };
     expect(call.teamId).toBeUndefined();
-    expect(call.definition.assistantId).toBe("asst_personal");
+    expect(call.definition.assistantId).toBeUndefined();
   });
 });
-

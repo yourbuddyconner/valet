@@ -16,7 +16,6 @@
  * the reader, so a badge on each one carries no information.
  */
 import { Link } from "@tanstack/react-router";
-import { useAssistants, defaultAssistantFor } from "~/api/assistants";
 import { useTeams } from "~/api/settings";
 import { Badge, Tooltip } from "~/components/primitives";
 
@@ -32,7 +31,7 @@ export function OwnerBadge({
   ownerId: string;
 }) {
   const teams = useTeams();
-  const assistants = useAssistants();
+
   if (ownerType !== "team") return null;
 
   // Not found means the caller cannot see this team, or the id is stale. The
@@ -40,28 +39,15 @@ export function OwnerBadge({
   // badge or dropping the only ownership signal the reader gets.
   const team = (teams.data?.teams ?? []).find((t) => t.id === ownerId);
   const label = team?.name ?? "Team";
-  const tip = team ? `Open ${team.name}'s assistant` : "Open this team's assistant";
+  const tip = team ? `Open ${team.name}'s threads` : "Open this team's threads";
 
-  // A team's session id now comes from the assistants list, so a badge shown
-  // before that list lands has nothing to link to. It still names the owner,
-  // which is the badge's first job; the link arrives with the list.
-  const assistant = defaultAssistantFor(assistants.data?.assistants, "team", ownerId);
-  if (assistant === undefined) {
-    return (
-      <Tooltip content={label}>
-        <Badge variant="accent" className="shrink-0">
-          {label}
-        </Badge>
-      </Tooltip>
-    );
-  }
 
   return (
     <Tooltip content={tip}>
       {/* `relative` keeps the badge above a card that covers itself with an
           overlay link (see `SkillCard`), which would otherwise swallow the
           click. */}
-      <Link to="/chat" search={{ assistant: assistant.id }} className="relative shrink-0">
+      <Link to="/chat" search={{ workspace: ownerId }} className="relative shrink-0">
         <Badge variant="accent">{label}</Badge>
       </Link>
     </Tooltip>

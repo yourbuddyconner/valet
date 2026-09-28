@@ -5,17 +5,29 @@
  * create, inspect, and run dag/v1 workflows conversationally. Every result
  * carries the ids (`workflowId`/`runId`) the web chat renderer fetches by.
  */
-import { ValetError } from "@valet/shared";
-import { and, eq } from "drizzle-orm";
-import { assistants } from "../schema/index.js";
-import { Type } from "typebox";
-import type { Static, TSchema } from "typebox";
 import type {
   ActionPlugin,
   PluginAction,
   PluginActionContext,
   PluginActionResult,
 } from "@valet/engine";
+import { ValetError } from "@valet/shared";
+import { WorkflowCursorError, type WorkflowDefinition, type WorkflowEdge } from "@valet/workflow";
+import type { Static, TSchema } from "typebox";
+import { Type } from "typebox";
+import { buildOrgCatalog, catalogValidIds } from "../services/model-catalog.js";
+import {
+  appendRemovedEdgeHint,
+  applyWorkflowModelPatch,
+  applyWorkflowPatch,
+  type WorkflowEdgeRef,
+} from "./patch.js";
+import {
+  createWorkflowSchedule,
+  deleteWorkflowSchedule,
+  listWorkflowSchedules,
+  updateWorkflowSchedule,
+} from "./schedule-service.js";
 import {
   addAggregateNode,
   cancelWorkflowRun,
@@ -36,14 +48,6 @@ import {
   type WorkflowServiceDeps,
 } from "./service.js";
 import type { TeamServiceReadinessDeps } from "./team-service-readiness.js";
-import { buildValidateEnvironment, buildOrgValidateEnvironment } from "./validation-env.js";
-import {
-  appendRemovedEdgeHint,
-  applyWorkflowModelPatch,
-  applyWorkflowPatch,
-  type WorkflowEdgeRef,
-} from "./patch.js";
-import { buildOrgCatalog, catalogValidIds } from "../services/model-catalog.js";
 import {
   createWorkflowTrigger,
   deleteWorkflowTrigger,
@@ -51,20 +55,13 @@ import {
   listWorkflowTriggers,
   updateWorkflowTrigger,
 } from "./trigger-service.js";
-import {
-  createWorkflowSchedule,
-  deleteWorkflowSchedule,
-  listWorkflowSchedules,
-  updateWorkflowSchedule,
-} from "./schedule-service.js";
+import { buildOrgValidateEnvironment, buildValidateEnvironment } from "./validation-env.js";
 import {
   deleteWorkflowWebhook,
   getWorkflowWebhook,
   mintOrRotateWorkflowWebhook,
   workflowWebhookUrl,
 } from "./webhook-service.js";
-import { publicUrlFromEnv } from "../channels/host.js";
-import { WorkflowCursorError, type WorkflowDefinition, type WorkflowEdge } from "@valet/workflow";
 
 /** Cap + bullet the validator's lint output for the LLM. The validator can
  * emit dozens of errors on a badly-shaped definition; the first ~20 are
@@ -353,15 +350,9 @@ export function workflowsActionPlugin(getDeps: () => WorkflowServiceDeps): Actio
         };
       }
 
-      let routedDefinition: unknown = definition;
-      if (!validation.definition.assistantId && ctx.sessionId) {
-        const [creatingAssistant] = await getDeps().db.select().from(assistants)
-          .where(and(eq(assistants.sessionId, ctx.sessionId), eq(assistants.orgId, owner.orgId))).limit(1);
-        if (creatingAssistant) routedDefinition = { ...validation.definition, assistantId: creatingAssistant.id };
-      }
       const created = await createWorkflowDefinition(getDeps(), owner, {
         name: name ?? "Untitled workflow",
-        definition: routedDefinition,
+        definition,
         ...(owner.principal?.type === "team" ? { teamId: owner.principal.id } : {}),
       });
       return {

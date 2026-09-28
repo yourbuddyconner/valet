@@ -6,15 +6,15 @@
  * server-derived hash, so Slack can fetch assistant avatars without a Valet
  * session and clients cannot select another principal's storage key.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { createHash, randomBytes } from "node:crypto";
 import type sharpType from "sharp";
-import { eq } from "drizzle-orm";
-import type { AppEnv } from "../env.js";
 import { assistantOwner, canAdministerAssistantOwner } from "../assistants/access.js";
-import { loadAssistant, patchAssistant } from "../assistants/service.js";
+import { loadAssistant, WORKSPACE_ASSISTANT_MESSAGE } from "../assistants/service.js";
 import { publicUrlFromEnv } from "../channels/host.js";
+import type { AppEnv } from "../env.js";
 import { requireUser } from "../middleware/auth.js";
 import { users } from "../schema/index.js";
 import {
@@ -243,7 +243,5 @@ profilePicturesRouter.post("/assistants/:id/avatar", limitUploadBody, async (c) 
   if (!(await canAdministerAssistantOwner(c.var.providers.db, assistantOwner(row), c.var.principal))) {
     return c.json({ error: "assistant not found" }, 404);
   }
-  return storePicture(c, "assistants", row.id, row.avatarUrl, async (avatarUrl) => {
-    await patchAssistant(c.var.providers.db, row, { avatarUrl });
-  });
+  return c.json({ error: WORKSPACE_ASSISTANT_MESSAGE }, 409);
 });

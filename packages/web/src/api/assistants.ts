@@ -8,26 +8,18 @@
  * session header all resolve an assistant from it.
  */
 import {
-  skipToken,
-  useMutation,
   useQuery,
-  useQueryClient,
-  type UseQueryOptions,
+  type UseQueryOptions
 } from "@tanstack/react-query";
 import type {
   AssistantSummary,
-  CreateAssistantRequest,
-  CreateAssistantResponse,
-  EnsureAssistantSessionResponse,
-  ListAssistantsResponse,
-  PatchAssistantRequest,
-  PatchAssistantResponse,
+  ListAssistantsResponse
 } from "@valet/api/wire";
+import { assistantLabel, orchestratorName } from "~/lib/assistant-name";
 import type { OwnerFilter } from "./client";
 import { api } from "./client";
 import { useOrchestratorInfo } from "./orchestrator";
-import { qk, refetchSessionReads } from "./queries";
-import { assistantLabel, orchestratorName } from "~/lib/assistant-name";
+import { qk } from "./queries";
 
 export const qkAssistants = {
   // Derived from the central factory: useDeleteSession invalidates the same
@@ -84,141 +76,4 @@ export function useScopedAssistantName(owner?: OwnerFilter): string {
     return teamAssistant ? assistantLabel(teamAssistant) : orchestratorName(undefined);
   }
   return orchestratorName(info.data?.name);
-}
-
-export function useCreateAssistant() {
-  const qc = useQueryClient();
-  return useMutation<CreateAssistantResponse, Error, CreateAssistantRequest>({
-    mutationFn: (body) => api.createAssistant(body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qkAssistants.list() });
-    },
-  });
-}
-
-export function useUploadAssistantAvatar() {
-  const qc = useQueryClient();
-  return useMutation<{ avatarUrl: string }, Error, { id: string; file: File }>({
-    mutationFn: ({ id, file }) => api.uploadAssistantAvatar(id, file),
-    onSuccess: ({ avatarUrl }, { id }) => {
-      qc.setQueryData<ListAssistantsResponse>(qkAssistants.list(), (prev) =>
-        prev === undefined
-          ? prev
-          : {
-              assistants: prev.assistants.map((assistant) =>
-                assistant.id === id ? { ...assistant, avatarUrl } : assistant,
-              ),
-            },
-      );
-      qc.invalidateQueries({ queryKey: qkAssistants.list() });
-    },
-  });
-}
-
-/** Rename, promote to default, or rewrite persona/behavior. `isDefault:
- * true` demotes the previous default in the same write, so no separate
- * demote call exists. */
-export function usePatchAssistant() {
-  const qc = useQueryClient();
-  return useMutation<PatchAssistantResponse, Error, { id: string; body: PatchAssistantRequest }>({
-    mutationFn: ({ id, body }) => api.patchAssistant(id, body),
-    onSuccess: (updated) => {
-      // Write the response into the cache SYNCHRONOUSLY, before the refetch:
-      // the editor's section saves build each PATCH body from the cached
-      // row's `behavior`, so a save issued right after another must read the
-      // first save's result, not the pre-save fetch — or it silently reverts
-      // it. The invalidate still runs as the authoritative re-read.
-      qc.setQueryData<ListAssistantsResponse>(qkAssistants.list(), (prev) =>
-        prev === undefined
-          ? prev
-          : {
-              assistants: prev.assistants.map((a) => {
-                if (a.id === updated.id) return updated;
-                // A promote demotes the owner's previous default server-side;
-                // mirror it, or defaultAssistantFor keeps resolving the OLD
-                // default (it sorts first) until the refetch lands.
-                if (
-                  updated.isDefault &&
-                  a.isDefault &&
-                  a.owner.type === updated.owner.type &&
-                  a.owner.id === updated.owner.id
-                ) {
-                  return { ...a, isDefault: false };
-                }
-                return a;
-              }),
-            },
-      );
-      qc.invalidateQueries({ queryKey: qkAssistants.list() });
-    },
-  });
-}
-
-/** The default cannot be archived while it is the default — promote another
- * one first. The API enforces it; the menu says so before you try. */
-export function useArchiveAssistant() {
-  const qc = useQueryClient();
-  return useMutation<{ ok: true }, Error, string>({
-    mutationFn: (id) => api.archiveAssistant(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qkAssistants.list() });
-    },
-  });
-}
-
-/**
- * Get-or-create one assistant's session, as a mutation for a caller that
- * needs the id once (the workflow editor's panel). A component that mounts
- * on the session reads `useEnsuredAssistantSession` instead.
- *
- * Creating an assistant writes only its row, so a new assistant has no
- * session until somebody opens it — and every ordinary session route reads
- * the app row this call creates. Without it a freshly created assistant
- * lists correctly and 404s on the first click.
- *
- * Idempotent. It does NOT invalidate the assistants list: the list's
- * contents do not change, only the session behind one of its rows.
- */
-export function useEnsureAssistantSession() {
-  const qc = useQueryClient();
-  return useMutation<EnsureAssistantSessionResponse, Error, string>({
-    mutationFn: (assistantId) => api.ensureAssistantSession(assistantId),
-    onSuccess: ({ sessionId }) => {
-      // A read of this session may have run first and 404'd. Re-read it now
-      // that the row exists.
-      void refetchSessionReads(qc, sessionId);
-    },
-  });
-}
-
-/**
- * The session behind one assistant, created on first use.
- *
- * Creating a team seeds its default assistant as a row alone, so an id from
- * the assistants list can name a session that no call has created yet, and
- * `GET /sessions/:id` 404s on it until this one runs. Two components mount
- * on that session — the chat page's conversation and the rail's thread
- * tree — and neither may read it before it exists. A query keyed by
- * assistant gives them one shared answer and one POST; `skipToken` is the
- * gate, so nothing fires without an id. `staleTime: Infinity` because the
- * answer cannot change within a page: once created, the session stays.
- *
- * The ensure re-reads the session before it reports success, so a reader
- * that asked too early (an earlier visit, a component outside the gate)
- * holds fresh data by the time `isSuccess` flips, not a cached 404.
- */
-export function useEnsuredAssistantSession(assistantId: string | undefined) {
-  const qc = useQueryClient();
-  return useQuery<EnsureAssistantSessionResponse>({
-    queryKey: qkAssistants.session(assistantId ?? ""),
-    queryFn:
-      assistantId === undefined
-        ? skipToken
-        : async () => {
-            const ensured = await api.ensureAssistantSession(assistantId);
-            await refetchSessionReads(qc, ensured.sessionId);
-            return ensured;
-          },
-    staleTime: Infinity,
-  });
 }

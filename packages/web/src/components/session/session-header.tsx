@@ -1,40 +1,28 @@
 import { useNavigate } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import type { Message, SessionDetail } from "@valet/api/wire";
 import {
   Check,
   ClipboardCopy,
   FolderInput,
-  MoreHorizontal,
   Moon,
+  MoreHorizontal,
   RefreshCw,
   SquareTerminal,
-  Trash2,
-  ThumbsUp,
   ThumbsDown,
+  ThumbsUp,
+  Trash2,
 } from "lucide-react";
-import type { Message, SessionDetail } from "@valet/api/wire";
-import {
-  Badge,
-  Button,
-  ConfirmDialog,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuCheckboxItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Input,
-  Spinner,
-  Tooltip,
-} from "~/components/primitives";
+import { useRef, useState } from "react";
+import { useAssistants } from "~/api/assistants";
+import { ApiError } from "~/api/client";
+import { useOrchestratorInfo } from "~/api/orchestrator";
 import {
   useDeleteSession,
   usePauseSession,
   useRateSession,
   useRenameSession,
-  useSessionRatings,
   useReplaceSandbox,
+  useSessionRatings,
   useSetSessionModel,
   useSetSessionProfile,
   useSetSessionReasoning,
@@ -43,9 +31,26 @@ import {
   useThreads,
 } from "~/api/queries";
 import { useMe, useOrg, useTeams } from "~/api/settings";
-import { useAssistants } from "~/api/assistants";
-import { useOrchestratorInfo } from "~/api/orchestrator";
-import { ApiError } from "~/api/client";
+import {
+  Badge,
+  Button,
+  ConfirmDialog,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  Input,
+  Spinner,
+  Tooltip,
+} from "~/components/primitives";
+import { useResponsiveOverlay } from "~/hooks/use-responsive-overlay";
+import { cn } from "~/lib/cn";
+import { sameModelSpec } from "~/lib/models";
+import { useCopyToClipboard } from "~/lib/use-copy";
+import { formatElapsed, useElapsedSeconds } from "~/lib/use-elapsed";
 import {
   queueBusy,
   useActiveModelForThread,
@@ -53,17 +58,10 @@ import {
   type AgentStatus,
   type ConnectionStatus,
 } from "~/stores/stream";
-import { assistantLabel } from "./assistant-rail";
-import { orchestratorName } from "~/lib/assistant-name";
 import { ModelPicker } from "./model-picker";
-import { RatingButtons } from "./rating-buttons";
 import { MoveSessionDialog } from "./move-session-dialog";
+import { RatingButtons } from "./rating-buttons";
 import { buildTranscript } from "./transcript";
-import { cn } from "~/lib/cn";
-import { useResponsiveOverlay } from "~/hooks/use-responsive-overlay";
-import { sameModelSpec } from "~/lib/models";
-import { useCopyToClipboard } from "~/lib/use-copy";
-import { formatElapsed, useElapsedSeconds } from "~/lib/use-elapsed";
 
 /** Collapse a workspace path down to a header-friendly badge: any
  * multi-segment path shows only its LAST segment ("ws-19",
@@ -312,11 +310,7 @@ export function SessionHeader({
   // The team name is no longer a fallback for a nameless assistant. It named
   // the wrong entity — a team owns assistants, it is not one — and the badge
   // beside this title already says which team the conversation belongs to.
-  const title =
-    (assistant ? assistantLabel(assistant) : undefined) ||
-    (isOwnOrchestrator ? orchestratorName(orchInfo.data?.name) : undefined) ||
-    session.title ||
-    "Untitled session";
+  const title = activeThread?.title || (isAssistantSession ? "New thread" : session.title || "Untitled thread");
 
   // Lifecycle controls (model, pause, delete) act on a session the whole
   // team shares, so they are a team-admin power — the API enforces the
@@ -326,7 +320,7 @@ export function SessionHeader({
     teamId === null || team?.callerRole === "admin" || me.data?.orgRole === "admin";
   const workspaceHint = session.workspace ? `workspace: ${session.workspace}` : title;
   const modelScopeHint = threadScoped
-    ? "Model for this thread (pinned at creation). New threads start on the session default."
+    ? "Model for this thread (pinned at creation). New threads use the workspace default."
     : "Session-default model. New threads pin it at creation.";
   const modelHint =
     modelConfigurationResolved &&
@@ -547,7 +541,7 @@ export function SessionHeader({
         )}
         <DropdownMenu open={sessionMenu.open} onOpenChange={sessionMenu.setOpen}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className={cn("shrink-0", !canAdminister && "sm:hidden")} aria-label="Session menu">
+            <Button variant="ghost" size="sm" className={cn("shrink-0", !canAdminister && "sm:hidden")} aria-label="Thread menu">
               {del.isPending || replace.isPending || setProfile.isPending ? (
                 <Spinner size={14} />
               ) : (

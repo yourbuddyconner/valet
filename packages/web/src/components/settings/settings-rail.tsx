@@ -1,11 +1,11 @@
-import { ChevronDown } from "lucide-react";
-import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "~/components/primitives";
-import { useResponsiveOverlay } from "~/hooks/use-responsive-overlay";
 import { Link, useRouterState } from "@tanstack/react-router";
+import { ChevronDown } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useOrg } from "~/api/settings";
-import { useWorkspaceScope } from "~/lib/workspace-scope";
+import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "~/components/primitives";
+import { useResponsiveOverlay } from "~/hooks/use-responsive-overlay";
 import { cn } from "~/lib/cn";
+import { useWorkspaceScope } from "~/lib/workspace-scope";
 
 /**
  * The settings shell's left rail (split-settings design, "Visual direction"
@@ -39,7 +39,7 @@ export function isTeamSettingsPath(pathname: string): boolean {
 
 const YOU_ITEMS = [
   { to: "/settings/profile", label: "Profile" },
-  { to: "/settings/assistant", label: "Assistant" },
+  { to: "/settings/assistant", label: "Thread defaults" },
   { to: "/settings/appearance", label: "Appearance" },
   { to: "/settings/notifications", label: "Notifications" },
   { to: "/settings/connected-accounts", label: "Connected accounts" },

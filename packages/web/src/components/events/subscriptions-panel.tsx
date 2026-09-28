@@ -1,11 +1,17 @@
-import { useMemo, useState } from "react";
-import { MoreHorizontal, Plus } from "lucide-react";
 import type {
-  AssistantSummary,
   EventSubscriptionTargetWire,
-  EventSubscriptionWire,
-  WorkflowDefinitionSummary,
+  EventSubscriptionWire
 } from "@valet/api/wire";
+import { MoreHorizontal, Plus } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  useDeleteEventSubscription,
+  useEventSubscriptions,
+  usePatchEventSubscription,
+} from "~/api/events";
+import { useMe, useOrg, useTeams } from "~/api/settings";
+import { useWorkflows } from "~/api/workflows";
+import { OwnerBadge } from "~/components/owner-badge";
 import {
   Badge,
   Button,
@@ -20,20 +26,10 @@ import {
   Switch,
   Tooltip,
 } from "~/components/primitives";
-import {
-  useDeleteEventSubscription,
-  useEventSubscriptions,
-  usePatchEventSubscription,
-} from "~/api/events";
-import { useMe, useOrg, useTeams } from "~/api/settings";
-import { defaultAssistantFor, useAssistants } from "~/api/assistants";
-import { useWorkflows } from "~/api/workflows";
+import { eligibleTeams } from "~/components/session/assistant-rail";
 import { errorText } from "~/lib/error-text";
 import { selectsSlackMention } from "~/lib/slack-mention";
 import { useListOwner } from "~/lib/use-list-owner";
-import { workflowAssistantId } from "~/lib/workflow-assistant";
-import { AssistantBadge, badgeAssistant } from "~/components/assistant-badge";
-import { eligibleTeams } from "~/components/session/assistant-rail";
 import { AutomationWizard } from "./automation-wizard";
 import { EditSubscriptionDialog } from "./edit-subscription-dialog";
 
@@ -104,62 +100,6 @@ function describeTarget(
 }
 
 /**
- * The assistant that answers a matching event, resolved from lists this
- * panel already holds. A target that names an assistant wins; otherwise the
- * target's owner answers through its default assistant, which is what every
- * rule written before assistants had personas does.
- *
- * Undefined when nothing in those lists resolves: an unlisted workflow, an
- * org whose id has not arrived, or a team target with no team. The badge
- * then keeps the row's own ownership label.
- */
-export function subscriptionAssistantId(
-  sub: EventSubscriptionWire,
-  workflows: Map<string, WorkflowDefinitionSummary>,
-  assistants: AssistantSummary[] | undefined,
-  orgId: string | undefined,
-): string | undefined {
-  if (sub.target.kind === "workflow") {
-    const workflow = workflows.get(sub.target.workflowId);
-    if (workflow === undefined) return undefined;
-    return (
-      workflowAssistantId(workflow.definition) ??
-      defaultAssistantFor(assistants, workflow.ownerType, workflow.ownerId)?.id
-    );
-  }
-  if (sub.target.assistantId !== undefined) return sub.target.assistantId;
-  const orchestrator = sub.target.orchestrator ?? "user";
-  if (orchestrator === "team") {
-    const teamId = sub.target.teamId;
-    return teamId === undefined ? undefined : defaultAssistantFor(assistants, "team", teamId)?.id;
-  }
-  if (orchestrator === "org") {
-    return orgId === undefined ? undefined : defaultAssistantFor(assistants, "org", orgId)?.id;
-  }
-  return defaultAssistantFor(assistants, "user", sub.ownerId)?.id;
-}
-
-/**
- * What the row hands `AssistantBadge`, plus whether that badge will name an
- * assistant. The row prints "Org" itself for an org-owned rule, and the
- * badge would print the same word once the assistants list carries org
- * assistants. One of the two speaks, never both.
- */
-function assistantBadgeProps(
-  sub: EventSubscriptionWire,
-  workflows: Map<string, WorkflowDefinitionSummary>,
-  assistants: AssistantSummary[] | undefined,
-  orgId: string | undefined,
-): { assistantId: string | undefined; assistantNamed: boolean } {
-  const assistantId = subscriptionAssistantId(sub, workflows, assistants, orgId);
-  return {
-    assistantId,
-    assistantNamed:
-      badgeAssistant(assistants, sub.ownerType, sub.ownerId, assistantId) !== undefined,
-  };
-}
-
-/**
  * Event subscriptions: the rules that turn an ingested event into action —
  * a workflow run or an orchestrator prompt. List with enable/disable,
  * edit (`EditSubscriptionDialog`), and delete; create via
@@ -185,15 +125,8 @@ export function SubscriptionsPanel() {
   const teamsQ = useTeams();
   const [creating, setCreating] = useState(false);
 
-  const assistantsQ = useAssistants();
   const workflowNames = useMemo(
     () => new Map((workflowsQ.data?.workflows ?? []).map((w) => [w.id, w.name])),
-    [workflowsQ.data],
-  );
-  // The badge resolves a workflow target's assistant through its definition,
-  // which the name map drops.
-  const workflowsById = useMemo(
-    () => new Map((workflowsQ.data?.workflows ?? []).map((w) => [w.id, w])),
     [workflowsQ.data],
   );
   const orgQ = useOrg();
@@ -247,7 +180,6 @@ export function SubscriptionsPanel() {
               sub={sub}
               workflowNames={workflowNames}
               teamNames={teamNames}
-              {...assistantBadgeProps(sub, workflowsById, assistantsQ.data?.assistants, orgQ.data?.id)}
               viewerId={meQ.data?.id}
               mutable={canMutate(sub, meQ.data?.id, memberTeamIds)}
             />
@@ -268,19 +200,12 @@ function SubscriptionRow({
   sub,
   workflowNames,
   teamNames,
-  assistantId,
-  assistantNamed,
   viewerId,
   mutable,
 }: {
   sub: EventSubscriptionWire;
   workflowNames: Map<string, string>;
   teamNames: Map<string, string>;
-  /** The assistant this rule's target runs as, when one resolves. */
-  assistantId: string | undefined;
-  /** Whether `AssistantBadge` names an assistant for this row. False leaves
-   * the row's own ownership label to speak. */
-  assistantNamed: boolean;
   /** The caller's user id; undefined while `useMe` loads. */
   viewerId: string | undefined;
   /** False for a colleague's personal subscription — visible, not actionable. */
@@ -299,23 +224,15 @@ function SubscriptionRow({
       <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="break-words text-sm font-medium text-ink">{sub.name}</span>
-          {/* Ownership varies row to row, so it is badged: "Org", or
-              "Personal" for a COLLEAGUE's. The scoped list returns no
-              colleague's row, so "Personal" marks one the server should not
-              have sent. `AssistantBadge` adds the assistant that answers the
-              event, and stays quiet on a personal rule the reader's own
-              default assistant answers. An org rule whose assistant resolves
-              reads that assistant, which already names the org, so the plain
-              word steps aside rather than printing it twice. */}
-          {sub.ownerType === "org" && !assistantNamed && (
+          {/* Show the workspace owner, independent of its runtime identity. */}
+          {sub.ownerType === "org" && (
             <Badge variant="accent" className="shrink-0">
               Org
             </Badge>
           )}
-          <AssistantBadge
+          <OwnerBadge
             ownerType={sub.ownerType}
             ownerId={sub.ownerId}
-            assistantId={assistantId}
           />
           {sub.ownerType === "user" && viewerId !== undefined && sub.ownerId !== viewerId && (
             <Tooltip content="A colleague's personal subscription. Only they can change it.">

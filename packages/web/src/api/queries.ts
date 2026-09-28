@@ -16,9 +16,13 @@ import type {
   CreateSessionResponse,
   CreateThreadRequest,
   CreateThreadResponse,
+  DeliverIdentityLinkFallback,
+  DeliverIdentityLinkRequest,
+  DeliverIdentityLinkResponse,
   GetSessionResponse,
   ListDecisionsResponse,
   ListIdentityLinksResponse,
+  ListLinkMembersResponse,
   ListMessagesResponse,
   ListNotificationPreferencesResponse,
   ListNotificationsResponse,
@@ -35,10 +39,6 @@ import type {
   SandboxProfile,
   SessionRunState,
   SetNotificationPreferenceRequest,
-  DeliverIdentityLinkFallback,
-  DeliverIdentityLinkRequest,
-  DeliverIdentityLinkResponse,
-  ListLinkMembersResponse,
   StartIdentityLinkResponse,
 } from "@valet/api/wire";
 import { useLiveQuery } from "~/lib/use-live-query";
@@ -206,6 +206,7 @@ export function useDeleteSession() {
       // migrated assistants keep legacy non-`assistant:`-prefixed session
       // ids, so the id alone cannot say whether a retire happened.
       qc.invalidateQueries({ queryKey: qk.assistants() });
+      qc.invalidateQueries({ queryKey: ["workspace-conversation"] });
     },
   });
 }

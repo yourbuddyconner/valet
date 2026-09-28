@@ -214,23 +214,6 @@ function severity(
 ): "blocking" | "overlapping" | null {
   if (cand.kind === "workflow" && exist.kind === "workflow") {
     if (cand.workflowId !== exist.workflowId) return null;
-  } else if (cand.kind === "orchestrator" && exist.kind === "orchestrator") {
-    // Same rule as two distinct workflows: telling two named assistants about
-    // one event is fan-out, not a clobber. Only when BOTH name one — an absent
-    // id means "the owner's default", which may well BE the other's assistant,
-    // so an unnamed side keeps the blocking treatment.
-    if (
-      cand.assistantId !== undefined &&
-      exist.assistantId !== undefined &&
-      cand.assistantId !== exist.assistantId
-    ) {
-      // ...but a FOLLOWING pair cannot both hold the thread. `followed_threads`
-      // is unique on (org, channel, thread) with one `assistant_id`, so the
-      // later delivery overwrites the earlier one's and that assistant stops
-      // hearing the thread with nothing said. Fan-out of the mention itself
-      // still works, so this is a warning rather than a block.
-      return cand.follow === true || exist.follow === true ? "overlapping" : null;
-    }
   } else if (cand.kind !== exist.kind) {
     return "overlapping";
   }

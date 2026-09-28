@@ -1,14 +1,6 @@
 // @vitest-environment jsdom
-/**
- * Product-first nav: the logo is always "Valet" (the orchestrator's chosen
- * name lives in its own title card, not the logo), the presence dot still
- * reflects the orchestrator's state, "Sessions" links to /sessions, and
- * the old "New session" button is gone from the nav (it moved to the
- * /sessions stub page — see routes/sessions.tsx).
- */
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+/** Threads leads primary navigation. Session and artifact routes remain
+ * available to existing links without separate navigation entries. */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RouterProvider,
@@ -17,10 +9,13 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { OrgPluginWire } from "@valet/api/wire";
-import { TopNav } from "./top-nav";
-import { AppShell } from "./app-shell";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceScopeProvider } from "~/lib/workspace-scope";
+import { AppShell } from "./app-shell";
+import { TopNav } from "./top-nav";
 
 // The nav gates the Security link on the `security` plugin's entitlement,
 // read from `useOrg().data.plugins`. Mock the settings reads so the gate is
@@ -133,7 +128,7 @@ describe("TopNav", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
     const menu = screen.getByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: "Security" })).toBeTruthy();
-    await userEvent.click(within(menu).getByRole("menuitem", { name: "Sessions" }));
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Skills" }));
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
@@ -150,16 +145,12 @@ describe("TopNav", () => {
     expect(screen.queryByText("Echo")).toBeNull();
   });
 
-  it("renders a Sessions link", async () => {
+  it("leads with Threads and removes Sessions and Artifacts from primary navigation", async () => {
     renderNav();
-    const link = await screen.findByRole("link", { name: "Sessions" });
-    expect(link.getAttribute("href")).toBe("/sessions");
-  });
-
-  it("renders an Artifacts link", async () => {
-    renderNav();
-    const link = await screen.findByRole("link", { name: "Artifacts" });
-    expect(link.getAttribute("href")).toBe("/artifacts");
+    const link = await screen.findByRole("link", { name: "Threads" });
+    expect(link.getAttribute("href")).toBe("/chat");
+    expect(screen.queryByRole("link", { name: "Sessions" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Artifacts" })).toBeNull();
   });
 
   it("renders a Skills link between Workflows and Integrations", async () => {
@@ -184,10 +175,8 @@ describe("TopNav", () => {
       .getAllByRole("link")
       .map((el) => el.textContent);
     expect(labels).toEqual([
-      "Chat",
+      "Threads",
       "Memory",
-      "Artifacts",
-      "Sessions",
       "Workflows",
       "Security",
       "Events",

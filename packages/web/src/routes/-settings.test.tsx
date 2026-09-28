@@ -7,9 +7,9 @@
  * mocks `@tanstack/react-router`, since these tests only care what the
  * shell renders/requests, not that the router itself resolves it.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const useOrgMock = vi.fn();
 const pathnameMock = vi.fn<() => string>();
@@ -38,10 +38,10 @@ vi.mock("~/api/settings", async (importOriginal) => {
 });
 
 import { SettingsRail } from "~/components/settings/settings-rail";
-import { OrgRouteGuard } from "./settings.organization";
 import { redirectToProfile } from "./settings.index";
+import { OrgRouteGuard } from "./settings.organization";
 
-const YOU_LABELS = ["Profile", "Assistant", "Appearance", "Notifications"];
+const YOU_LABELS = ["Profile", "Thread defaults", "Appearance", "Notifications"];
 const ORG_LABELS = ["General", "Members", "Teams"];
 
 function mockOrg(data: { organizations: boolean; callerRole: "admin" | "member" } | undefined, isLoading = false) {

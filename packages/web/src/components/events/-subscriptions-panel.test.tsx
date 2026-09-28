@@ -10,15 +10,15 @@
  * following the same isolate-from-the-network pattern as the page suite in
  * `routes/-events.test.tsx`.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
 import type {
   EventSubscriptionWire,
   ListAssistantsResponse,
   TeamSummary,
   WorkflowDefinitionSummary,
 } from "@valet/api/wire";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OwnerFilter } from "~/api/client";
 import { TooltipProvider } from "~/components/primitives";
 
@@ -148,7 +148,7 @@ vi.mock("@tanstack/react-router", () => ({
     params?: unknown;
     [key: string]: unknown;
   }) => (
-    <a data-params={JSON.stringify(params)} {...rest}>
+    <a data-params={JSON.stringify(params)} data-search={JSON.stringify(rest.search)} {...rest}>
       {children}
     </a>
   ),
@@ -395,57 +395,15 @@ describe("SubscriptionsPanel", () => {
       </TooltipProvider>,
     );
 
-    const link = screen.getByText("Release Captain").closest("a");
-    expect(link?.getAttribute("to")).toBe("/assistants/$assistantId");
-    expect(JSON.parse(link?.getAttribute("data-params") ?? "null")).toEqual({
-      assistantId: "asst_eng",
+    const link = screen.getByText("Engineering").closest("a");
+    expect(link?.getAttribute("to")).toBe("/chat");
+    expect(JSON.parse(link?.getAttribute("data-search") ?? "null")).toEqual({
+      workspace: "t_eng",
     });
     // The badge names the assistant, not the owning team it used to name.
     // "Engineering" survives in the target clause, which is a sentence, not
     // a badge.
-    expect(screen.queryByText("Engineering")).toBeNull();
-  });
-
-  // A workflow target runs as the workflow's assistant, so the row resolves
-  // the definition's pinned one rather than the rule owner's default.
-  it("badges a workflow target with the assistant its definition pins", () => {
-    workflowsData = {
-      workflows: [
-        {
-          id: "wf_1",
-          name: "Deploy pipeline",
-          definition: { version: "dag/v1", assistantId: "asst_scribe", nodes: [], edges: [] },
-          createdAt: 1,
-          updatedAt: 1,
-          ownerType: "user",
-          ownerId: "u1",
-        },
-      ],
-    };
-    assistantsData = {
-      assistants: [
-        {
-          id: "asst_scribe",
-          owner: { type: "user", id: "u1" },
-          sessionId: "assistant:asst_scribe",
-          name: "Scribe",
-          isDefault: false,
-          createdAt: 1,
-        },
-      ],
-    };
-    subscriptionsData = {
-      subscriptions: [subscription({ target: { kind: "workflow", workflowId: "wf_1" } })],
-    };
-    render(
-      <TooltipProvider>
-        <SubscriptionsPanel />
-      </TooltipProvider>,
-    );
-
-    expect(screen.getByText("Scribe").closest("a")?.getAttribute("to")).toBe(
-      "/assistants/$assistantId",
-    );
+    expect(screen.queryByText("Release Captain")).toBeNull();
   });
 
   // `GET /api/assistants` does not list org-owned assistants today, so the
@@ -481,7 +439,7 @@ describe("SubscriptionsPanel", () => {
 
     const labels = screen.getAllByText("Org");
     expect(labels).toHaveLength(1);
-    expect(labels[0].closest("a")?.getAttribute("to")).toBe("/assistants/$assistantId");
+    expect(labels[0].closest("a")).toBeNull();
   });
 
   // Everything on a personal page belongs to the reader, so a badge naming

@@ -22,8 +22,8 @@ function SelectedTeamSettings({ teamId }: { teamId: string }) {
   return (
     <Section title="Team" description="Settings for the selected team workspace.">
       <div className="py-3">
-        <Link to="/assistants" className="text-sm text-moss underline-offset-2 hover:underline">
-          Edit assistant
+        <Link to="/chat" search={{ workspace: teamId }} className="text-sm text-moss underline-offset-2 hover:underline">
+          Open threads
         </Link>
       </div>
       {directory.isLoading ? (

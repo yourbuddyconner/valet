@@ -7,22 +7,20 @@
  * Every card degrades independently: its own loading row, its own error row
  * with Retry. A failed card never blanks the page.
  */
-import { TeamSlackSetupCard } from "~/components/events/team-slack-setup";
 import { Link } from "@tanstack/react-router";
 import type {
   GlobalWorkflowRunSummary,
   TeamChildSummary,
 } from "@valet/api/wire";
-import { useAssistants } from "~/api/assistants";
 import { useArtifacts } from "~/api/artifacts";
 import { useMemoryTree } from "~/api/memory";
 import { useTeamChildren } from "~/api/orchestrator";
 import { useTeams } from "~/api/settings";
-import { useRuns, useWorkflows } from "~/api/workflows";
 import { useUsageBreakdown } from "~/api/usage";
+import { useRuns, useWorkflows } from "~/api/workflows";
 import { memoryStats } from "~/components/assistant/memory-card";
+import { TeamSlackSetupCard } from "~/components/events/team-slack-setup";
 import { Badge, Button, ErrorRow, LoadingRow } from "~/components/primitives";
-import { assistantLabel } from "~/components/session/assistant-rail";
 import { errorText } from "~/lib/error-text";
 import { formatTokens, formatUsd } from "~/lib/format-usage";
 import { relativeTime } from "~/lib/relative-time";
@@ -93,14 +91,11 @@ const TONE_CLASS: Record<TeamFeedItem["tone"], string> = {
 
 export function TeamDashboard({ teamId }: { teamId: string }) {
   const teamsQ = useTeams();
-  const assistantsQ = useAssistants();
   const childrenQ = useTeamChildren(teamId);
   const workflowsQ = useWorkflows({ ownerType: "team", ownerId: teamId });
 
   const team = teamsQ.data?.teams.find((t) => t.id === teamId);
-  const teamAssistants = (assistantsQ.data?.assistants ?? []).filter(
-    (a) => a.owner.type === "team" && a.owner.id === teamId,
-  );
+
 
   // Runs are reachable only through the team's workflow ids: the runs route
   // scopes to the CALLER, so an unfiltered list would mix in personal runs.
@@ -145,28 +140,7 @@ export function TeamDashboard({ teamId }: { teamId: string }) {
               </Badge>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
-            {teamAssistants.length === 0 ? (
-              <span>No assistants yet.</span>
-            ) : (
-              teamAssistants.map((a, i) => (
-                <span key={a.id} className="inline-flex min-w-0 flex-wrap items-center gap-1">
-                  {i > 0 && <span aria-hidden>·</span>}
-                  <Link
-                    to="/assistants/$assistantId"
-                    params={{ assistantId: a.id }}
-                    className="inline-flex min-h-11 items-center break-all sm:min-h-0 underline-offset-2 hover:text-ink hover:underline"
-                  >
-                    {assistantLabel(a)}
-                  </Link>
-                  {workingAssistantIds.has(a.id) && <span className="text-amber">(working)</span>}
-                </span>
-              ))
-            )}
-            <Link to="/assistants" className="inline-flex min-h-11 items-center sm:min-h-0 text-moss underline-offset-2 hover:underline">
-              Edit assistant
-            </Link>
-          </div>
+          <Link to="/chat" search={{ workspace: teamId }} className="text-sm text-moss underline-offset-2 hover:underline">Open threads</Link>
         </header>
 
         <TeamSlackSetupCard key={teamId} teamId={teamId} />

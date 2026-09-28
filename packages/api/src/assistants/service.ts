@@ -19,15 +19,18 @@
  * Callers that already hold an assistant id (a session address the client
  * sent back) go to `EngineHost.assistantSessionFor` directly instead.
  */
-import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, isNull, or, sql, type SQL } from "drizzle-orm";
 import { assistantSessionId, type Principal, type Session } from "@valet/engine";
+import { and, asc, desc, eq, isNull, or, sql, type SQL } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import type { EngineHost } from "../engine/host.js";
 import type { AppDb, AppQueryable } from "../lib/drizzle.js";
 import { agentSessions, assistants, type AssistantRow } from "../schema/index.js";
-import type { EngineHost } from "../engine/host.js";
 import type { AssistantBehavior, AssistantSummary } from "../wire/types.js";
-import { parseAssistantBehavior, serializeAssistantBehavior , validateAssistantBehavior } from "./behavior.js";
+import { parseAssistantBehavior, serializeAssistantBehavior, validateAssistantBehavior } from "./behavior.js";
 import { PERSONALITY_INJECT_CAP } from "./persona.js";
+
+/** Compatibility writes cannot reintroduce multiple customizable profiles. */
+export const WORKSPACE_ASSISTANT_MESSAGE = "Each personal space and team has one assistant. Manage workspace settings or start a new thread instead.";
 
 /** Server cap on `avatarUrl` length. Slack truncates nothing here; the cap
  * only keeps a pathological value out of the row. */

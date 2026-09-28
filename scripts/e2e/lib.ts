@@ -81,6 +81,7 @@ const MIN = 60_000;
 const INTEGRATION_CORE_FILES = [
   "src/integration/artifacts.test.ts",
   "src/integration/assistants.test.ts",
+  "src/integration/workspace-assistant.test.ts",
   "src/integration/auth.e2e.test.ts",
   "src/integration/auto-title.test.ts",
   "src/integration/memory-routes.test.ts",

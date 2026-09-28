@@ -1,6 +1,4 @@
-import { useState } from "react";
 import { createFileRoute, Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { Clock, ShieldAlert, Trash2, Zap } from "lucide-react";
 import type {
   ListWorkflowActionRequiredResponse,
   WorkflowActionRequiredItem,
@@ -8,32 +6,33 @@ import type {
   WorkflowTriggerItem,
 } from "@valet/api/wire";
 import { triggerDataSchema, visibleTriggerFields } from "@valet/workflow";
+import { Clock, ShieldAlert, Trash2, Zap } from "lucide-react";
+import { useState } from "react";
 import {
   useAllWorkflowRuns,
   useDeleteWorkflow,
   useStartRun,
-  useWorkflowRuns,
   useWorkflowActionRequired,
-  useWorkflowTriggers,
+  useWorkflowRuns,
   useWorkflows,
+  useWorkflowTriggers,
 } from "~/api/workflows";
-import { AssistantBadge } from "~/components/assistant-badge";
-import { WorkspaceClause } from "~/components/workspace-clause";
-import { runCountLabel } from "~/lib/run-count";
+import { OwnerBadge } from "~/components/owner-badge";
+import { Pager } from "~/components/pager";
+import { Button, ConfirmDialog, Spinner } from "~/components/primitives";
+import { ApprovalCard } from "~/components/workflows/approval-card";
 import { ImportWorkflowDialog } from "~/components/workflows/import-workflow-dialog";
 import { NewWorkflowDialog } from "~/components/workflows/new-workflow-dialog";
+import { PolicyGateCard } from "~/components/workflows/policy-gate-card";
+import { RunStatusChip } from "~/components/workflows/run-status-chip";
 import { RunWorkflowDialog } from "~/components/workflows/run-workflow-dialog";
 import { TemplateGallery } from "~/components/workflows/template-gallery";
 import { TriggerList } from "~/components/workflows/trigger-list";
-import { RunStatusChip } from "~/components/workflows/run-status-chip";
-import { ApprovalCard } from "~/components/workflows/approval-card";
-import { PolicyGateCard } from "~/components/workflows/policy-gate-card";
-import { Button, ConfirmDialog, Spinner } from "~/components/primitives";
-import { Pager } from "~/components/pager";
+import { WorkspaceClause } from "~/components/workspace-clause";
 import { currentCursor, pageNumber, popCursor, pushCursor } from "~/lib/cursor-stack";
-import { useListOwner } from "~/lib/use-list-owner";
 import { relativeTime } from "~/lib/relative-time";
-import { workflowAssistantId } from "~/lib/workflow-assistant";
+import { runCountLabel } from "~/lib/run-count";
+import { useListOwner } from "~/lib/use-list-owner";
 
 /**
  * `/workflows` — tabbed hub (Workflows | Runs | Triggers | Templates). The
@@ -240,10 +239,9 @@ function ActionRequiredRow({
                 the workflow while the run waits does not move the badge
                 beside a permission decision. Absent means the snapshot pins
                 none, and the owner's default assistant runs it. */}
-            <AssistantBadge
+            <OwnerBadge
               ownerType={item.owner.type}
               ownerId={item.owner.id}
-              assistantId={item.assistantId}
             />
           </div>
           <Link
@@ -443,10 +441,9 @@ function DefinitionRow({
           {workflow.name}
         </Link>
         <span className="relative z-10">
-          <AssistantBadge
+          <OwnerBadge
             ownerType={workflow.ownerType}
             ownerId={workflow.ownerId}
-            assistantId={workflowAssistantId(workflow.definition)}
           />
         </span>
         {workflow.origin === "repo" && workflow.upstream && (

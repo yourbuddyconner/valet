@@ -11,10 +11,10 @@
  * so mutate controls render by default; one test flips ownership to prove
  * they gate on it.
  */
-import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
-import type { ReactNode } from "react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { EventSubscriptionWire, TeamSummary } from "@valet/api/wire";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "~/components/primitives";
 
 const catalogData = {
@@ -522,7 +522,7 @@ describe("EventsPage — Subscriptions", () => {
 
     // On the Then step, the team option exists and is preselected.
     const teamRadio = screen.getByRole("radio", {
-      name: /Notify Engineering's assistant/,
+      name: /Notify Engineering/,
     }) as HTMLInputElement;
     expect(teamRadio.checked).toBe(true);
 
@@ -568,12 +568,12 @@ describe("EventsPage — Subscriptions", () => {
 
       // The team target is the default.
       const teamRadio = screen.getByRole("radio", {
-        name: /Notify Engineering's assistant/,
+        name: /Notify Engineering/,
       }) as HTMLInputElement;
       expect(teamRadio.checked).toBe(true);
 
       // The reader can switch to the personal, org, and workflow targets.
-      const userRadio = screen.getByRole("radio", { name: /Notify your assistant/ });
+      const userRadio = screen.getByRole("radio", { name: /Notify your personal workspace/ });
       fireEvent.click(userRadio);
       expect((userRadio as HTMLInputElement).checked).toBe(true);
 
@@ -581,7 +581,7 @@ describe("EventsPage — Subscriptions", () => {
       fireEvent.click(workflowRadio);
       expect((workflowRadio as HTMLInputElement).checked).toBe(true);
 
-      const orgRadio = screen.getByRole("radio", { name: /Notify the org assistant/ });
+      const orgRadio = screen.getByRole("radio", { name: /Notify the organization/ });
       fireEvent.click(orgRadio);
       expect((orgRadio as HTMLInputElement).checked).toBe(true);
     } finally {
@@ -595,7 +595,7 @@ describe("EventsPage — Subscriptions", () => {
     // The wizard names the target plainly; it prints no "ownership follows the
     // target" note (the old dialog's copy is gone).
     expect(screen.queryByText(/Ownership follows the target/)).toBeNull();
-    expect(screen.getByRole("radio", { name: /Notify your assistant/ })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: /Notify your personal workspace/ })).toBeTruthy();
   });
 
   // A workflow target is chosen through the wizard's plain Workflow select.
@@ -633,7 +633,7 @@ describe("EventsPage — Subscriptions", () => {
     teamsData = { teams: [team("t_eng", "Engineering", "member")] };
     openSubscriptionsTab();
     openWizardToTargetStep("github.pr.merged");
-    expect(screen.queryByRole("radio", { name: /Engineering's assistant/ })).toBeNull();
+    expect(screen.queryByRole("radio", { name: /Engineering/ })).toBeNull();
   });
 
   it("deletes a subscription after the confirm dialog", async () => {

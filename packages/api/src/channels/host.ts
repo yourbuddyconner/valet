@@ -12,8 +12,6 @@
  * lands in Task 8; `start` here only resolves credentials and constructs
  * transports.
  */
-import { randomBytes } from "node:crypto";
-import { eq } from "drizzle-orm";
 import {
   ConflictError,
   parseAssistantSessionId,
@@ -33,39 +31,41 @@ import {
   type PromptAttachment,
   type Session,
   type SessionEntry,
-  type SignalContent,
   type SessionStore,
+  type SignalContent,
   type StoredCredential,
   type Unsubscribe,
   type ValetPlugin,
 } from "@valet/engine";
 import type { WorkflowStore } from "@valet/workflow";
-import type { AppDb } from "../lib/drizzle.js";
-import type { EngineHost } from "../engine/host.js";
-import { ensureWorkflowSession, parseWorkflowSessionId } from "../workflows/engine-deps.js";
-import { agentSessions, users, workflowDefinitions } from "../schema/index.js";
+import { eq } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
 import {
   ArchivedAssistantError,
-  assistantSenderIdentity as senderIdentityForAssistant,
   ensureDefaultAssistantSession,
   loadAssistant,
   loadAssistantBySessionId,
+  assistantSenderIdentity as senderIdentityForAssistant,
 } from "../assistants/service.js";
+import type { EngineHost } from "../engine/host.js";
 import { loadSessionMeta } from "../engine/session-meta.js";
-import { canApplyAlwaysAllow, GATE_ACTION_ALWAYS_ALLOW } from "../policies/service.js";
-import { canResolveSessionGate, type SessionOwnerLike } from "../services/session-access.js";
-import { isOrgAdmin } from "../services/org.js";
+import type { AppDb } from "../lib/drizzle.js";
 import { userPrincipal } from "../lib/request-principal.js";
-import { writeDropLog } from "../orchestrator/signals.js";
-import type { AttentionChannelDeliverer, AttentionEvent } from "../orchestrator/attention.js";
-import { resolveOrgCredentialRead } from "../services/credential-resolution.js";
-import { ingestChannelFile, type IngestedChannelFile } from "../services/channel-file-ingest.js";
-import { OnePasswordAuthError, type OnePasswordService } from "../services/onepassword.js";
 import { attentionHref } from "../orchestrator/attention-wiring.js";
+import type { AttentionChannelDeliverer, AttentionEvent } from "../orchestrator/attention.js";
+import { writeDropLog } from "../orchestrator/signals.js";
+import { canApplyAlwaysAllow, GATE_ACTION_ALWAYS_ALLOW } from "../policies/service.js";
+import { agentSessions, users, workflowDefinitions } from "../schema/index.js";
+import { ingestChannelFile, type IngestedChannelFile } from "../services/channel-file-ingest.js";
+import { resolveOrgCredentialRead } from "../services/credential-resolution.js";
+import { OnePasswordAuthError, type OnePasswordService } from "../services/onepassword.js";
+import { isOrgAdmin } from "../services/org.js";
+import { canResolveSessionGate, type SessionOwnerLike } from "../services/session-access.js";
 import { recordThreadUserActivity } from "../services/thread-activity.js";
+import { ensureWorkflowSession, parseWorkflowSessionId } from "../workflows/engine-deps.js";
+import { DbActiveStreamStore, type ActiveStreamStore } from "./active-streams.js";
 import { digestGate } from "./gate-digest.js";
 import { consumeLinkCode, identityForExternal, identityForUser, linkIdentity } from "./identity-links.js";
-import { DbActiveStreamStore, type ActiveStreamStore } from "./active-streams.js";
 import { ChannelStreamBridge } from "./stream-bridge.js";
 
 export interface ChannelHostDeps {
@@ -1013,7 +1013,8 @@ export class ChannelHost {
     // tool_id/args JSON dump; the card shows the summary plus labeled
     // fields instead, with a link for the full request.
     const digest = digestGate(gate);
-    const link = this.openInValetLink(attentionHref(sessionId));
+    const source = await this.deps.engineStore.getSession(sessionId);
+    const link = this.openInValetLink(attentionHref(sessionId, gate.threadId, source?.owner));
     const body =
       link === undefined ? digest.body : digest.body === undefined ? link : `${digest.body}\n\n${link}`;
     await this.sendAndRecordGatePrompt(

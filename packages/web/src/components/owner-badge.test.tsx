@@ -10,10 +10,10 @@
  * has no reason to mount. `search` is serialized onto the stub so a test can
  * read the query the badge would navigate with.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ListAssistantsResponse, ListTeamsResponse } from "@valet/api/wire";
+import type { ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "~/components/primitives";
 
 let teamsData: ListTeamsResponse = { teams: [] };
@@ -134,7 +134,7 @@ describe("OwnerBadge", () => {
     const link = container.querySelector("a");
     expect(link?.getAttribute("to")).toBe("/chat");
     expect(JSON.parse(link?.getAttribute("data-search") ?? "null")).toEqual({
-      assistant: "asst_team_1",
+      workspace: "team_1",
     });
   });
 
@@ -144,7 +144,7 @@ describe("OwnerBadge", () => {
     const { container } = show("team", "team_1");
 
     expect(screen.getByText("Design")).toBeTruthy();
-    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("a")?.getAttribute("to")).toBe("/chat");
   });
 
   it("names the destination on hover", () => {
@@ -155,6 +155,6 @@ describe("OwnerBadge", () => {
     expect(link).not.toBeNull();
     fireEvent.focus(link as HTMLAnchorElement);
 
-    expect(screen.getAllByText("Open Design's assistant").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Open Design's threads").length).toBeGreaterThan(0);
   });
 });

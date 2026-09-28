@@ -129,11 +129,8 @@ export function validateSubscription(
     if (who !== "team" && target.teamId !== undefined) {
       return "teamId is only valid when orchestrator is team";
     }
-    // Shape only. That the id names a LIVE assistant of the owner this target
-    // resolves to is a database question, checked in the route once the owner
-    // is known (`checkAssistantForOwner`).
-    if (target.assistantId !== undefined && (typeof target.assistantId !== "string" || target.assistantId.length === 0)) {
-      return "assistantId must be a non-empty string";
+    if (target.assistantId !== undefined) {
+      return "Assistant selection is not supported. Choose the personal or team workspace instead.";
     }
     // Both prompt templates are validated against the SELECTED catalog
     // entries, the same set a filter field is held to: a template addresses

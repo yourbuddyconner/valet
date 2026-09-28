@@ -29,12 +29,12 @@
  * Subscribe callbacks must never throw back into the EventStream's fan-out
  * — every handler is wrapped in try/catch that logs and swallows.
  */
-import { eq } from "drizzle-orm";
+import type { DeliveredBusEvent, EventStream, Principal, SessionStore } from "@valet/engine";
 import { parseAssistantSessionId } from "@valet/engine";
-import type { DeliveredBusEvent, EventStream, SessionStore } from "@valet/engine";
+import { eq } from "drizzle-orm";
+import { digestGate } from "../channels/gate-digest.js";
 import type { AppDb } from "../lib/drizzle.js";
 import { agentSessions } from "../schema/index.js";
-import { digestGate } from "../channels/gate-digest.js";
 import {
   markGateNotificationsRead,
   routeAttention,
@@ -59,25 +59,14 @@ async function sessionLabel(db: AppDb, sessionId: string): Promise<string> {
   return row?.title || sessionId;
 }
 
-/**
- * Where a person should land to answer this.
- *
- * An assistant's conversation lives at `/chat`, not `/sessions` — assistants
- * are deliberately excluded from the standalone sessions list, so a
- * `/sessions/{id}` link for one points at a surface that does not list it.
- * The `?assistant=` form also carries the owner implicitly, which is what
- * lets the client put the reader in the right context rather than leaving
- * them looking at a conversation their current scope excludes.
- *
- * Other sessions keep the direct link. The web route shows workflow-agent
- * approvals separately because workflow sessions have no app session row.
- */
-export function attentionHref(sessionId: string, threadId?: string): string {
-  const assistantId = parseAssistantSessionId(sessionId);
-  const href = assistantId === null
-    ? `/sessions/${encodeURIComponent(sessionId)}`
-    : `/chat?assistant=${encodeURIComponent(assistantId)}`;
-  return threadId ? `${href}${assistantId === null ? "?" : "&"}thread=${encodeURIComponent(threadId)}` : href;
+/** Notifications address the workspace conversation or an execution detail. */
+export function attentionHref(sessionId: string, threadId?: string, owner?: Principal): string {
+  const isAssistant = parseAssistantSessionId(sessionId) !== null || sessionId.startsWith("orchestrator:");
+  const workspace = owner?.type === "team" ? owner.id : "user";
+  const href = isAssistant && owner
+    ? `/chat?workspace=${encodeURIComponent(workspace)}`
+    : `/sessions/${encodeURIComponent(sessionId)}`;
+  return threadId ? `${href}${href.includes("?") ? "&" : "?"}thread=${encodeURIComponent(threadId)}` : href;
 }
 
 async function handleSubmissionStuck(deps: AttentionWiringDeps, delivered: DeliveredBusEvent): Promise<void> {
@@ -95,7 +84,7 @@ async function handleSubmissionStuck(deps: AttentionWiringDeps, delivered: Deliv
     sessionId,
     title: `Stuck submission in "${label}" (thread ${threadId})`,
     body: `Queue item ${queueItemId} hasn't settled after ${delivered.event.attemptCount} attempt(s).`,
-    href: attentionHref(sessionId, threadId),
+    href: attentionHref(sessionId, threadId, sessionData.owner),
     dedupeKey: queueItemId,
   });
 }
@@ -133,7 +122,7 @@ async function handleDecisionGate(deps: AttentionWiringDeps, delivered: Delivere
     sessionId,
     title: digest.title,
     body: digest.body,
-    href: attentionHref(sessionId, gate.threadId),
+    href: attentionHref(sessionId, gate.threadId, sessionData.owner),
     dedupeKey: gate.id,
     gate: { id: gate.id, actions: gate.actions, fields: digest.fields },
   });

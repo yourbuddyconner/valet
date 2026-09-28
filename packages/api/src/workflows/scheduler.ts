@@ -16,14 +16,14 @@
  * Same lifecycle shape as `EventDispatcher`: constructed in providers,
  * `start()`/`stop()` from main.ts.
  */
-import { and, eq, lte } from "drizzle-orm";
 import type { RunHost, RunParams, WorkflowStore, WorkflowTriggerPayload } from "@valet/workflow";
+import { and, eq, lte } from "drizzle-orm";
+import type { OrchestratorDeliverFn } from "../events/dispatcher.js";
 import type { AppDb } from "../lib/drizzle.js";
 import { workflowDefinitions, workflowRuns, workflowSchedules } from "../schema/index.js";
 import { definitionVersionId } from "./definition-version.js";
 import { accessibleScheduleRow, nextFireAt } from "./schedule-service.js";
 import type { WorkflowOwner } from "./service.js";
-import type { OrchestratorDeliverFn } from "../events/dispatcher.js";
 
 const POLL_MS = 30_000;
 
@@ -121,7 +121,6 @@ export class WorkflowScheduler {
         dispatchId: `schedule:${schedule.id}:${slotMs}`,
         // Null on a schedule from before the column and on one that named no
         // assistant; both fall back to the owner's default at delivery.
-        assistantId: schedule.assistantId ?? undefined,
       });
       return "ok";
     }

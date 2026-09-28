@@ -12,9 +12,9 @@
  * Task 11 adds the API keys section, mocking `~/api/api-keys` the same way
  * — the create flow's one-time secret reveal and the revoke confirm-gate.
  */
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const patchMeMutate = vi.fn();
 const uploadMyAvatarMutateAsync = vi.fn().mockResolvedValue({ avatarUrl: "/avatars/me.webp" });
@@ -138,12 +138,12 @@ vi.mock("~/lib/workspace-scope", async (importOriginal) => {
   };
 });
 
-import { ProfilePage } from "./settings.profile";
-import { AssistantPage } from "./settings.assistant";
-import { AppearancePage } from "./settings.appearance";
 import { PALETTE_CHOICES } from "~/lib/theme";
-import { NotificationsPage } from "./settings.notifications";
 import { ApiKeysPage } from "./settings.api-keys";
+import { AppearancePage } from "./settings.appearance";
+import { AssistantPage } from "./settings.assistant";
+import { NotificationsPage } from "./settings.notifications";
+import { ProfilePage } from "./settings.profile";
 
 describe("ProfilePage", () => {
   beforeEach(() => {
@@ -238,8 +238,8 @@ describe("AssistantPage", () => {
 
   it("renders the shared identity fields and the default-model helper text verbatim", () => {
     render(<AssistantPage />);
-    expect(screen.getByLabelText("Name")).toBeTruthy();
-    expect(screen.getByLabelText(/Personality/)).toBeTruthy();
+    expect(screen.queryByLabelText("Name")).toBeNull();
+    expect(screen.queryByLabelText(/Personality/)).toBeNull();
     expect(
       screen.getByText(
         "New sessions you start use this model or size. Existing sessions keep theirs. Switch the model per thread in the chat header. Shared team assistants do not use it.",
@@ -282,17 +282,6 @@ describe("AssistantPage", () => {
     // fallback wording in its empty option.
     fireEvent.click(within(screen.getByRole("listbox")).getByText("Team or organization default"));
     expect(patchMeMutate).toHaveBeenCalledWith({ defaultModel: null });
-  });
-
-  it("saving the identity fields calls the shared save-identity mutation", async () => {
-    saveIdentityMutateAsync.mockClear();
-    render(<AssistantPage />);
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Nova" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() =>
-      expect(saveIdentityMutateAsync).toHaveBeenCalledWith({ name: "Nova" }),
-    );
   });
 
   it("defaults the reasoning select to Inherit and selecting a level fires PATCH /api/me", async () => {

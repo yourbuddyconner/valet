@@ -4,8 +4,8 @@
  * plus the target policy (workflow fan-out allowed, cross-kind downgraded
  * to a warning) and the dead-key exclusions.
  */
-import { describe, expect, it } from "vitest";
 import type { EventCatalogEntry } from "@valet/engine";
+import { describe, expect, it } from "vitest";
 import { computeCollisions, type CollisionCandidate } from "./collisions.js";
 import type { SubscriptionFilter } from "./match.js";
 
@@ -266,13 +266,13 @@ describe("computeCollisions — target policy", () => {
 
   // The assistant arm of the same fan-out rule the workflow cases above prove:
   // telling two named assistants about one event is deliberate, not a clobber.
-  it("allows identical coverage aimed at two DIFFERENT assistants (fan-out)", () => {
+  it("blocks duplicate workspace delivery even when stale targets name different assistants", () => {
     const report = computeCollisions(
       candidate({ target: { kind: "orchestrator", assistantId: "a-ops" } }),
       [sub({ target: { kind: "orchestrator", assistantId: "a-eng" } })],
       CATALOG,
     );
-    expect(report.blocking).toHaveLength(0);
+    expect(report.blocking).toHaveLength(1);
     expect(report.overlapping).toHaveLength(0);
   });
 

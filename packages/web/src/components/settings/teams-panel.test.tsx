@@ -5,11 +5,11 @@
  * admin. The API enforces the same gate (`canMutateTeam`); this suite pins
  * that the UI stops offering controls that would 404.
  */
-import type { ReactNode } from "react";
-import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OrgDirectoryUserWire, TeamSummary } from "@valet/api/wire";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** Renders a real anchor so `getByRole("link")` and href assertions work
  * without mounting a router. */
@@ -818,13 +818,13 @@ describe("TeamsPanel — team assistant link", () => {
 
   it("shows the Assistant link to a plain member in the active team", () => {
     render(<TeamsPanel orgMembers={orgMembers} teamId="team_1" showAssistantLink />);
-    expect(screen.getByRole("link", { name: /Assistant/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Threads/ })).toBeTruthy();
   });
 
   it("opens the active team's assistants list", () => {
     render(<TeamsPanel orgMembers={orgMembers} teamId="team_1" showAssistantLink />);
-    const link = screen.getByRole("link", { name: /Assistant/ });
-    expect(link.getAttribute("href")).toBe("/assistants");
+    const link = screen.getByRole("link", { name: /Threads/ });
+    expect(link.getAttribute("href")).toBe("/chat?workspace=team_1");
   });
 });
 

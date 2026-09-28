@@ -7,9 +7,9 @@
  * naming-vs-dashboard branch — they're covered by their own component
  * tests.
  */
-import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 const infoMock = vi.fn();
 
@@ -103,8 +103,8 @@ describe("Dashboard", () => {
 
     renderDashboard();
 
-    expect(screen.getByText("Meet your assistant")).toBeTruthy();
-    expect(screen.queryByTestId("threads-card")).toBeNull();
+    expect(screen.queryByText("Meet your assistant")).toBeNull();
+    expect(screen.getByTestId("threads-card")).toBeTruthy();
   });
 
   it("shows the identity header + card grid once named", () => {
@@ -123,8 +123,7 @@ describe("Dashboard", () => {
 
     renderDashboard();
 
-    expect(screen.getByText("Echo")).toBeTruthy();
-    expect(screen.getByText("idle")).toBeTruthy();
+    expect(screen.getByText("Personal")).toBeTruthy();
     expect(screen.getByTestId("threads-card")).toBeTruthy();
     expect(screen.getByTestId("memory-card")).toBeTruthy();
     expect(screen.getByTestId("usage-card")).toBeTruthy();

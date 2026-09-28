@@ -16,25 +16,23 @@
  * with no sandbox and no agent loop behind it. Routes below say which of
  * the two they create.
  */
-import { Hono } from "hono";
-import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { parseAssistantSessionId } from "@valet/engine";
-import type { AppEnv } from "../env.js";
-import type { AppDb } from "../lib/drizzle.js";
-import { agentSessions, childWatches } from "../schema/index.js";
+import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
+import { Hono } from "hono";
+import { assistantOwner, canViewAssistantOwner } from "../assistants/access.js";
 import {
-  applyProfilePatch,
-  ArchivedAssistantError,
+  WORKSPACE_ASSISTANT_MESSAGE,
   ensureDefaultAssistantSession,
   findDefaultAssistant,
   loadAssistant,
   resolveDefaultAssistant,
-  validateProfilePatch,
 } from "../assistants/service.js";
-import { assistantOwner, canViewAssistantOwner } from "../assistants/access.js";
-import { readOwnFile, writeFile, type MemoryScope } from "../services/memory.js";
-import { canViewSession } from "../services/session-access.js";
+import type { AppEnv } from "../env.js";
+import type { AppDb } from "../lib/drizzle.js";
 import { userPrincipal, type RequestPrincipal } from "../lib/request-principal.js";
+import { agentSessions, childWatches } from "../schema/index.js";
+import { readOwnFile, type MemoryScope } from "../services/memory.js";
+import { canViewSession } from "../services/session-access.js";
 import type {
   EnsureOrchestratorResponse,
   GetOrchestratorChildrenResponse,
@@ -42,8 +40,6 @@ import type {
   GetOrchestratorResponse,
   OrchestratorChildSummary,
   OrchestratorPresence,
-  PatchOrchestratorInfoRequest,
-  PatchOrchestratorInfoResponse,
 } from "../wire/types.js";
 
 export const orchestratorRouter = new Hono<AppEnv>();
@@ -181,77 +177,7 @@ orchestratorRouter.get("/info", async (c) => {
   return c.json(body);
 });
 
-/**
- * PATCH /api/orchestrator/info — decision 4/5/20. Works before the engine
- * session exists: both fields write the caller's default `assistants` row
- * through `patchAssistant`, the same write path the assistant editor uses —
- * a personality saved here is a personality the next wake actually applies
- * (the column wins over the memory file at `resolvePersonaPrefix`).
- * `personality` ALSO refreshes the legacy `assistant/personality.md` memory
- * file, so the assistant's own self-edit surface keeps showing the latest
- * human edit. A changed value evicts the cached engine session (cache-only —
- * `EngineHost.evictCache`, NOT `destroy()`, which would delete the engine
- * session row) so the next wake rebuilds the persona.
- */
-orchestratorRouter.patch("/info", async (c) => {
-  const { db, engineHost } = c.var.providers;
-  const user = c.var.user;
-  const principal = userPrincipal(user.id);
-
-  let body: PatchOrchestratorInfoRequest;
-  try {
-    body = (await c.req.json()) as PatchOrchestratorInfoRequest;
-  } catch {
-    return c.json({ error: "invalid JSON body" }, 400);
-  }
-  // This surface's contract is string-only (PatchOrchestratorInfoRequest):
-  // the legacy personality.md mirror write below cannot represent a clear.
-  if (body.name !== undefined && typeof body.name !== "string") {
-    return c.json({ error: "name must be a string." }, 400);
-  }
-  if (body.personality !== undefined && typeof body.personality !== "string") {
-    return c.json({ error: "personality must be a string." }, 400);
-  }
-  const personaErr = validateProfilePatch(body);
-  if (personaErr) return c.json({ error: personaErr }, 400);
-
-  const assistant = await resolveDefaultAssistant(db, user.orgId, principal);
-
-  try {
-    // applyProfilePatch owns the changed-values eviction rule (service.ts) —
-    // the same seam PATCH /api/assistants/:id uses.
-    await applyProfilePatch(
-      db,
-      assistant,
-      {
-        ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.personality !== undefined ? { personality: body.personality } : {}),
-      },
-      (sid) => engineHost.evictCache(sid),
-    );
-  } catch (err) {
-    // Unreachable while archiveAssistant refuses the default, but an
-    // out-of-band edit must surface as the corrective 409, not a 500.
-    if (err instanceof ArchivedAssistantError) {
-      return c.json({ error: err.message, code: err.code }, err.statusCode);
-    }
-    throw err;
-  }
-
-  if (body.personality !== undefined) {
-    const scope: MemoryScope = { owner: principal, actorUserId: user.id };
-    await writeFile(db, scope, {
-      path: "assistant/personality.md",
-      content: body.personality,
-      type: "preference",
-      origin: "user-stated",
-      pinned: false,
-    });
-  }
-
-  const responseBody: PatchOrchestratorInfoResponse = { ok: true };
-  return c.json(responseBody);
-});
+orchestratorRouter.patch("/info", (c) => c.json({ error: WORKSPACE_ASSISTANT_MESSAGE }, 409));
 
 // ── Children ─────────────────────────────────────────────────────────────
 

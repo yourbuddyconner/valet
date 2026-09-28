@@ -7,14 +7,13 @@
  * isolate-from-the-network pattern the other web suites use: `~/api/*` is
  * mocked to record what its mutations receive.
  */
+import { fireEvent, render, screen } from "@testing-library/react";
+import type {
+  CreateEventSubscriptionRequest,
+  CreateWorkflowScheduleRequest
+} from "@valet/api/wire";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import type {
-  AssistantSummary,
-  CreateEventSubscriptionRequest,
-  CreateWorkflowScheduleRequest,
-} from "@valet/api/wire";
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...await importOriginal<typeof import("@tanstack/react-router")>(),
@@ -108,9 +107,8 @@ vi.mock("~/lib/workspace-scope", async (importOriginal) => {
   };
 });
 
-import { assistantLabel } from "~/components/session/assistant-rail";
-import { AutomationWizard } from "./automation-wizard";
 import { ApiError } from "~/api/client";
+import { AutomationWizard } from "./automation-wizard";
 
 beforeEach(() => {
   createSubscription.mockReset();
@@ -152,20 +150,20 @@ describe("AutomationWizard", () => {
     render(<AutomationWizard open onOpenChange={() => {}} replyTeam={{ id: "t_platform", name: "Platform" }} />);
     expect(screen.getByRole("heading", { name: "Set up Slack replies" })).toBeTruthy();
     expect(screen.queryByText("What should happen?")).toBeNull();
-    expect(screen.queryByLabelText("Your assistant")).toBeNull();
+    expect(screen.queryByLabelText("Personal workspace")).toBeNull();
     expect(screen.queryByText("Other")).toBeNull();
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
     expect(screen.queryByRole("checkbox", { name: /Any channel/ })).toBeNull();
     addReplyChannel("C123");
-    expect(screen.getByRole("button", { name: "Next" }).hasAttribute("disabled")).toBe(true);
-    fireEvent.change(screen.getByLabelText("Assistant"), { target: { value: "a-team" } });
+    expect(screen.queryByLabelText("Assistant")).toBeNull();
+    expect(screen.getByRole("button", { name: "Next" }).hasAttribute("disabled")).toBe(false);
     clickNext();
     fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "Platform replies" } });
     fireEvent.click(screen.getByRole("button", { name: /Create automation/ }));
     expect(createSubscription.mock.calls[0][0]).toMatchObject({
       eventKeys: ["slack.app_mention"],
       filters: [{ field: "channel", op: "eq", value: "C123" }],
-      target: { kind: "orchestrator", orchestrator: "team", teamId: "t_platform", assistantId: "a-team", follow: true },
+      target: { kind: "orchestrator", orchestrator: "team", teamId: "t_platform", follow: true },
     });
   });
 
@@ -185,7 +183,6 @@ describe("AutomationWizard", () => {
     expect(screen.getByText(/runs with the team's access and tools/)).toBeTruthy();
     expect(screen.getByText(/does not run or change the team's workflows/)).toBeTruthy();
     addReplyChannel("C123");
-    fireEvent.change(screen.getByLabelText("Assistant"), { target: { value: "a-team" } });
     clickNext();
     expect(screen.getByText(/any member of the organization/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "Platform replies" } });
@@ -200,7 +197,6 @@ describe("AutomationWizard", () => {
     render(<AutomationWizard open onOpenChange={() => {}} replyTeam={{ id: "t_platform", name: "Platform" }} />);
     fireEvent.click(screen.getByLabelText(/Only members of Platform/));
     addReplyChannel("C123");
-    fireEvent.change(screen.getByLabelText("Assistant"), { target: { value: "a-team" } });
     clickNext();
     expect(screen.getByText(/any linked member of Platform/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "Platform replies" } });
@@ -231,7 +227,7 @@ describe("AutomationWizard", () => {
     // follow ON (default). The team radio is available.
     expect(screen.getByText(/The team owns and administers the assistant/)).toBeTruthy();
     addReplyChannel("C123");
-    const teamRadio = screen.getByLabelText(/Platform's assistant/) as HTMLInputElement;
+    const teamRadio = screen.getByRole("radio", { name: "Platform" }) as HTMLInputElement;
     expect(teamRadio.disabled).toBe(false);
     fireEvent.click(teamRadio);
     expect(teamRadio.checked).toBe(true);
@@ -261,19 +257,19 @@ describe("AutomationWizard", () => {
     clickNext();
     expect(screen.getByText(/This rule uses the organization/)).toBeTruthy();
     expect(screen.getByText(/Choose below who may invoke it by mention/)).toBeTruthy();
-    expect((screen.getByLabelText(/Platform's assistant/) as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByRole("radio", { name: "Platform" }) as HTMLInputElement).disabled).toBe(false);
     expect(screen.getByText(/no linked Slack account is always denied/)).toBeTruthy();
     // The review describes the selected team's member scope.
     addReplyChannel("C123");
     clickNext();
-    expect(screen.getByText(/notify Platform's assistant/)).toBeTruthy();
+    expect(screen.getByText(/notify Platform/)).toBeTruthy();
   });
 
   it("a personal reply rule in a team workspace keeps creator-only copy and target", () => {
     scopeTeamId = "t_platform";
     render(<AutomationWizard open onOpenChange={() => {}} />);
     clickNext();
-    fireEvent.click(screen.getByLabelText(/^Your assistant/));
+    fireEvent.click(screen.getByLabelText(/^Personal workspace/));
     expect(screen.getByText(/do not reach your assistant/)).toBeTruthy();
     addReplyChannel("C123");
     clickNext();
@@ -291,12 +287,11 @@ describe("AutomationWizard", () => {
     ] };
     render(<AutomationWizard open onOpenChange={() => {}} />);
     clickNext();
-    fireEvent.change(screen.getByLabelText("Assistant"), { target: { value: "team-ops" } });
     addReplyChannel("C123");
     clickNext();
     fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "Team ops" } });
     fireEvent.click(screen.getByRole("button", { name: /Create automation/ }));
-    expect(createSubscription.mock.calls[0][0].target).toEqual({ kind: "orchestrator", orchestrator: "team", teamId: "t_platform", assistantId: "team-ops", follow: true });
+    expect(createSubscription.mock.calls[0][0].target).toEqual({ kind: "orchestrator", orchestrator: "team", teamId: "t_platform", follow: true });
   });
 
   it("reply step keeps the org assistant reachable in a team workspace", () => {
@@ -373,14 +368,14 @@ describe("AutomationWizard", () => {
     // The reader moves off the seeded team target and then picks it by hand
     // (a pick, not the seed, is what a workspace switch must not keep), then
     // leaves the team workspace.
-    fireEvent.click(screen.getByLabelText(/Notify your assistant/));
-    fireEvent.click(screen.getByLabelText(/Notify Platform's assistant/));
+    fireEvent.click(screen.getByLabelText(/Notify your personal workspace/));
+    fireEvent.click(screen.getByLabelText(/Notify Platform/));
     scopeTeamId = undefined;
     view.rerender(<AutomationWizard open onOpenChange={() => {}} />);
 
     // The team option is gone, and the held target followed the workspace.
-    expect(screen.queryByLabelText(/Notify Platform's assistant/)).toBeNull();
-    expect((screen.getByLabelText(/Notify your assistant/) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByLabelText(/Notify Platform/)).toBeNull();
+    expect((screen.getByLabelText(/Notify your personal workspace/) as HTMLInputElement).checked).toBe(true);
     clickNext(); // Then
 
     fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "PR ping" } });
@@ -425,7 +420,7 @@ describe("AutomationWizard", () => {
     clickNext();
 
     // Step 3 — Then: choose the team's assistant.
-    fireEvent.click(screen.getByLabelText(/Notify Platform's assistant/));
+    fireEvent.click(screen.getByLabelText(/Notify Platform/));
     clickNext();
 
     fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "PR watch" } });
@@ -611,7 +606,6 @@ describe("AutomationWizard", () => {
     });
     render(<AutomationWizard open onOpenChange={() => {}} replyTeam={{ id: "t_platform", name: "Platform" }} />);
     addReplyChannel("C123");
-    fireEvent.change(screen.getByLabelText("Assistant"), { target: { value: "a-team" } });
     clickNext();
     fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "Platform replies" } });
     fireEvent.click(screen.getByRole("button", { name: /Create automation/ }));
@@ -681,134 +675,5 @@ describe("AutomationWizard", () => {
     render(<AutomationWizard open onOpenChange={onOpenChange} />);
     createReplyRule("Clean rule");
     expect(onOpenChange).toHaveBeenCalledWith(false);
-  });
-  // ── Assistant picker ────────────────────────────────────────────────────
-  //
-  // The picker appears only when the owner has more than one assistant: with
-  // nothing to choose between, the control would only ask the reader to
-  // confirm the one answer the radio already names.
-  describe("assistant picker", () => {
-    function twoAssistants() {
-      assistantsData = {
-        assistants: [
-          { id: "a-mine", name: "Mine", isDefault: true, owner: { type: "user", id: "u1" } },
-          { id: "a-ops", name: "Ops", isDefault: false, owner: { type: "user", id: "u1" } },
-        ],
-      };
-    }
-
-    // A team's seeded default assistant carries no name. Every other surface
-    // (the rail, the chat header, the teams list, the team dashboard) calls it
-    // "Default Orchestrator" through the shared `assistantLabel`; this wizard used
-    // to call the same assistant "Untitled assistant". One name for one thing.
-    const teamDefault: AssistantSummary = {
-      id: "a-team-default",
-      owner: { type: "team", id: "t_platform" },
-      sessionId: "assistant:a-team-default",
-      isDefault: true,
-      createdAt: 0,
-    };
-    const teamOps: AssistantSummary = {
-      id: "a-team-ops",
-      name: "Ops",
-      owner: { type: "team", id: "t_platform" },
-      sessionId: "assistant:a-team-ops",
-      isDefault: false,
-      createdAt: 0,
-    };
-
-    it("labels an unnamed team default assistant the way the shared helper does", () => {
-      scopeTeamId = "t_platform";
-      assistantsData = { assistants: [teamDefault, teamOps] };
-      render(<AutomationWizard open onOpenChange={() => {}} />);
-
-      pickOutcome(/On a schedule/);
-      clickNext();
-      fireEvent.change(screen.getByLabelText("Cron"), { target: { value: "0 9 * * 1-5" } });
-      clickNext(); // Then — the team radio is the workspace seed.
-
-      // Read each option by its value, not its text: the empty "owner's
-      // default" option reads the same words as the unnamed default's own row.
-      const options = within(screen.getByLabelText("Assistant")).getAllByRole("option");
-      const labelFor = (id: string) =>
-        options.find((o) => o.getAttribute("value") === id)?.textContent;
-      expect(labelFor("")).toBe("Default Orchestrator");
-      expect(labelFor("a-team-default")).toBe(assistantLabel(teamDefault));
-      expect(labelFor("a-team-ops")).toBe("Ops");
-    });
-
-    it("stays hidden for an owner with one assistant", () => {
-      render(<AutomationWizard open onOpenChange={() => {}} />);
-      clickNext();
-      expect(screen.queryByLabelText("Assistant")).toBeNull();
-    });
-
-    it("posts the chosen assistant on the target", () => {
-      twoAssistants();
-      render(<AutomationWizard open onOpenChange={() => {}} />);
-      clickNext();
-      addReplyChannel("C123");
-      fireEvent.change(screen.getByLabelText("Assistant"), { target: { value: "a-ops" } });
-      clickNext();
-
-      fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "To Ops" } });
-      fireEvent.click(screen.getByRole("button", { name: /Create automation/ }));
-
-      const body = createSubscription.mock.calls[0][0] as CreateEventSubscriptionRequest;
-      expect(body.target).toEqual({
-        kind: "orchestrator",
-        orchestrator: "user",
-        assistantId: "a-ops",
-        follow: true,
-      });
-    });
-
-    it("posts no assistantId when the reader leaves it on the default", () => {
-      twoAssistants();
-      render(<AutomationWizard open onOpenChange={() => {}} />);
-      clickNext();
-      addReplyChannel("C123");
-      // The picker is on screen with several options; the reader touches none.
-      expect(screen.getByLabelText("Assistant")).toBeTruthy();
-      clickNext();
-
-      fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "Default" } });
-      fireEvent.click(screen.getByRole("button", { name: /Create automation/ }));
-
-      const body = createSubscription.mock.calls[0][0] as CreateEventSubscriptionRequest;
-      expect(body.target).toEqual({ kind: "orchestrator", orchestrator: "user", follow: true });
-    });
-
-    // A schedule used to send the workspace's team unconditionally, which
-    // overrode the radio. Picking a PERSONAL assistant inside a team workspace
-    // then sent a team owner beside a personal assistant, and the server
-    // refused it naming an id the reader could do nothing about.
-    it("schedule in a team workspace follows the radio, not the workspace", () => {
-      scopeTeamId = "t_platform";
-      twoAssistants();
-      render(<AutomationWizard open onOpenChange={() => {}} />);
-
-      pickOutcome(/On a schedule/);
-      clickNext();
-      fireEvent.change(screen.getByLabelText("Cron"), { target: { value: "0 9 * * 1-5" } });
-      clickNext();
-
-      // Move off the team radio onto a personal assistant.
-      fireEvent.click(screen.getByLabelText(/Notify your assistant/));
-      fireEvent.change(screen.getByLabelText("Assistant"), { target: { value: "a-ops" } });
-      fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "standup" } });
-      clickNext();
-
-      fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "Standup" } });
-      fireEvent.click(screen.getByRole("button", { name: /Create automation/ }));
-
-      const body = createSchedule.mock.calls[0][0] as CreateWorkflowScheduleRequest;
-      expect(body.teamId).toBeUndefined();
-      expect(body.target).toEqual({
-        kind: "orchestrator",
-        prompt: "standup",
-        assistantId: "a-ops",
-      });
-    });
   });
 });

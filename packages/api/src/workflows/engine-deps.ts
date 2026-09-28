@@ -31,14 +31,8 @@
  * than assuming the session `createSession` warmed is still cached.
  */
 
-import { mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { eq } from "drizzle-orm";
-import { definitionVersionId } from "./definition-version.js";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
 import type { Usage } from "@earendil-works/pi-ai/compat";
-import { bundledModel } from "@valet/engine/model-catalog";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   parseAssistantSessionId,
   parsePrincipal,
@@ -49,6 +43,7 @@ import {
   type SignalContent,
   type ValetPlugin,
 } from "@valet/engine";
+import { bundledModel } from "@valet/engine/model-catalog";
 import type {
   WorkflowAwaitResultOptions,
   WorkflowCreateSessionOptions,
@@ -65,20 +60,24 @@ import type {
   WorkflowRunOrigin,
   WorkflowStore,
 } from "@valet/workflow";
-import { isTeamMember } from "../services/teams.js";
-import type { AppDb } from "../lib/drizzle.js";
-import type { EngineHost } from "../engine/host.js";
-import { buildActionInvoker, type ActionInvokerOpts } from "../plugins/action-invoker.js";
-import { workflowDefinitions } from "../schema/index.js";
+import { eq } from "drizzle-orm";
+import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   ArchivedAssistantError,
   loadAssistant,
   loadAssistantBySessionId,
   resolveDefaultAssistant,
 } from "../assistants/service.js";
-import type { OnePasswordService } from "../services/onepassword.js";
-import { workflowAssistantId } from "./service.js";
+import type { EngineHost } from "../engine/host.js";
+import type { AppDb } from "../lib/drizzle.js";
+import { buildActionInvoker, type ActionInvokerOpts } from "../plugins/action-invoker.js";
+import { workflowDefinitions } from "../schema/index.js";
 import { resolveModelSpec } from "../services/model-resolution.js";
+import type { OnePasswordService } from "../services/onepassword.js";
+import { isTeamMember } from "../services/teams.js";
+import { definitionVersionId } from "./definition-version.js";
 
 export interface WorkflowEngineDepsOpts {
   host: EngineHost;
@@ -180,7 +179,6 @@ interface RunContext {
   orgId: string;
   actorUserId: string;
   owner: Principal;
-  assistantId?: string;
   origin?: WorkflowRunOrigin;
 }
 
@@ -207,7 +205,7 @@ async function resolveRunContext(opts: WorkflowEngineDepsOpts, runId: string): P
   }
 
   return { orgId: defRow.orgId, actorUserId: run.actorUserId ?? actorUserIdFor(owner), owner,
-    assistantId: workflowAssistantId(run.definition), origin: run.params.origin };
+    origin: run.params.origin };
 }
 
 /**
@@ -492,14 +490,12 @@ export function buildWorkflowEngineDeps(opts: WorkflowEngineDepsOpts): WorkflowE
       // carries the origin's own session id.
       const assistant = ctx.origin
         ? await loadAssistantBySessionId(opts.db, ctx.origin.assistantSessionId)
-        : ctx.assistantId
-          ? await loadAssistant(opts.db, ctx.assistantId)
-          : await resolveDefaultAssistant(opts.db, ctx.orgId, principal);
+        : await resolveDefaultAssistant(opts.db, ctx.orgId, principal);
       const assistantOwnsRun = assistant?.ownerType === principal.type && assistant.ownerId === principal.id;
       const assistantOwnsActor = assistant?.ownerType === "user" && assistant.ownerId === ctx.actorUserId;
       if (!assistant || assistant.orgId !== ctx.orgId ||
           (!assistantOwnsRun && !(ctx.origin && assistantOwnsActor))) {
-        throw new Error("Workflow orchestrator is unavailable. Select an orchestrator owned by this workflow's workspace.");
+        throw new Error("Workflow orchestrator is unavailable. Open the workflow from its owning workspace and retry.");
       }
       if (assistant.archivedAt !== null) throw new ArchivedAssistantError();
       if (ctx.origin && assistantOwnsActor && !assistantOwnsRun && principal.type === "team" &&

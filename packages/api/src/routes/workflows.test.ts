@@ -6,20 +6,16 @@
  * elsewhere) so these tests assert on the routes' own logic — request
  * shaping, owner scoping, signal writes — without paying for the poll loop.
  */
-import { describe, it, expect, afterEach, vi } from "vitest";
-import { eq } from "drizzle-orm";
 import type { RunHost, WorkflowDefinition } from "@valet/workflow";
-import { bootTestApi, type TestApi } from "../integration/_setup.js";
-import { addMember, createTeam } from "../services/teams.js";
-import { createLlmProvider } from "../services/llm-providers.js";
-import { setApprovedModels } from "../services/approved-models.js";
+import { eq } from "drizzle-orm";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAssistant } from "../assistants/service.js";
-import { resolveWorkflowApproval, cancelWorkflowRun } from "../workflows/service.js";
+import { bootTestApi, type TestApi } from "../integration/_setup.js";
 import { persistInvocationAudit } from "../policies/service.js";
 import {
   actionInvocations,
-  assistants,
   actionPolicies,
+  assistants,
   orgs,
   runtimeGrants,
   workflowDefinitions,
@@ -27,23 +23,26 @@ import {
   workflowSchedules,
   workflowVersions,
 } from "../schema/index.js";
-import {
-  getWorkflowRunDetail,
-  listWorkflowRuns,
-} from "../workflows/service.js";
+import { setApprovedModels } from "../services/approved-models.js";
+import { createLlmProvider } from "../services/llm-providers.js";
+import { addMember, createTeam } from "../services/teams.js";
 import type {
   CreateWorkflowResponse,
   CreateWorkflowScheduleResponse,
-  ListWorkflowSchedulesResponse,
   DeleteWorkflowWebhookResponse,
   GetWorkflowRunResponse,
   ListWorkflowActionRequiredResponse,
   ListWorkflowRunsResponse,
+  ListWorkflowSchedulesResponse,
   ListWorkflowsResponse,
   RetryWorkflowRunResponse,
   StartWorkflowRunResponse,
   WorkflowWebhookResponse,
 } from "../wire/types.js";
+import {
+  cancelWorkflowRun, getWorkflowRunDetail,
+  listWorkflowRuns, resolveWorkflowApproval
+} from "../workflows/service.js";
 
 let api: TestApi | undefined;
 
@@ -1736,7 +1735,7 @@ describe("GET /api/workflows/action-required", () => {
   // A run executes the definition it started with. Re-pinning the workflow
   // while a run waits for approval must not change the assistant the
   // approval screen names: that badge is beside a permission decision.
-  it("reports the assistant from the run's snapshot, not the current definition", async () => {
+  it("reports workspace-owned approvals without assistant selection", async () => {
     api = await bootTestApi({ workflowRunHost: new StubRunHost() });
     const { db, workflowStore } = api.providers;
     const now = Date.now();
@@ -1769,9 +1768,7 @@ describe("GET /api/workflows/action-required", () => {
     const res = await fetch(`${api.baseUrl}/api/workflows/action-required`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as ListWorkflowActionRequiredResponse;
-    expect(body.items.find((item) => item.runId === "wfrun_pinned")?.assistantId).toBe(
-      "asst_snapshot",
-    );
+    expect(body.items.find((item) => item.runId === "wfrun_pinned")?.assistantId).toBeUndefined();
     // A snapshot with an unusable id reports none, and the row still lists:
     // its approval is the only way that run ever settles.
     const brokenItem = body.items.find((item) => item.runId === "wfrun_broken");

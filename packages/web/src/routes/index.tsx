@@ -1,14 +1,12 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import type { GetOrchestratorInfoResponse } from "@valet/api/wire";
 import { useOrchestratorChildren, useOrchestratorInfo } from "~/api/orchestrator";
 import { useNotifications } from "~/api/queries";
 import { ActivityStrip, mergeActivity } from "~/components/assistant/activity-strip";
-import { ThreadsCard } from "~/components/assistant/threads-card";
-import { IdentityHeader } from "~/components/assistant/identity-header";
-import { IdentityFields } from "~/components/assistant/identity-fields";
 import { MemoryCard } from "~/components/assistant/memory-card";
-import { UsageCard } from "~/components/assistant/usage-card";
 import { TeamsCard } from "~/components/assistant/teams-card";
+import { ThreadsCard } from "~/components/assistant/threads-card";
+import { UsageCard } from "~/components/assistant/usage-card";
 import { TeamDashboard } from "~/components/dashboard/team-dashboard";
 import { Spinner } from "~/components/primitives";
 import { useWorkspaceScope } from "~/lib/workspace-scope";
@@ -51,21 +49,13 @@ export function Dashboard() {
     return (
       <div className="flex-1 grid place-items-center p-8 text-center text-sm text-danger-500">
         <div>
-          Couldn’t load your assistant.
+          Couldn’t load your workspace.
           <div className="mt-2">
             <button type="button" className="min-h-11 px-3 underline sm:min-h-0" onClick={() => info.refetch()}>
               Retry
             </button>
           </div>
         </div>
-      </div>
-    );
-  }
-
-  if (info.data.name === null) {
-    return (
-      <div className="flex-1 grid place-items-center p-8">
-        <IdentityFields className="w-full max-w-md" variant="onboarding" />
       </div>
     );
   }
@@ -83,12 +73,7 @@ function DashboardBody({ info }: { info: GetOrchestratorInfoResponse }) {
     <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-5xl space-y-8 px-4 py-6 sm:px-6 sm:py-8">
         <div className="space-y-2">
-          <IdentityHeader info={info} />
-          {/* The one path to an assistant's editor used to be the chat
-              rail's menu; the dashboard links the list page directly. */}
-          <Link to="/assistants" className="inline-flex min-h-11 items-center text-xs text-moss underline-offset-2 hover:underline sm:min-h-0">
-            Manage assistants →
-          </Link>
+          <h1 className="font-display text-2xl">Personal</h1>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">

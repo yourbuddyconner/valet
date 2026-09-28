@@ -4,10 +4,9 @@
  * (`workflows/actions.ts`). Cross-owner access returns null (routes map
  * that to 404) so an owned row and a missing row stay indistinguishable.
  */
-import { lockTeamDeletionAccess, TeamAdminRequiredError } from "../services/team-deletion-access.js";
-import { checkAssistantForOwner, resolveDefaultAssistant } from "../assistants/service.js";
-import type { OnePasswordService } from "../services/onepassword.js";
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import type { ActionPlugin, CredentialStore, SessionStore, ValetPlugin } from "@valet/engine";
+import { NotFoundError, RepoOwnedWorkflowError, ValidationError } from "@valet/shared";
+import type { RunHost } from "@valet/workflow";
 import {
   resolveTriggerInput,
   triggerDataSchema,
@@ -25,10 +24,15 @@ import {
   type WorkflowStore,
   type WorkflowTriggerPayload,
 } from "@valet/workflow";
-import type { RunHost } from "@valet/workflow";
-import type { ActionPlugin, CredentialStore, SessionStore, ValetPlugin } from "@valet/engine";
-import { NotFoundError, RepoOwnedWorkflowError, ValidationError } from "@valet/shared";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { AppDb, AppQueryable } from "../lib/drizzle.js";
+import type { RequestPrincipal } from "../lib/request-principal.js";
+import {
+  AlwaysAllowNotAdminError,
+  updateInvocationOutcome,
+  writeAlwaysAllowPolicy,
+  writeExecutionGrant,
+} from "../policies/service.js";
 import {
   actionInvocations,
   assistants,
@@ -41,7 +45,9 @@ import {
   workflowVersions,
   workflowWebhooks,
 } from "../schema/index.js";
-import { definitionVersionId } from "./definition-version.js";
+import type { OnePasswordService } from "../services/onepassword.js";
+import { isOrgAdmin, isOrgMember } from "../services/org.js";
+import { lockTeamDeletionAccess, TeamAdminRequiredError } from "../services/team-deletion-access.js";
 import {
   getTeamInOrg,
   isTeamMember,
@@ -50,14 +56,6 @@ import {
   TeamHasActiveRunsError,
   withAuthorizedTeamOwnership,
 } from "../services/teams.js";
-import type { RequestPrincipal } from "../lib/request-principal.js";
-import { isOrgAdmin, isOrgMember } from "../services/org.js";
-import {
-  writeExecutionGrant,
-  writeAlwaysAllowPolicy,
-  AlwaysAllowNotAdminError,
-  updateInvocationOutcome,
-} from "../policies/service.js";
 import type {
   GetWorkflowRunResponse,
   GlobalWorkflowRunSummary,
@@ -71,6 +69,7 @@ import type {
   WorkflowRunStatus,
   WorkflowRunSummary,
 } from "../wire/types.js";
+import { definitionVersionId } from "./definition-version.js";
 
 export interface WorkflowServiceDeps {
   db: AppDb;
@@ -164,6 +163,9 @@ export function validateDefinitionInput(
 ): { ok: true; definition: WorkflowDefinition } | { ok: false; errors: string[] } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, errors: ["definition must be an object"] };
+  }
+  if ("assistantId" in value) {
+    return { ok: false, errors: ["Assistant selection is not supported. Remove assistantId from the workflow definition."] };
   }
   const obj = value as Record<string, unknown>;
   if (!Array.isArray(obj.nodes)) {
@@ -610,33 +612,25 @@ export async function createWorkflowDefinition(
   return { id, name: input.name, definition: input.definition, createdAt: now, updatedAt: now, ownerType, ownerId };
 }
 
-/** Read routing from the definition so each run uses its immutable snapshot. */
-export function workflowAssistantId(definition: unknown): string | undefined {
-  if (!definition || typeof definition !== "object" || !("assistantId" in definition)) return undefined;
-  if (typeof definition.assistantId !== "string" || !definition.assistantId.trim()) {
-    throw new ValidationError("Select a valid orchestrator for this workflow.");
+/** Definitions use workspace ownership rather than assistant routing. */
+function rejectAssistantRouting(definition: unknown): void {
+  if (definition && typeof definition === "object" && "assistantId" in definition) {
+    throw new ValidationError("Assistant selection is not supported. Remove assistantId from the workflow definition.");
   }
-  return definition.assistantId;
 }
 
 async function validateWorkflowAssistant(
-  db: AppQueryable, orgId: string, owner: { type: WorkflowOwnerType; id: string }, definition: unknown,
+  _db: AppQueryable, _orgId: string, _owner: { type: WorkflowOwnerType; id: string }, definition: unknown,
 ) {
-  const assistantId = workflowAssistantId(definition);
-  if (assistantId && await checkAssistantForOwner(db, orgId, owner, assistantId)) {
-    throw new NotFoundError("assistant", assistantId);
-  }
+  rejectAssistantRouting(definition);
 }
 
-/** Cross-workspace copies must not retain routing into the source workspace. */
+/** A copied definition is portable because it contains no assistant identity. */
 async function copiedDefinitionForOwner(
-  db: AppDb, orgId: string, definition: unknown, owner: { type: "user" | "team"; id: string },
+  _db: AppDb, _orgId: string, definition: unknown, _owner: { type: "user" | "team"; id: string },
 ): Promise<unknown> {
-  const assistantId = workflowAssistantId(definition);
-  if (!assistantId || !definition || typeof definition !== "object") return definition;
-  if (!(await checkAssistantForOwner(db, orgId, owner, assistantId))) return definition;
-  const assistant = await resolveDefaultAssistant(db, orgId, owner);
-  return { ...definition, assistantId: assistant.id };
+  rejectAssistantRouting(definition);
+  return definition;
 }
 
 /** Immutable per-save snapshot backing the UI's version history. */
@@ -730,10 +724,6 @@ export async function updateWorkflowDefinition(
 
   const now = Date.now();
   if (input.definition !== undefined) {
-    const assistantId = workflowAssistantId(row.definition);
-    if (assistantId && workflowAssistantId(input.definition) === undefined && input.definition && typeof input.definition === "object") {
-      input = { ...input, definition: { ...input.definition, assistantId } };
-    }
     await validateWorkflowAssistant(deps.db, owner.orgId, { type: row.ownerType, id: row.ownerId }, input.definition);
   }
   // In-flight runs are unaffected: `workflow_runs.definition` snapshots the
@@ -1497,7 +1487,6 @@ export async function listWorkflowActionRequired(
     const detail = await getWorkflowRunDetail(deps, owner, summary.runId);
     if (detail === null) continue;
     const trigger = workflowActionTrigger(detail.run.params);
-    const assistantId = parkedRunAssistantId(detail.run.definition);
     for (const gate of detail.pendingGates) {
       const iteration = gate.iteration ?? 0;
       items.push({
@@ -1507,7 +1496,6 @@ export async function listWorkflowActionRequired(
         workflowName: summary.workflowName,
         runCreatedAt: summary.createdAt,
         owner: detail.owner,
-        ...(assistantId === undefined ? {} : { assistantId }),
         trigger,
         gate,
       });
@@ -1515,20 +1503,6 @@ export async function listWorkflowActionRequired(
   }
   items.sort((a, b) => (a.gate.waitingSince ?? a.runCreatedAt) - (b.gate.waitingSince ?? b.runCreatedAt));
   return { items, count: items.length };
-}
-
-/**
- * The assistant a parked run executes as. `workflowAssistantId` throws on a
- * malformed id because it guards writes and dispatch; this list only
- * reports, and a run with a broken snapshot still needs its approval to be
- * reachable. Such a run reports no assistant instead of failing the list.
- */
-function parkedRunAssistantId(definition: unknown): string | undefined {
-  try {
-    return workflowAssistantId(definition);
-  } catch {
-    return undefined;
-  }
 }
 
 function workflowActionTrigger(params: unknown): ListWorkflowActionRequiredResponse["items"][number]["trigger"] {

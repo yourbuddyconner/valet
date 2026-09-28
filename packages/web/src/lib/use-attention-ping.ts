@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
 import { useRouterState } from "@tanstack/react-router";
 import type { NotificationKind, NotificationSummary } from "@valet/api/wire";
+import { useEffect, useRef } from "react";
 import { useNotifications } from "~/api/queries";
 import { playAttentionChime } from "./notification-sound";
+import { useWorkspaceScope } from "./workspace-scope";
 
 /**
  * Tells you when the assistant is waiting on you, out loud.
@@ -93,6 +94,7 @@ export interface PingContext {
   search: string;
   /** `document.visibilityState === "visible"`. */
   tabVisible: boolean;
+  workspace?: string;
 }
 
 /**
@@ -107,29 +109,19 @@ export function shouldPing(n: NotificationSummary, ctx: PingContext): boolean {
   if (!isActionable(n)) return false;
   if (!ctx.tabVisible) return true;
   if (n.href === undefined) return true;
-  return !hrefMatchesLocation(n.href, ctx.pathname, ctx.search);
+  return !hrefMatchesLocation(n.href, ctx.pathname, ctx.search, ctx.workspace);
 }
 
-/**
- * Does `href` point at the conversation currently on screen?
- *
- * The path alone does not answer this. Every assistant conversation lives
- * at `/chat`, with `?assistant=` naming which one, so comparing paths made
- * a gate raised by ANY other assistant silent while the reader sat on
- * `/chat` looking at a different one — the case this product exists to
- * catch, and the common case now that a user has several assistants and
- * teams have their own.
- *
- * `assistant` is compared; `thread` deliberately is not. The assistant
- * identifies the conversation, while a thread is a place within one the
- * reader can already see.
- */
-export function hrefMatchesLocation(href: string, pathname: string, search: string): boolean {
+/** Suppress a sound only when its workspace and target thread are on screen. */
+export function hrefMatchesLocation(href: string, pathname: string, search: string, workspace?: string): boolean {
   const [path, query = ""] = href.split("?");
   if (path !== pathname) return false;
-  const target = new URLSearchParams(query).get("assistant");
-  if (target === null) return true;
-  return new URLSearchParams(search.replace(/^\?/, "")).get("assistant") === target;
+  const target = new URLSearchParams(query);
+  const current = new URLSearchParams(search.replace(/^\?/, ""));
+  const targetWorkspace = target.get("workspace");
+  if (targetWorkspace !== null && targetWorkspace !== (current.get("workspace") ?? workspace)) return false;
+  const thread = target.get("thread");
+  return thread === null || thread === current.get("thread");
 }
 
 /** The document title, with the count of things waiting on you. Restores
@@ -140,6 +132,7 @@ export function titleWithCount(base: string, count: number): string {
 
 export function useAttentionPing(): void {
   const notificationsQ = useNotifications();
+  const { key: workspace } = useWorkspaceScope();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const search = useRouterState({ select: (s) => s.location.searchStr });
 
@@ -173,6 +166,7 @@ export function useAttentionPing(): void {
     const ctx: PingContext = {
       pathname,
       search,
+      workspace,
       tabVisible: typeof document !== "undefined" && document.visibilityState === "visible",
     };
     if (!fresh.some((n) => shouldPing(n, ctx))) return;
@@ -182,7 +176,7 @@ export function useAttentionPing(): void {
     if (now - lastPingAt.current < PING_COOLDOWN_MS) return;
     lastPingAt.current = now;
     playAttentionChime();
-  }, [notifications, pathname, search]);
+  }, [notifications, pathname, search, workspace]);
 
   // The title the page chose for itself, captured once before this hook
   // first writes to it. Prefixing THAT rather than a hardcoded product name

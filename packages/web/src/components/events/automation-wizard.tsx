@@ -29,8 +29,31 @@
  * rule needs no separate event-trigger endpoint.
  */
 import { Link } from "@tanstack/react-router";
+import type {
+  EventSubscriptionAudienceWire,
+  EventSubscriptionCollisionsWire,
+  EventSubscriptionFilterWire,
+} from "@valet/api/wire";
 import { useEffect, useRef, useState } from "react";
-import { useDebouncedValue } from "~/hooks/use-debounced-value";
+import { useCreateEventSubscription, useEventCatalog, useFilterOptions } from "~/api/events";
+import { useIdentityLinks } from "~/api/queries";
+import { useTeams } from "~/api/settings";
+import { useCreateSchedule, useWorkflows } from "~/api/workflows";
+import { CollisionNotice, collisionsFromError } from "~/components/events/collision-notice";
+import {
+  FilterEditor,
+  incompleteFilterRow,
+  NO_CHANNEL_MATCH_HELP,
+  pruneFilterRows,
+  toWireFilters,
+  type FilterField,
+  type UiFilterRow,
+} from "~/components/events/filter-editor";
+import {
+  PromptFields,
+  promptFieldsToTarget,
+  type PromptFieldsValue,
+} from "~/components/events/prompt-fields";
 import {
   Button,
   Dialog,
@@ -41,38 +64,12 @@ import {
   Label,
   LoadingRow,
 } from "~/components/primitives";
-import type {
-  EventSubscriptionAudienceWire,
-  EventSubscriptionCollisionsWire,
-  EventSubscriptionFilterWire,
-} from "@valet/api/wire";
-import { CollisionNotice, collisionsFromError } from "~/components/events/collision-notice";
-import {
-  PromptFields,
-  promptFieldsToTarget,
-  type PromptFieldsValue,
-} from "~/components/events/prompt-fields";
-import {
-  FilterEditor,
-  incompleteFilterRow,
-  pruneFilterRows,
-  toWireFilters,
-  type FilterField,
-  type UiFilterRow,
-  NO_CHANNEL_MATCH_HELP,
-} from "~/components/events/filter-editor";
-import { useAssistants } from "~/api/assistants";
-import { assistantLabel } from "~/components/session/assistant-rail";
-import { orchestratorName } from "~/lib/assistant-name";
-import { useCreateEventSubscription, useEventCatalog, useFilterOptions } from "~/api/events";
-import { useIdentityLinks } from "~/api/queries";
-import { useCreateSchedule, useWorkflows } from "~/api/workflows";
-import { useTeams } from "~/api/settings";
+import { useDebouncedValue } from "~/hooks/use-debounced-value";
 import { errorText } from "~/lib/error-text";
 // The reply outcome always subscribes to this one event key, so the reader
 // never sees a raw event picker for it.
-import { hasChannelScopeFilter, SLACK_APP_MENTION } from "~/lib/slack-mention";
 import { useActiveWorkspace } from "~/components/workspace-clause";
+import { hasChannelScopeFilter, SLACK_APP_MENTION } from "~/lib/slack-mention";
 
 /** One picked channel: the Slack id plus the display label the picker showed. */
 interface SelectedChannel {
@@ -131,52 +128,6 @@ function initialTarget(scopedTeamId: string | undefined): TargetChoice {
  * the team dashboard: a seeded default is "Default assistant", not "Untitled
  * assistant".
  */
-function AssistantSelect({
-  owner,
-  value,
-  onChange,
-  required = false,
-}: {
-  /** No id for the user case: the list route returns only the CALLER's own
-   * user-owned assistants, so `type === "user"` already names one person. */
-  owner: { type: "user" } | { type: "team"; id: string };
-  value: string | undefined;
-  onChange: (assistantId: string | undefined) => void;
-  required?: boolean;
-}) {
-  const assistantsQ = useAssistants();
-  const owned = (assistantsQ.data?.assistants ?? []).filter((a) =>
-    owner.type === "user" ? a.owner.type === "user" : a.owner.type === "team" && a.owner.id === owner.id,
-  );
-  if (required && assistantsQ.error) return <ErrorRow>Could not load assistants. Close setup and try again.</ErrorRow>;
-  if (required && !assistantsQ.data) return <LoadingRow />;
-  if (required && owned.length === 0) return <p className="text-sm text-muted">Create a team assistant on the Assistants page, then return here.</p>;
-  if (!required && owned.length < 2) return null;
-  return (
-    <div className="ml-6 mt-1">
-      <select
-        aria-label="Assistant"
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)}
-        className="w-full min-w-0 truncate min-h-11 rounded border border-line bg-paper px-2 py-1.5 sm:min-h-0 text-sm text-ink"
-      >
-        <option value="">
-          {required ? "Choose an assistant" : owned.find((a) => a.isDefault)?.name?.trim()
-            ? `Default (${owned.find((a) => a.isDefault)?.name})`
-            : orchestratorName(undefined)}
-        </option>
-        {owned.map((a) => (
-          <option key={a.id} value={a.id}>
-            {assistantLabel(a)}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-/** The step labels for one outcome. The reply outcome skips the separate Then
- * step: its single config step holds the assistant choice too. */
 function stepPlan(outcome: Outcome): { labels: string[]; count: Step } {
   if (outcome === "reply") {
     return { labels: ["What", "Reply", "Review"], count: 3 };
@@ -201,7 +152,6 @@ export function AutomationWizard({
   const createSchedule = useCreateSchedule();
   const ws = useActiveWorkspace();
   const teamsQ = useTeams();
-  const assistantsQ = useAssistants();
   const scopedTeam = replyTeam ?? (ws?.kind === "team" ? ws.team : undefined);
   const scopedTeamId = scopedTeam?.id;
 
@@ -302,8 +252,7 @@ export function AutomationWizard({
 
   const workflowChosen = target.kind === "workflow" && target.workflowId.length > 0;
   const targetReady = replyTeam
-    ? !assistantsQ.error && target.kind === "orchestrator" && target.orchestrator === "team" && target.teamId === replyTeam.id &&
-      (assistantsQ.data?.assistants.some((a) => a.id === target.assistantId && a.owner.type === "team" && a.owner.id === replyTeam.id) ?? false)
+    ? target.kind === "orchestrator" && target.orchestrator === "team" && target.teamId === replyTeam.id
     : target.kind === "orchestrator" || workflowChosen;
 
   // Which step the reader is on decides whether Next is allowed. Each gate
@@ -796,7 +745,7 @@ function ReplyStep({
       </div>
 
       <div>
-        <p className="mb-1.5 text-xs font-medium text-muted">Which assistant answers</p>
+        <p className="mb-1.5 text-xs font-medium text-muted">Workspace</p>
         <div className="space-y-1.5">
           {!fixedTeam && <label className="flex min-h-11 items-center gap-2 text-sm text-ink sm:min-h-0">
             <input
@@ -805,29 +754,18 @@ function ReplyStep({
               checked={target.orchestrator === "user"}
               onChange={() => onTargetChange({ kind: "orchestrator", orchestrator: "user" })}
             />
-            Your assistant
+            Personal workspace
           </label>}
-          {target.orchestrator === "user" && (
-            <AssistantSelect
-              owner={{ type: "user" }}
-              value={target.assistantId}
-              onChange={(assistantId) =>
-                onTargetChange({ kind: "orchestrator", orchestrator: "user", assistantId })
-              }
-            />
-          )}
+
           {scopedTeam && (
             <div>
               <label className="flex min-h-11 items-center gap-2 text-sm text-ink sm:min-h-0">
                 <input type="radio" name="automation-reply-target" disabled={fixedTeam}
                   checked={target.orchestrator === "team"}
                   onChange={() => onTargetChange({ kind: "orchestrator", orchestrator: "team", teamId: scopedTeam.id })} />
-                {scopedTeam.name}&apos;s assistant
+                {scopedTeam.name}
               </label>
-              {target.orchestrator === "team" && (
-                <AssistantSelect required={fixedTeam} owner={{ type: "team", id: scopedTeam.id }} value={target.assistantId}
-                  onChange={(assistantId) => onTargetChange({ kind: "orchestrator", orchestrator: "team", teamId: scopedTeam.id, assistantId })} />
-              )}
+
             </div>
           )}
           {!fixedTeam && <label className="flex min-h-11 items-center gap-2 text-sm text-ink sm:min-h-0">
@@ -1274,17 +1212,9 @@ function ThenStep({
               checked={target.kind === "orchestrator" && target.orchestrator === "user"}
               onChange={() => onTargetChange({ kind: "orchestrator", orchestrator: "user" })}
             />
-            Notify your assistant
+            Notify your personal workspace
           </label>
-          {target.kind === "orchestrator" && target.orchestrator === "user" && (
-            <AssistantSelect
-              owner={{ type: "user" }}
-              value={target.assistantId}
-              onChange={(assistantId) =>
-                onTargetChange({ kind: "orchestrator", orchestrator: "user", assistantId })
-              }
-            />
-          )}
+
           {/* Only the active workspace's team is offered. Targeting a different
               team is a workspace change, not a form field. */}
           {scopedTeam && (
@@ -1297,23 +1227,10 @@ function ThenStep({
                   onTargetChange({ kind: "orchestrator", orchestrator: "team", teamId: scopedTeam.id })
                 }
               />
-              Notify {scopedTeam.name}&apos;s assistant
+              Notify {scopedTeam.name}
             </label>
           )}
-          {scopedTeam && target.kind === "orchestrator" && target.orchestrator === "team" && (
-            <AssistantSelect
-              owner={{ type: "team", id: scopedTeam.id }}
-              value={target.assistantId}
-              onChange={(assistantId) =>
-                onTargetChange({
-                  kind: "orchestrator",
-                  orchestrator: "team",
-                  teamId: scopedTeam.id,
-                  assistantId,
-                })
-              }
-            />
-          )}
+
           <label className="flex min-h-11 items-center gap-2 text-sm text-ink sm:min-h-0">
             <input
               type="radio"
@@ -1321,7 +1238,7 @@ function ThenStep({
               checked={target.kind === "orchestrator" && target.orchestrator === "org"}
               onChange={() => onTargetChange({ kind: "orchestrator", orchestrator: "org" })}
             />
-            Notify the org assistant
+            Notify the organization
           </label>
         </>
       )}

@@ -30,14 +30,12 @@
  * `onOpenChange` + `Dialog`/`DialogContent`/`DialogFooter` composition, same
  * "stays open with the mutation's error on failure" pattern.
  */
-import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Button, Dialog, DialogContent, DialogFooter, Input, Label } from "~/components/primitives";
-import { RadioCard } from "~/components/settings/radio-card";
-import { ModelCombobox } from "~/components/settings/model-combobox";
+import { useEffect, useRef, useState } from "react";
 import { useCreateWorkflow } from "~/api/workflows";
-import { useAssistants } from "~/api/assistants";
-import { useWorkspaceScope } from "~/lib/workspace-scope";
+import { Button, Dialog, DialogContent, DialogFooter, Input, Label } from "~/components/primitives";
+import { ModelCombobox } from "~/components/settings/model-combobox";
+import { RadioCard } from "~/components/settings/radio-card";
 import {
   autoLayout,
   createDefaultWorkflowDefinition,
@@ -45,7 +43,7 @@ import {
   type WorkflowNode,
 } from "~/components/workflows/editor-model";
 import { errorText } from "~/lib/error-text";
-import { assistantLabel } from "~/lib/assistant-name";
+import { useWorkspaceScope } from "~/lib/workspace-scope";
 
 const DEFAULT_NAME = "Untitled workflow";
 
@@ -372,18 +370,6 @@ function WorkflowCreationForm({ open, onOpenChange, teamId }: {
   const [modelTouched, setModelTouched] = useState(false);
   // The active workspace owns it. An Owner select here duplicated the nav's
   // workspace switcher and could contradict it.
-  const assistantsQ = useAssistants({ enabled: open });
-  const [selectedAssistantId, setSelectedAssistantId] = useState("");
-  const availableAssistants = (assistantsQ.data?.assistants ?? []).filter((assistant) =>
-    teamId === undefined
-      ? assistant.owner.type === "user"
-      : assistant.owner.type === "team" && assistant.owner.id === teamId,
-  );
-  const missingSelection = selectedAssistantId !== "" && !availableAssistants.some((assistant) => assistant.id === selectedAssistantId);
-  const assistantId = selectedAssistantId !== ""
-    ? availableAssistants.find((assistant) => assistant.id === selectedAssistantId)?.id
-    : availableAssistants.find((assistant) => assistant.isDefault)?.id ?? availableAssistants[0]?.id;
-
   const preset = WORKFLOW_PRESETS.find((p) => p.id === presetId) ?? WORKFLOW_PRESETS[0]!;
 
   function selectPreset(next: WorkflowPreset): void {
@@ -398,17 +384,16 @@ function WorkflowCreationForm({ open, onOpenChange, teamId }: {
     setNameTouched(false);
     setModel(WORKFLOW_PRESETS[0]!.recommendedModel);
     setModelTouched(false);
-    setSelectedAssistantId("");
   }
 
   async function submit() {
     const trimmed = name.trim();
-    if (!open || create.isPending || !trimmed || !assistantId || assistantsQ.isLoading || assistantsQ.error) return;
+    if (!open || create.isPending || !trimmed) return;
     const requestGeneration = generation.current;
     try {
       const created = await create.mutateAsync({
         name: trimmed,
-        definition: { ...withWorkflowModel(preset.build(), model), assistantId },
+        definition: withWorkflowModel(preset.build(), model),
         ...(teamId === undefined ? {} : { teamId }),
       });
       // A workspace change unmounts this form. Its late response must not
@@ -429,21 +414,6 @@ function WorkflowCreationForm({ open, onOpenChange, teamId }: {
         title="New workflow"
         description="Choose a starting shape. Every one of them runs as it is, and you can rebuild it in the editor."
       >
-        <div className="grid gap-1">
-          <Label htmlFor="workflow-orchestrator">Orchestrator</Label>
-          <select id="workflow-orchestrator" value={assistantId ?? ""}
-            className="rounded border border-line bg-paper px-3 py-2 text-sm"
-            disabled={assistantsQ.isLoading || !!assistantsQ.error || create.isPending}
-            onChange={(event) => setSelectedAssistantId(event.target.value)}>
-            {!assistantId && <option value="">{assistantsQ.isLoading ? "Loading orchestrators…" : missingSelection ? "Choose an orchestrator again" : "No orchestrators available"}</option>}
-            {availableAssistants.map((assistant) => <option key={assistant.id} value={assistant.id}>
-              {assistantLabel(assistant)}{assistant.isDefault ? " (default)" : ""}
-            </option>)}
-          </select>
-          {assistantsQ.error ? <p className="text-xs text-danger-600">Could not load orchestrators. <button type="button" onClick={() => void assistantsQ.refetch()}>Retry</button></p>
-            : !assistantsQ.isLoading && missingSelection ? <p role="alert" className="text-xs text-danger-600">The selected orchestrator is no longer available. Choose another orchestrator.</p>
-            : !assistantsQ.isLoading && !assistantId && <p className="text-xs text-muted">Create an orchestrator in this workspace first.</p>}
-        </div>
         <div className="grid gap-1">
           <Label htmlFor="workflow-name">Name</Label>
           <Input
@@ -506,7 +476,7 @@ function WorkflowCreationForm({ open, onOpenChange, teamId }: {
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={create.isPending}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={create.isPending || !name.trim() || !assistantId || assistantsQ.isLoading || !!assistantsQ.error}>
+          <Button onClick={() => void submit()} disabled={create.isPending || !name.trim()}>
             {create.isPending ? "Creating…" : "Create"}
           </Button>
         </DialogFooter>

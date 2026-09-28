@@ -53,9 +53,8 @@
  * The persona routes never take the user path; M6 adds the human review
  * surface separately.
  */
-import { randomUUID } from "node:crypto";
-import { Hono, type Context } from "hono";
-import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import type { Principal } from "@valet/engine";
+import type { PlanCell } from "@valet/plugin-security";
 import {
   bundledPersonaIds,
   cellDir,
@@ -67,15 +66,24 @@ import {
   SECURITY_PRESETS,
   serializePlan,
 } from "@valet/plugin-security";
-import type { PlanCell } from "@valet/plugin-security";
-import { seedSecurityReview } from "../services/security-seed.js";
-import type { Principal } from "@valet/engine";
+import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import { Hono, type Context } from "hono";
+import { randomUUID } from "node:crypto";
+import { resolveApiTokenOrNull, resolveChangedFiles, resolveRefSha } from "../bakes/source-service.js";
+import { publicUrlFromEnv } from "../channels/host.js";
+import { loadSessionMeta } from "../engine/session-meta.js";
 import type { AppEnv } from "../env.js";
 import type { AppDb } from "../lib/drizzle.js";
 import { isValidInternalToken } from "../lib/internal-auth.js";
 import { deriveSecretKey } from "../lib/secret-crypto.js";
 import { requirePrincipal, requireUser, type AuthUser } from "../middleware/auth.js";
-import { publicUrlFromEnv } from "../channels/host.js";
+import { attentionHref } from "../orchestrator/attention-wiring.js";
+import { routeAttention, type AttentionDeps } from "../orchestrator/attention.js";
+import {
+  buildChildStatusReader,
+  ChildLimitError,
+  resolveChildSettlement,
+} from "../orchestrator/children.js";
 import { buildActionInvoker } from "../plugins/action-invoker.js";
 import { persistInvocationAudit } from "../policies/service.js";
 import {
@@ -95,23 +103,13 @@ import {
   type SecurityHandoffRow,
   type SecurityNeedRow,
 } from "../schema/index.js";
-import { canAdministerSession, canViewSession } from "../services/session-access.js";
-import { routeAttention, type AttentionDeps } from "../orchestrator/attention.js";
-import { attentionHref } from "../orchestrator/attention-wiring.js";
-import { loadSessionMeta } from "../engine/session-meta.js";
-import { resolveApiTokenOrNull, resolveChangedFiles, resolveRefSha } from "../bakes/source-service.js";
-import {
-  buildChildStatusReader,
-  ChildLimitError,
-  resolveChildSettlement,
-} from "../orchestrator/children.js";
 import {
   createSecurityEngagementService,
   type CellProgress,
   type FindingSeverity,
   type FindingStatus,
-  type SecurityReport,
   type NeedKind,
+  type SecurityReport,
   type SpawnCellChild,
 } from "../services/security-engagements.js";
 import {
@@ -128,25 +126,24 @@ import {
   type IssueProvider,
   type SecurityIssuesDeps,
 } from "../services/security-issues.js";
+import { seedSecurityReview } from "../services/security-seed.js";
+import { canAdministerSession, canViewSession } from "../services/session-access.js";
 import type {
+  GetSecurityReportResponse,
   GetSecurityStatusResponse,
   GetSessionSecurityResponse,
   ListSecurityCoverageResponse,
   ListSecurityFilesResponse,
   ListSecurityFindingsResponse,
-  SecurityCellWire,
-  SecurityCoverageWire,
-  SecurityReportCoverageResponse,
-  SecurityNeedWire,
-  SecurityReportNeedResponse,
   ListSecurityNeedsResponse,
-  SecurityResolveNeedsResponse,
+  SecurityAddFindingCommentResponse,
+  SecurityCellWire,
   SecurityCloseResponse,
   SecurityCompleteCellResponse,
+  SecurityCoverageWire,
   SecurityDigestIssueResponse,
   SecurityDispatchResponse,
   SecurityEngagementWire,
-  SecurityAddFindingCommentResponse,
   SecurityFailCellResponse,
   SecurityFileIssueResponse,
   SecurityFindingCommentWire,
@@ -154,12 +151,14 @@ import type {
   SecurityFindingWire,
   SecurityHandoffResponse,
   SecurityHandoffWire,
-  SecurityReportFindingResponse,
-  SecurityReportWire,
-  GetSecurityReportResponse,
-  SecurityWriteReportResponse,
+  SecurityNeedWire,
   SecurityPlanCellWire,
   SecurityPreviewResponse,
+  SecurityReportCoverageResponse,
+  SecurityReportFindingResponse,
+  SecurityReportNeedResponse,
+  SecurityReportWire,
+  SecurityResolveNeedsResponse,
   SecurityReviewFindingResponse,
   SecuritySetConfigResponse,
   SecuritySetPlanResponse,
@@ -167,6 +166,7 @@ import type {
   SecurityToolDeclWire,
   SecurityTreeFileResponse,
   SecurityWriteFileResponse,
+  SecurityWriteReportResponse,
 } from "../wire/types.js";
 
 export const securityRouter = new Hono<AppEnv>();
@@ -1751,7 +1751,7 @@ securityRouter.post("/:id/security/close", async (c) => {
       sessionId,
       title: manifest.status === "completed" ? "Security review complete" : "Security review ended",
       body: `${manifest.repoFullName} review ${ended}. ${findingSummary(manifest.findings.distinctBySeverity)}`,
-      href: attentionHref(sessionId),
+      href: attentionHref(sessionId, undefined, sessionOwner(row)),
       dedupeKey: `security-close:${result.engagement.id}`,
     }).catch((err) => {
       // Best-effort: a notification failure must not fail the close.
@@ -2524,7 +2524,7 @@ securityRouter.post("/:id/security/cancel", async (c) => {
     sessionId,
     title: "Security review cancelled",
     body: `${result.engagement.repoFullName} review cancelled.`,
-    href: attentionHref(sessionId),
+    href: attentionHref(sessionId, undefined, sessionOwner(row)),
     dedupeKey: `security-close:${result.engagement.id}`,
   }).catch((err) => {
     console.error(`security cancel: attention route failed for ${result.engagement.id}:`, err);

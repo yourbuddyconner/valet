@@ -7,8 +7,6 @@
  * `assistantLabel`, so an unnamed default reads "Default Orchestrator" on every
  * surface instead of "Untitled assistant" on this one.
  */
-import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type {
   AssistantSummary,
@@ -17,6 +15,8 @@ import type {
   ListTeamsResponse,
   TeamChildSummary,
 } from "@valet/api/wire";
+import type { ReactNode } from "react";
+import { describe, expect, it, vi } from "vitest";
 
 let assistantsData: ListAssistantsResponse = { assistants: [] };
 let teamsData: ListTeamsResponse = { teams: [] };
@@ -73,7 +73,6 @@ vi.mock("~/api/memory", async (importOriginal) => {
   return { ...actual, useMemoryTree: () => ({ data: { entries: [] }, error: null }) };
 });
 
-import { assistantLabel } from "~/components/session/assistant-rail";
 import { TeamDashboard, mergeTeamFeed } from "./team-dashboard";
 
 function child(overrides: Partial<TeamChildSummary> = {}): TeamChildSummary {
@@ -147,36 +146,11 @@ describe("mergeTeamFeed", () => {
 });
 
 describe("TeamDashboard header", () => {
-  beforeEach(() => {
-    assistantsData = { assistants: [] };
-    teamsData = { teams: [] };
-  });
-
-  it("opens the full assistants list from the team action and individual editors from names", () => {
-    assistantsData = { assistants: [teamAssistant({ name: "Sentinel" }), teamAssistant({ id: "asst_second", name: "Scout", isDefault: false })] };
+  it("opens workspace threads instead of profile editors", () => {
+    assistantsData = { assistants: [teamAssistant({ name: "Sentinel" })] };
     render(<TeamDashboard teamId="team-1" />);
-    expect(screen.getByRole("link", { name: "Edit assistant" }).getAttribute("href")).toBe("/assistants");
-    expect(screen.getByRole("link", { name: "Sentinel" }).getAttribute("href")).toBe("/assistants/asst_team");
-    expect(screen.getByRole("link", { name: "Scout" }).getAttribute("href")).toBe("/assistants/asst_second");
-  });
-
-  it("names an unnamed team default the way every other surface does", () => {
-    const assistant = teamAssistant();
-    assistantsData = { assistants: [assistant] };
-
-    render(<TeamDashboard teamId="team-1" />);
-
-    expect(screen.getByText(assistantLabel(assistant))).toBeDefined();
-    expect(screen.queryByText("Untitled assistant")).toBeNull();
-  });
-
-  it("keeps a named team assistant's own name", () => {
-    const assistant = teamAssistant({ name: "Sentinel" });
-    assistantsData = { assistants: [assistant] };
-
-    render(<TeamDashboard teamId="team-1" />);
-
-    expect(screen.getByText("Sentinel")).toBeDefined();
-    expect(screen.queryByText("Default Orchestrator")).toBeNull();
+    expect(screen.getByRole("link", { name: "Open threads" }).getAttribute("href")).toBe("/chat");
+    expect(screen.queryByRole("link", { name: "Edit assistant" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Sentinel" })).toBeNull();
   });
 });

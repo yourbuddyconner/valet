@@ -1,13 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import sharp from "sharp";
 import { eq } from "drizzle-orm";
-import { bootTestApi, type TestApi } from "./_setup.js";
+import sharp from "sharp";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { users } from "../schema/index.js";
 import type {
   CreateAssistantResponse,
   ProfilePictureUploadResponse,
 } from "../wire/types.js";
 import { PROFILE_PICTURE_MAX_BYTES } from "../wire/types.js";
+import { bootTestApi, type TestApi } from "./_setup.js";
 
 const MEMBER_HEADERS = { "x-valet-test-user-id": "test-member" };
 
@@ -43,9 +43,9 @@ async function createAssistant(api: TestApi): Promise<CreateAssistantResponse> {
   const response = await fetch(`${api.baseUrl}/api/assistants`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "Picture Bot" }),
+    body: "{}",
   });
-  expect(response.status).toBe(201);
+  expect(response.status).toBe(200);
   return response.json() as Promise<CreateAssistantResponse>;
 }
 
@@ -92,13 +92,8 @@ describe("profile-picture uploads", () => {
       method: "POST",
       body: uploadBody(source),
     });
-    expect(assistantResponse.status).toBe(200);
-    const assistantResult = (await assistantResponse.json()) as ProfilePictureUploadResponse;
-    const listed = await fetch(`${api.baseUrl}/api/assistants`).then((response) => response.json()) as {
-      assistants: Array<{ id: string; avatarUrl?: string }>;
-    };
-    expect(listed.assistants.find((item) => item.id === assistant.id)?.avatarUrl).toBe(assistantResult.avatarUrl);
-    expect((await fetch(assistantResult.avatarUrl)).status).toBe(200);
+    expect(assistantResponse.status).toBe(409);
+
   });
 
   it("scopes user writes to the caller and hides another owner's assistant", async () => {

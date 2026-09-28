@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
 import type { PluginActionContext } from "@valet/engine";
+import { eq } from "drizzle-orm";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
-import { assistants, sessionThreads, teams, teamMembers, workflowDefinitions } from "../schema/index.js";
-import { buildWorkflowEngineDeps } from "./engine-deps.js";
+import { assistants, sessionThreads, teamMembers, teams, workflowDefinitions } from "../schema/index.js";
 import { workflowsActionPlugin } from "./actions.js";
-import { createWorkflowDefinition, copyWorkflowDefinition, updateWorkflowDefinition, retryWorkflowRun, startWorkflowRun } from "./service.js";
+import { buildWorkflowEngineDeps } from "./engine-deps.js";
+import { copyWorkflowDefinition, createWorkflowDefinition, retryWorkflowRun, startWorkflowRun, updateWorkflowDefinition } from "./service.js";
 
 let api: TestApi | undefined;
 afterEach(async () => { await api?.cleanup(); api = undefined; });
@@ -22,45 +22,43 @@ async function setup() {
     { teamId: "team-b", userId: "local-user", role: "admin" },
   ]);
   await p.db.insert(assistants).values([
-    { id: "chosen", orgId: "local-org", ownerType: "team", ownerId: "team-a", sessionId: "assistant:chosen", isDefault: false, createdAt: 1 },
     { id: "default-a", orgId: "local-org", ownerType: "team", ownerId: "team-a", sessionId: "assistant:default-a", isDefault: true, createdAt: 1 },
     { id: "other", orgId: "local-org", ownerType: "team", ownerId: "team-b", sessionId: "assistant:other", isDefault: true, createdAt: 1 },
-    { id: "foreign", orgId: "other-org", ownerType: "team", ownerId: "team-a", sessionId: "assistant:foreign", isDefault: false, createdAt: 1 },
-    { id: "personal", orgId: "local-org", ownerType: "user", ownerId: "local-user", sessionId: "assistant:personal", isDefault: false, createdAt: 1 },
+    { id: "personal", orgId: "local-org", ownerType: "user", ownerId: "local-user", sessionId: "assistant:personal", isDefault: true, createdAt: 1 },
   ]);
   return { api, p, deps: { db: p.db, workflowStore: p.workflowStore, workflowRunHost: p.workflowRunHost, credentials: p.engineCredentials, engineStore: p.engineStore } };
 }
 const owner = { userId: "local-user", orgId: "local-org" };
 
-describe("workflow explicit assistant routing", () => {
+describe("workflow workspace routing", () => {
   it("rejects cross-team, foreign-org, missing and malformed selections through HTTP, including updates", async () => {
     const { api, p } = await setup();
     for (const assistantId of ["other", "foreign", "missing", 42, ""]) {
       const res = await fetch(`${api.baseUrl}/api/workflows`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Rejected", teamId: "team-a", definition: { ...graph, assistantId } }) });
-      expect(res.status).toBe(typeof assistantId === "number" || assistantId === "" ? 400 : 404);
+      expect(res.status).toBe(400);
     }
     expect(await p.db.select().from(workflowDefinitions)).toEqual([]);
-    const res = await fetch(`${api.baseUrl}/api/workflows`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Chosen", teamId: "team-a", definition: { ...graph, assistantId: "chosen" } }) });
+    const res = await fetch(`${api.baseUrl}/api/workflows`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Chosen", teamId: "team-a", definition: graph }) });
     expect(res.status).toBe(201);
     const created = await res.json() as { id: string; ownerType: string; ownerId: string };
     expect(created).toMatchObject({ ownerType: "team", ownerId: "team-a" });
     const rejected = await fetch(`${api.baseUrl}/api/workflows/${created.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ definition: { ...graph, assistantId: "other" } }) });
-    expect(rejected.status).toBe(404);
+    expect(rejected.status).toBe(400);
     const saved = await (await fetch(`${api.baseUrl}/api/workflows/${created.id}`)).json();
-    expect(saved).toMatchObject({ definition: { assistantId: "chosen" } });
+    expect(saved).toMatchObject({ definition: graph });
   });
 
-  it("binds an orchestrator-created team workflow and preserves explicitly supplied routing", async () => {
+  it("creates team-owned workflows without assistant routing and rejects explicit overrides", async () => {
     const { p, deps } = await setup();
     const save = workflowsActionPlugin(() => deps).actions.find((a) => a.id === "workflows.save_workflow");
     if (!save) throw new Error("Missing save action");
     // This action only reads identity fields; credentials and sandbox are unused.
-    const ctx = { ...owner, sessionId: "assistant:chosen", owner: { type: "team", id: "team-a" }, actionId: "workflows.save_workflow", service: "workflows" } as PluginActionContext;
+    const ctx = { ...owner, sessionId: "assistant:default-a", owner: { type: "team", id: "team-a" }, actionId: "workflows.save_workflow", service: "workflows" } as PluginActionContext;
     expect((await save.execute({ name: "Implicit", definition: graph }, ctx)).success).toBe(true);
-    expect((await save.execute({ name: "Explicit", definition: { ...graph, assistantId: "default-a" } }, ctx)).success).toBe(true);
+    expect((await save.execute({ name: "Explicit", definition: { ...graph, assistantId: "default-a" } }, ctx)).success).toBe(false);
     const rows = await p.db.select().from(workflowDefinitions);
-    expect(rows.find((r) => r.name === "Implicit")).toMatchObject({ ownerType: "team", ownerId: "team-a", definition: { assistantId: "chosen" } });
-    expect(rows.find((r) => r.name === "Explicit")).toMatchObject({ definition: { assistantId: "default-a" } });
+    expect(rows.find((r) => r.name === "Implicit")).toMatchObject({ ownerType: "team", ownerId: "team-a", definition: graph });
+    expect(rows.find((r) => r.name === "Explicit")).toBeUndefined();
     const implicit = rows.find((r) => r.name === "Implicit");
     if (!implicit) throw new Error("Missing implicit workflow");
     const teamContext = { ...ctx, userId: "team:team-a" };
@@ -114,28 +112,28 @@ describe("workflow explicit assistant routing", () => {
     expect(departedList.data).toMatchObject({ workflows: [] });
   });
 
-  it("rebinds cross-workspace copies and retains routing for same-owner copies", async () => {
+  it("copies definitions across workspaces without carrying an assistant identity", async () => {
     const { deps } = await setup();
-    const team = await createWorkflowDefinition(deps, owner, { name: "Source", teamId: "team-a", definition: { ...graph, assistantId: "chosen" } });
+    const team = await createWorkflowDefinition(deps, owner, { name: "Source", teamId: "team-a", definition: graph });
     const personal = await copyWorkflowDefinition(deps, owner, team.id);
     expect(personal?.ownerType).toBe("user");
-    expect(personal?.definition).not.toMatchObject({ assistantId: "chosen" });
+    expect(personal?.definition).toEqual(graph);
     if (!personal) throw new Error("Missing copy");
     const sameOwner = await copyWorkflowDefinition(deps, owner, personal.id);
     expect(sameOwner?.definition).toEqual(personal.definition);
     const otherTeam = await copyWorkflowDefinition(deps, owner, personal.id, { teamId: "team-b", name: "Destination" });
-    expect(otherTeam).toMatchObject({ ownerType: "team", ownerId: "team-b", definition: { assistantId: "other" } });
+    expect(otherTeam).toMatchObject({ ownerType: "team", ownerId: "team-b", definition: graph });
   });
 
   it("persists only direct active assistant origins and revalidates ownership", async () => {
     const { p, deps } = await setup();
     const created = await createWorkflowDefinition(deps, owner, {
-      name: "Origin", teamId: "team-a", definition: { ...graph, assistantId: "chosen" },
+      name: "Origin", teamId: "team-a", definition: graph,
     });
     const session = await p.engineHost.assistantSessionFor(
-      "chosen",
+      "default-a",
       { actorUserId: owner.userId, orgId: owner.orgId },
-      { sessionId: "assistant:chosen" },
+      { sessionId: "assistant:default-a" },
     );
     const thread = await session.createThread("web:origin");
     const start = vi.spyOn(p.workflowRunHost, "start").mockResolvedValue();
@@ -143,7 +141,7 @@ describe("workflow explicit assistant routing", () => {
     if (!action) throw new Error("Missing start action");
     const ctx = {
       ...owner,
-      sessionId: "assistant:chosen",
+      sessionId: "assistant:default-a",
       threadId: thread.id,
       owner: { type: "team", id: "team-a" },
       actionId: "workflows.start_run",
@@ -152,7 +150,7 @@ describe("workflow explicit assistant routing", () => {
 
     expect((await action.execute({ workflow_id: created.id }, ctx)).success).toBe(true);
     expect(start.mock.calls[0]?.[1]).toMatchObject({
-      origin: { assistantSessionId: "assistant:chosen", threadId: thread.id },
+      origin: { assistantSessionId: "assistant:default-a", threadId: thread.id },
     });
 
     // A session that is no assistant's carries no origin. The action does
@@ -164,7 +162,7 @@ describe("workflow explicit assistant routing", () => {
     // The service's thread checks reach the action path too.
     const archived = await session.createThread("web:archived-origin");
     await p.db.insert(sessionThreads).values({
-      id: archived.id, sessionId: "assistant:chosen", createdAt: Date.now(), archivedAt: Date.now(),
+      id: archived.id, sessionId: "assistant:default-a", createdAt: Date.now(), archivedAt: Date.now(),
     });
     expect((await action.execute({ workflow_id: created.id }, { ...ctx, threadId: archived.id })).success).toBe(true);
     expect(start.mock.calls[2]?.[1]).not.toHaveProperty("origin");
@@ -177,7 +175,7 @@ describe("workflow explicit assistant routing", () => {
   it("starts a team workflow from a personal assistant on the originating thread", async () => {
     const { p, deps } = await setup();
     const created = await createWorkflowDefinition(deps, owner, {
-      name: "Personal to team", teamId: "team-a", definition: { ...graph, assistantId: "chosen" },
+      name: "Personal to team", teamId: "team-a", definition: graph,
     });
     const session = await p.engineHost.assistantSessionFor(
       "personal",
@@ -230,23 +228,23 @@ describe("workflow explicit assistant routing", () => {
   it("drops an origin whose thread is archived and dispatches elsewhere", async () => {
     const { p, deps } = await setup();
     const created = await createWorkflowDefinition(deps, owner, {
-      name: "Archived origin", teamId: "team-a", definition: { ...graph, assistantId: "chosen" },
+      name: "Archived origin", teamId: "team-a", definition: graph,
     });
     const session = await p.engineHost.assistantSessionFor(
-      "chosen", { actorUserId: owner.userId, orgId: owner.orgId }, { sessionId: "assistant:chosen" },
+      "default-a", { actorUserId: owner.userId, orgId: owner.orgId }, { sessionId: "assistant:default-a" },
     );
     const thread = await session.createThread("web:origin");
     // What `PATCH /api/sessions/:id/threads/:threadId` writes: the engine
     // thread stays, and the app mirror row records the archive.
     await p.db.insert(sessionThreads).values({
-      id: thread.id, sessionId: "assistant:chosen", createdAt: Date.now(), archivedAt: Date.now(),
+      id: thread.id, sessionId: "assistant:default-a", createdAt: Date.now(), archivedAt: Date.now(),
     });
     vi.spyOn(p.workflowRunHost, "start").mockImplementation(async (id, params, definition, runOwner) => {
       await p.workflowStore.createRun(id, params, definition, params.definitionVersionId, runOwner);
     });
 
     const started = await startWorkflowRun(deps, owner, created.id, undefined, {
-      assistantSessionId: "assistant:chosen", threadId: thread.id,
+      assistantSessionId: "assistant:default-a", threadId: thread.id,
     });
     if (!started || !("runId" in started)) throw new Error("Run not started");
     const run = await p.workflowStore.getRun(started.runId);
@@ -266,7 +264,7 @@ describe("workflow explicit assistant routing", () => {
   it("retries a run whose origin thread is gone, without the origin", async () => {
     const { p, deps } = await setup();
     const created = await createWorkflowDefinition(deps, owner, {
-      name: "Gone origin", teamId: "team-a", definition: { ...graph, assistantId: "chosen" },
+      name: "Gone origin", teamId: "team-a", definition: graph,
     });
     const runId = "wfrun_origin_gone";
     await p.workflowStore.createRun(
@@ -275,7 +273,7 @@ describe("workflow explicit assistant routing", () => {
         workflowId: created.id,
         definitionVersionId: "v1",
         input: { type: "manual", timestamp: "2026-09-14T00:00:00.000Z", data: {}, metadata: {} },
-        origin: { assistantSessionId: "assistant:chosen", threadId: "th-deleted" },
+        origin: { assistantSessionId: "assistant:default-a", threadId: "th-deleted" },
       },
       created.definition,
       "v1",
@@ -304,26 +302,28 @@ describe("workflow explicit assistant routing", () => {
     expect(receipt.threadId).toBeTruthy();
   });
 
-  it("routes every node and repair to the run snapshot, preserves manual actor, and refuses archived targets", async () => {
+  it("routes every node and repair to the owning workspace and preserves the manual actor", async () => {
     const { p, deps } = await setup();
-    const created = await createWorkflowDefinition(deps, owner, { name: "Pinned", teamId: "team-a", definition: { ...graph, assistantId: "chosen" } });
+    const created = await createWorkflowDefinition(deps, owner, { name: "Pinned", teamId: "team-a", definition: graph });
     const unchanged = await updateWorkflowDefinition(deps, owner, created.id, { definition: graph });
-    expect(unchanged).toMatchObject({ definition: { assistantId: "chosen" } });
+    expect(unchanged).toMatchObject({ definition: graph });
     const start = vi.spyOn(p.workflowRunHost, "start").mockImplementation(async (id, params, definition, runOwner) => {
       await p.workflowStore.createRun(id, params, definition, params.definitionVersionId, runOwner);
     });
     const started = await startWorkflowRun(deps, owner, created.id);
     if (!started || !("runId" in started)) throw new Error("Run not started");
     expect(start.mock.calls[0]?.[3]).toEqual({ ownerType: "team", ownerId: "team-a", actorUserId: "local-user" });
-    await updateWorkflowDefinition(deps, owner, created.id, { definition: { ...graph, assistantId: "default-a" } });
+    await updateWorkflowDefinition(deps, owner, created.id, { name: "Edited after run started", definition: graph });
     const hostSpy = vi.spyOn(p.engineHost, "assistantSessionFor");
     const engine = buildWorkflowEngineDeps({ db: p.db, host: p.engineHost, store: p.workflowStore, engineStore: p.engineStore, actionPluginByService: p.actionPluginByService, credentials: p.engineCredentials });
     for (const node of ["one", "two", "one:repair"]) {
       const receipt = await engine.promptOrchestrator("hello", { dispatchId: `workflow:${started.runId}:${node}`, queueMode: "followup", ownerHint: { ownerType: "team", ownerId: "team-a" } });
-      expect(receipt.sessionId).toBe("assistant:chosen");
+      expect(receipt.sessionId).toBe("assistant:default-a");
     }
-    expect(hostSpy).toHaveBeenCalledWith("chosen", { actorUserId: "local-user", orgId: "local-org" }, { sessionId: "assistant:chosen" });
-    await p.db.update(assistants).set({ archivedAt: Date.now() }).where(eq(assistants.id, "chosen"));
-    await expect(engine.promptOrchestrator("hello", { dispatchId: `workflow:${started.runId}:three`, queueMode: "followup", ownerHint: { ownerType: "team", ownerId: "team-a" } })).rejects.toThrow("archived");
+    expect(hostSpy).toHaveBeenCalledWith("default-a", { actorUserId: "local-user", orgId: "local-org" }, { sessionId: "assistant:default-a" });
+    const run = await p.workflowStore.getRun(started.runId);
+    expect(run?.definition).toEqual(graph);
+    expect(run?.owner).toEqual({ ownerType: "team", ownerId: "team-a" });
+
   });
 });

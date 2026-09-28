@@ -1,3 +1,4 @@
+import { createAssistant, toAssistantSummary } from "../assistants/service.js";
 /**
  * The three reads behind the team dashboard
  * (`docs/specs/2026-08-27-team-dashboard-design.md`):
@@ -12,9 +13,8 @@
  * `local-user` is the member; `test-member` (the `x-valet-test-user-id`
  * stub header) stays OFF the team so every gate has a non-member to refuse.
  */
-import { describe, it, expect, afterEach } from "vitest";
 import { sql } from "drizzle-orm";
-import { bootTestApi, type TestApi } from "./_setup.js";
+import { afterEach, describe, expect, it } from "vitest";
 import { agentSessions, artifacts, childWatches, teamMembers, teams } from "../schema/index.js";
 import type {
   CreateAssistantResponse,
@@ -22,6 +22,7 @@ import type {
   ListArtifactsResponse,
   UsageBreakdownResponse,
 } from "../wire/types.js";
+import { bootTestApi, type TestApi } from "./_setup.js";
 
 let api: TestApi | undefined;
 afterEach(async () => {
@@ -42,13 +43,8 @@ async function seedTeam(target: TestApi): Promise<void> {
 }
 
 async function createTeamAssistant(target: TestApi, name: string): Promise<CreateAssistantResponse> {
-  const res = await fetch(`${target.baseUrl}/api/assistants`, {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ name, owner: { type: "team", id: "team_1" } }),
-  });
-  expect(res.status).toBe(201);
-  return (await res.json()) as CreateAssistantResponse;
+  // Historical multiple profiles remain readable after the public creation path is retired.
+  return toAssistantSummary(await createAssistant(target.providers.db, "local-org", { type: "team", id: "team_1" }, name));
 }
 
 async function seedChild(

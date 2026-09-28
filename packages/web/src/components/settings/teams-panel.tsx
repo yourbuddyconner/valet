@@ -1,8 +1,21 @@
-import { TeamDeletionRequests } from "./team-deletion-requests";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Bot, ChevronRight, MoreHorizontal, UserPlus, X } from "lucide-react";
 import type { OrgDirectoryUserWire, TeamSummary } from "@valet/api/wire";
+import { Bot, ChevronRight, MoreHorizontal, UserPlus, X } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { ApiError } from "~/api/client";
+import {
+  useAddTeamMember,
+  useCreateTeam,
+  useDeleteTeam,
+  useMe,
+  useModels,
+  usePatchTeam,
+  useRemoveTeamMember,
+  useSetTeamMemberRole,
+  useTeamMembers,
+  useTeams,
+} from "~/api/settings";
+import { TeamCredentials } from "~/components/integrations/team-credentials";
 import {
   Avatar,
   AvatarFallback,
@@ -21,29 +34,16 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "~/components/primitives";
-import { TeamOnePasswordToken } from "./team-onepassword-token";
-import { ApiError } from "~/api/client";
+import { ModelCombobox } from "~/components/settings/model-combobox";
+import { ReasoningSelect } from "~/components/settings/reasoning-select";
 import { errorText } from "~/lib/error-text";
 import { formatDate } from "~/lib/format-when";
-import { matchesNeedle } from "~/lib/text-match";
-import {
-  useAddTeamMember,
-  useCreateTeam,
-  useDeleteTeam,
-  useMe,
-  useModels,
-  usePatchTeam,
-  useRemoveTeamMember,
-  useSetTeamMemberRole,
-  useTeamMembers,
-  useTeams,
-} from "~/api/settings";
-import { ModelCombobox } from "~/components/settings/model-combobox";
-import { TeamCredentials } from "~/components/integrations/team-credentials";
-import { ReasoningSelect } from "~/components/settings/reasoning-select";
-import { curatedForCatalogId } from "~/lib/models";
 import { isSizeTier, TIER_LABELS } from "~/lib/model-tiers";
+import { curatedForCatalogId } from "~/lib/models";
 import { reasoningLabelFor } from "~/lib/reasoning";
+import { matchesNeedle } from "~/lib/text-match";
+import { TeamDeletionRequests } from "./team-deletion-requests";
+import { TeamOnePasswordToken } from "./team-onepassword-token";
 
 /**
  * Says what a declared team's controls do and do not survive.
@@ -241,9 +241,9 @@ function TeamRow({
         </span>
         {showAssistantLink && (
           <Button asChild variant="ghost" size="sm" className="shrink-0 gap-1.5">
-            <Link to="/assistants">
+            <Link to="/chat" search={{ workspace: team.id }}>
               <Bot className="h-3.5 w-3.5" aria-hidden />
-              Assistant
+              Threads
             </Link>
           </Button>
         )}
