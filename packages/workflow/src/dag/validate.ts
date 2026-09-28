@@ -89,7 +89,7 @@ const SUPPORTED_NODE_TYPES: ReadonlySet<DagNodeType> = new Set<DagNodeType>([
   'stop',
   'foreach',
   'llm',
-  'orchestrator',
+  'thread',
   'tool',
   'workflow',
 ]);
@@ -99,7 +99,7 @@ const FOREACH_BODY_TYPES: ReadonlySet<DagNodeType> = new Set<DagNodeType>([
   'llm',
   'tool',
   'set',
-  'orchestrator',
+  'thread',
   'session',
   'workflow',
 ]);
@@ -114,7 +114,7 @@ const ALLOWED_KEYS: Record<DagNodeType, readonly string[]> = {
   session: ['id', 'type', 'mode', 'prompt', 'title', 'model', 'outputSchema', 'wait'],
   stop: ['id', 'type', 'outcome', 'output', 'message'],
   llm: ['id', 'type', 'model', 'system', 'prompt', 'outputSchema', 'temperature', 'maxOutputTokens', 'onError'],
-  orchestrator: ['id', 'type', 'prompt', 'outputSchema', 'wait'],
+  thread: ['id', 'type', 'prompt', 'outputSchema', 'wait'],
   // A tool node carries BOTH policies, and they answer different questions.
   // `onError` decides what a node FAILURE does to the rest of the run;
   // `onDeny`/`approvalTimeout` decide what a policy GATE's refusal or
@@ -548,9 +548,9 @@ function validateNodeFields(
       }
       checkErrorPolicy(label, 'llm', node.onError, errors);
       break;
-    case 'orchestrator':
+    case 'thread':
       if (!isNonEmptyString(node.prompt)) {
-        errors.push(`${label}: orchestrator.prompt must be a non-empty string`);
+        errors.push(`${label}: thread.prompt must be a non-empty string`);
       } else {
         checkTemplate(label, 'prompt', node.prompt, refCtx, errors);
       }
@@ -710,7 +710,7 @@ function validateForeachNode(
   }
 
   if (!isPlainObject(node.body) || typeof node.body.type !== 'string') {
-    errors.push(`${label}: foreach.body must be a single inline node object (llm/tool/set/orchestrator/session/workflow)`);
+    errors.push(`${label}: foreach.body must be a single inline node object (llm/tool/set/thread/session/workflow)`);
     return;
   }
   if (!FOREACH_BODY_TYPES.has(node.body.type)) {

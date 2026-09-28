@@ -125,7 +125,7 @@ describe("applyWorkflowModelPatch", () => {
       { id: "start", type: "trigger" },
       { id: "one", type: "llm", model: "old", prompt: "one" },
       { id: "agent", type: "session", mode: "start", model: "legacy", prompt: "two" },
-      { id: "orch", type: "orchestrator", prompt: "three" },
+      { id: "orch", type: "thread", prompt: "three" },
       { id: "done", type: "stop" },
     ],
     edges: [],

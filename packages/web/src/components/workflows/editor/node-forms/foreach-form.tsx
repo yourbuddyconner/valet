@@ -1,7 +1,7 @@
 import type { ForeachBodyNode, ForeachNode } from "@valet/workflow";
 import { LabeledInput, NumberField, SelectField } from "../fields";
 import { LlmForm } from "./llm-form";
-import { OrchestratorForm } from "./orchestrator-form";
+import { ThreadForm } from "./thread-form";
 import { SessionForm } from "./session-form";
 import { SetForm } from "./set-form";
 import { ToolForm } from "./tool-form";
@@ -11,7 +11,7 @@ const FOREACH_BODY_TYPES: ForeachBodyNode["type"][] = [
   "llm",
   "tool",
   "set",
-  "orchestrator",
+  "thread",
   "session",
   "workflow",
 ];
@@ -75,8 +75,8 @@ function defaultForeachBody(type: ForeachBodyNode["type"], id: string): ForeachB
       return { id, type: "tool", service: "", action: "", params: {} };
     case "set":
       return { id, type: "set", values: {} };
-    case "orchestrator":
-      return { id, type: "orchestrator", prompt: "" };
+    case "thread":
+      return { id, type: "thread", prompt: "" };
     case "session":
       return { id, type: "session", mode: "start", prompt: "" };
     case "workflow":
@@ -136,8 +136,8 @@ function BodyNodeForm({
       return <ToolForm node={node} onChange={onChange} allowOnError={false} />;
     case "set":
       return <SetForm node={node} onChange={onChange} />;
-    case "orchestrator":
-      return <OrchestratorForm node={node} onChange={onChange} />;
+    case "thread":
+      return <ThreadForm node={node} onChange={onChange} />;
     case "session":
       return <SessionForm node={node} onChange={onChange} />;
     case "workflow":

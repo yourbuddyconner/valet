@@ -469,22 +469,24 @@ export function staticShape(node: WorkflowNode): PreviewOutputShape {
       };
     }
     case "session":
-    case "orchestrator": {
+    case "thread": {
       const dispatchOnly = node.wait?.mode === "none";
+      const threadFields = node.type === "thread" ? { threadId: "thr_..." } : {};
+      const threadPaths = node.type === "thread" ? [`${root}.threadId`] : [];
       if (dispatchOnly) {
         return {
           origin: "known",
-          example: { sessionId: "ses_...", receipt: { threadId: "thr_...", queueItemId: "q_..." } },
-          paths: [`${root}.sessionId`],
+          example: { sessionId: "ses_...", ...threadFields, receipt: { threadId: "thr_...", queueItemId: "q_..." } },
+          paths: [`${root}.sessionId`, ...threadPaths],
           note: "wait.mode is 'none', so this node completes at dispatch and produces no response. Set wait.mode to 'until_idle' to read what the session returns.",
         };
       }
-      const paths = [`${root}.sessionId`, `${root}.response`, ...schemaPaths(`${root}.output`, node.outputSchema)];
+      const paths = [`${root}.sessionId`, ...threadPaths, `${root}.response`, ...schemaPaths(`${root}.output`, node.outputSchema)];
       return {
         origin: node.outputSchema ? "declared" : "known",
-        example: { sessionId: "ses_...", response: "the session's reply" },
+        example: { sessionId: "ses_...", ...threadFields, response: "the session's reply" },
         paths,
-        note: "A session node names its text `response`. An llm node names it `text`.",
+        note: "A session or thread node names its text `response`. An llm node names it `text`.",
       };
     }
     case "tool":
@@ -564,8 +566,8 @@ function describedReason(node: WorkflowNode): string {
       return `Running this would call ${node.service}.${node.action} for real.`;
     case "session":
       return "Running this would start a session.";
-    case "orchestrator":
-      return "Running this would prompt the orchestrator.";
+    case "thread":
+      return "Running this would send a prompt to the workspace thread.";
     case "workflow":
       return "Running this would start a child run.";
     case "approval":
@@ -610,7 +612,7 @@ function collectWarnings(node: WorkflowNode, ctx: TemplateContext, sample: Sampl
       }
     }
   }
-  if ((node.type === "session" || node.type === "orchestrator") && node.wait?.mode === "none") {
+  if ((node.type === "session" || node.type === "thread") && node.wait?.mode === "none") {
     warnings.push(
       "wait.mode is 'none', so this node does not wait for the session. Downstream reads of `response` resolve to nothing.",
     );

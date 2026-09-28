@@ -21,7 +21,7 @@ export type {
   ForeachBodyNode,
   LlmNode,
   NodeErrorPolicy,
-  OrchestratorNode,
+  ThreadNode,
   ToolNode,
   ToolCredentialMode,
   WorkflowCallNode,

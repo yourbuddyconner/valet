@@ -105,7 +105,7 @@ const dailyDevDigest: WorkflowDefinition = {
     },
     {
       id: "deliver",
-      type: "orchestrator",
+      type: "thread",
       wait: { mode: "until_idle" },
       prompt: [
         "This is your daily development digest. Post it back to me as it is written.",
@@ -192,7 +192,7 @@ const stalePullRequestNudge: WorkflowDefinition = {
     },
     {
       id: "nudge",
-      type: "orchestrator",
+      type: "thread",
       wait: { mode: "until_idle" },
       prompt: [
         "These pull requests of mine have gone quiet. Tell me about them and ask me what I want to do.",
@@ -1343,7 +1343,7 @@ const assignReviewers: WorkflowDefinition = {
     },
     {
       id: "report_gap",
-      type: "orchestrator",
+      type: "thread",
       wait: { mode: "none" },
       prompt: [
         "Nobody was assigned to pull request {{ trigger.data.payload.pull_request.number }} in " +
@@ -1487,7 +1487,7 @@ const assignReviewers: WorkflowDefinition = {
     },
     {
       id: "report",
-      type: "orchestrator",
+      type: "thread",
       wait: { mode: "none" },
       prompt: [
         "I assigned reviewers to pull request {{ trigger.data.payload.pull_request.number }} in " +
@@ -1985,7 +1985,7 @@ const assignReviewers: WorkflowDefinition = {
     },
     {
       id: "swap_report_gap",
-      type: "orchestrator",
+      type: "thread",
       wait: { mode: "none" },
       prompt: [
         "{{ trigger.data.payload.comment.user.login }} declined pull request " +
@@ -2148,7 +2148,7 @@ const assignReviewers: WorkflowDefinition = {
     },
     {
       id: "report_swap",
-      type: "orchestrator",
+      type: "thread",
       wait: { mode: "none" },
       prompt: [
         "{{ trigger.data.payload.comment.user.login }} declined pull request " +

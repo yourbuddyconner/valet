@@ -17,10 +17,10 @@
  *   - `trigger.email` for `trigger.data.email`. A run's input is a
  *     `WorkflowTriggerPayload`, and its own fields live under `data`.
  *   - `nodes.x.result.response` for an llm node's `nodes.x.result.text`,
- *     and `nodes.x.result.text` for a session or orchestrator node's
+ *     and `nodes.x.result.text` for a session or thread node's
  *     `nodes.x.result.response`. The two node families name the produced
  *     text differently (`llm.ts` `LlmResult`; `session.ts` and
- *     `orchestrator.ts` `buildSettledResult`).
+ *     `thread.ts` `buildSettledResult`).
  *   - `nodes.x.result.field` for a node with an `outputSchema`, whose
  *     structured result is `nodes.x.result.output.field`.
  */

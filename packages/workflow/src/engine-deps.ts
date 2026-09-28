@@ -156,7 +156,7 @@ export interface WorkflowEngineDeps {
   llmComplete(req: WorkflowLlmCompleteRequest): Promise<WorkflowLlmCompleteResult>;
 
   /**
-   * The `orchestrator` node's (Task 5) dispatch primitive — resolves
+   * The `thread` node's (Task 5) dispatch primitive — resolves
    * `opts.ownerHint`'s orchestrator session and submits `prompt` as a
    * followup (internal signals must never steer-abort the assistant's live
    * turn). Idempotent by `opts.dispatchId`, exactly like `prompt`: a

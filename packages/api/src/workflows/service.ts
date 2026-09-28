@@ -828,7 +828,7 @@ export function aggregateSourcePath(node: WorkflowNode): string {
     case "llm":
       return node.outputSchema !== undefined ? `${base}.output` : `${base}.text`;
     case "session":
-    case "orchestrator":
+    case "thread":
       return node.outputSchema !== undefined ? `${base}.output` : `${base}.response`;
     case "workflow":
       return `${base}.output`;

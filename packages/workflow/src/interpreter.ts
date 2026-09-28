@@ -814,8 +814,8 @@ async function invokeExecutor(
       return requireExecutor(executors.foreach, node).execute({ ...argsBase, node });
     case 'llm':
       return requireExecutor(executors.llm, node).execute({ ...argsBase, node });
-    case 'orchestrator':
-      return requireExecutor(executors.orchestrator, node).execute({ ...argsBase, node });
+    case 'thread':
+      return requireExecutor(executors.thread, node).execute({ ...argsBase, node });
     case 'tool':
       return requireExecutor(executors.tool, node).execute({ ...argsBase, node });
     case 'workflow':

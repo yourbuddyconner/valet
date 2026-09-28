@@ -310,7 +310,7 @@ export function workflowsActionPlugin(getDeps: () => WorkflowServiceDeps): Actio
     description:
       "Create a workflow for the assistant owner (omit workflow_id) or update one (pass workflow_id). " +
       "`definition` MUST be a dag/v1 object: { version: 'dag/v1', nodes: [...], edges: [...] } " +
-      "using node types trigger|set|if|wait|approval|session|orchestrator|tool|llm|stop|foreach. " +
+      "using node types trigger|set|if|wait|approval|session|thread|tool|llm|stop|foreach|workflow. " +
       "The definition is validated before saving; validation errors come back in `error`. " +
       "Returns { workflowId } — always surface it to the user.",
     riskLevel: "medium",

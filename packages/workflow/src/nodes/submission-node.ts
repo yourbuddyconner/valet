@@ -4,7 +4,7 @@
  * "submission" (a session prompt, or an orchestrator followup), optionally
  * park behind it, and — on settlement — map the outcome onto the node
  * checkpoint with the same bounded, one-shot schema-repair round trip.
- * `session.ts` and `orchestrator.ts` differ only in *how* a submission is
+ * `session.ts` and `thread.ts` differ only in *how* a submission is
  * dispatched (create-session-and-prompt vs. resolve-orchestrator-and-
  * prompt-as-followup) and in the shape of their `completed` results — this
  * module owns everything else: effects read-back, intent-before-dispatch
@@ -47,7 +47,7 @@ export interface SubmissionNodeContext {
 }
 
 export interface SubmissionNodeHooks<TDispatched, TSettled> {
-  /** Short label for error messages ("session" | "orchestrator"). */
+  /** Short label for error messages ("session" | "thread"). */
   nodeKind: string;
   /** `workflow:{runId}:{nodeId}[:{iteration}]` — the primary submission's dispatchId (repairs append `:repair`). */
   dispatchId: string;
@@ -60,7 +60,7 @@ export interface SubmissionNodeHooks<TDispatched, TSettled> {
   /** Issues the ONE bounded repair submission against the already-dispatched session. */
   dispatchRepair(repairDispatchId: string, repairPrompt: string, sessionId: string): Promise<WorkflowPromptReceipt>;
   buildDispatchedResult(dispatch: SubmissionDispatch): TDispatched;
-  buildSettledResult(sessionId: string, result: SubmissionResult): TSettled;
+  buildSettledResult(sessionId: string, result: SubmissionResult, receipt: WorkflowPromptReceipt): TSettled;
 }
 
 interface SubmissionEffects {
@@ -215,7 +215,7 @@ async function handleOutcome<TDispatched, TSettled>(
   }
 
   if (hooks.outputSchema === undefined || result.output !== undefined) {
-    const settledResult = hooks.buildSettledResult(sessionId, result);
+    const settledResult = hooks.buildSettledResult(sessionId, result, receipt);
     await store.completeCheckpoint(run.runId, nodeId, iteration, attempt, {
       runId: run.runId,
       nodeId,

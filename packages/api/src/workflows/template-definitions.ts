@@ -274,7 +274,7 @@ const specToTasks: WorkflowDefinition = {
     },
     {
       id: "handoff",
-      type: "orchestrator",
+      type: "thread",
       wait: { mode: "until_idle" },
       prompt: [
         "This is a task breakdown of a spec. Post it back to me as a numbered list, in the order given,",

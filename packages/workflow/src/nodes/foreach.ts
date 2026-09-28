@@ -92,7 +92,7 @@
  *     `failed`. Body iterations left in-flight (this pass's `waitingOn`,
  *     or an earlier pass's still-`intent` checkpoint the break never
  *     revisited) are aborted best-effort by this executor itself
- *     (`session`/`orchestrator` bodies persist a `{sessionId,
+ *     (`session`/`thread` bodies persist a `{sessionId,
  *     receipt:{threadId, queueItemId}}` effects shape this reads back for
  *     `engine.abort`) before returning failed — the interpreter's
  *     cancel/terminate paths never see these sub-run-level submissions, so
@@ -111,7 +111,7 @@ import { renderTemplate } from '../dag/expression.js';
 import type { ForeachBodyNode, ForeachNode } from '../dag/nodes.js';
 import type { NodeCheckpoint, RunWaitCondition } from '../store.js';
 import { executeLlm } from './llm.js';
-import { executeOrchestrator } from './orchestrator.js';
+import { executeThread } from './thread.js';
 import { executeWorkflowCall } from './workflow-call.js';
 import { executeSession } from './session.js';
 import { executeSet } from './set.js';
@@ -485,8 +485,8 @@ async function invokeBody(body: ForeachBodyNode, argsBase: Omit<NodeExecutorArgs
       return executeTool({ ...argsBase, node: body });
     case 'session':
       return executeSession({ ...argsBase, node: body });
-    case 'orchestrator':
-      return executeOrchestrator({ ...argsBase, node: body });
+    case 'thread':
+      return executeThread({ ...argsBase, node: body });
     case 'workflow':
       return executeWorkflowCall({ ...argsBase, node: body });
   }
@@ -506,7 +506,7 @@ async function loadBodyCheckpoints(
 }
 
 /**
- * Reads a `session`/`orchestrator` body checkpoint's persisted submission
+ * Reads a `session`/`thread` body checkpoint's persisted submission
  * receipt (`submission-node.ts`'s `{ sessionId, receipt: { threadId,
  * queueItemId } }` effects shape) — the coordinates `engine.abort` needs.
  * Returns `undefined` for a body checkpoint that hasn't dispatched yet (no

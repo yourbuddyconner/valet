@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { SubmissionResult } from '@valet/engine';
 
-import type { OrchestratorNode } from '../dag/nodes.js';
+import type { ThreadNode } from '../dag/nodes.js';
 import type { WorkflowDefinition } from '../dag/shape.js';
 import type { WorkflowEngineDeps, WorkflowPromptOrchestratorResult } from '../engine-deps.js';
 import { driveUntilPark } from '../interpreter.js';
 import { InMemoryWorkflowStore } from '../memory-store.js';
 import type { RunParams } from '../store.js';
-import { executeOrchestrator } from './orchestrator.js';
+import { executeThread } from './thread.js';
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
 
@@ -34,10 +34,10 @@ async function claimAttempt(store: InMemoryWorkflowStore, runId: string, ownerId
   return claim.attempt;
 }
 
-function orchestratorDefinition(node: Partial<OrchestratorNode> = {}): WorkflowDefinition {
-  const orchestrator: OrchestratorNode = {
+function threadDefinition(node: Partial<ThreadNode> = {}): WorkflowDefinition {
+  const orchestrator: ThreadNode = {
     id: 'o',
-    type: 'orchestrator',
+    type: 'thread',
     prompt: 'do the thing for {{trigger.data.thing}}',
     ...node,
   };
@@ -60,7 +60,7 @@ interface RecordedCall {
   [key: string]: unknown;
 }
 
-/** A scriptable, call-recording fake `WorkflowEngineDeps` for the orchestrator node. */
+/** A scriptable, call-recording fake `WorkflowEngineDeps` for the thread node. */
 function makeEngine(
   config: {
     awaitResultQueue?: Array<Omit<SubmissionResult, 'queueItemId'>>;
@@ -123,13 +123,13 @@ function makeEngine(
 
 // ─── 1. Deterministic ids + queueMode/ownerHint on dispatch ──────────────────
 
-describe('executeOrchestrator: dispatch shape', () => {
+describe('executeThread: dispatch shape', () => {
   it('uses workflow:{runId}:{nodeId} as dispatchId, queueMode "followup", and the run owner as ownerHint', async () => {
     const store = new InMemoryWorkflowStore();
     const clock = makeClock();
     const { engine, calls } = makeEngine();
 
-    await store.createRun('run-1', runParams(), orchestratorDefinition(), 'v1', OWNER);
+    await store.createRun('run-1', runParams(), threadDefinition(), 'v1', OWNER);
     const attempt = await claimAttempt(store, 'run-1');
     const park = await driveUntilPark('run-1', attempt, { store, engine, clock: clock.now });
 
@@ -143,7 +143,7 @@ describe('executeOrchestrator: dispatch shape', () => {
 
 // ─── 2. Crash between dispatch and receipt persist ───────────────────────────
 
-describe('executeOrchestrator: crash between dispatch and receipt persist', () => {
+describe('executeThread: crash between dispatch and receipt persist', () => {
   it('re-dispatches with an identical dispatchId on reclaim; the engine dedupes to a single receipt', async () => {
     const clock = makeClock();
     const store = new InMemoryWorkflowStore(clock.now);
@@ -161,7 +161,7 @@ describe('executeOrchestrator: crash between dispatch and receipt persist', () =
       return originalPutIntent(cp);
     };
 
-    await store.createRun('run-2', runParams(), orchestratorDefinition(), 'v1', OWNER);
+    await store.createRun('run-2', runParams(), threadDefinition(), 'v1', OWNER);
     const attempt1 = await claimAttempt(store, 'run-2');
     await expect(driveUntilPark('run-2', attempt1, { store, engine, clock: clock.now })).rejects.toThrow(
       'simulated crash before receipt persisted',
@@ -192,13 +192,13 @@ describe('executeOrchestrator: crash between dispatch and receipt persist', () =
 
 // ─── 3. wait.mode 'none' completes without parking ───────────────────────────
 
-describe('executeOrchestrator: wait.mode "none"', () => {
+describe('executeThread: wait.mode "none"', () => {
   it('completes immediately with { sessionId, receipt } without parking', async () => {
     const store = new InMemoryWorkflowStore();
     const clock = makeClock();
     const { engine, calls } = makeEngine();
 
-    await store.createRun('run-3', runParams(), orchestratorDefinition({ wait: { mode: 'none' } }), 'v1', OWNER);
+    await store.createRun('run-3', runParams(), threadDefinition({ wait: { mode: 'none' } }), 'v1', OWNER);
     const attempt = await claimAttempt(store, 'run-3');
     const park = await driveUntilPark('run-3', attempt, { store, engine, clock: clock.now });
 
@@ -208,13 +208,13 @@ describe('executeOrchestrator: wait.mode "none"', () => {
 
     const byNode = new Map((await store.getCheckpoints('run-3')).map((cp) => [cp.nodeId, cp]));
     expect(byNode.get('o')?.status).toBe('completed');
-    expect(byNode.get('o')?.result).toMatchObject({ sessionId: 'orchestrator:user-1' });
+    expect(byNode.get('o')?.result).toMatchObject({ sessionId: 'orchestrator:user-1', threadId: 'thread-1' });
   });
 });
 
 // ─── 4. Settled completed + valid output ─────────────────────────────────────
 
-describe('executeOrchestrator: settled completed with valid output', () => {
+describe('executeThread: settled completed with valid output', () => {
   it('completes the node with { sessionId, response, output }', async () => {
     const store = new InMemoryWorkflowStore();
     const clock = makeClock();
@@ -224,7 +224,7 @@ describe('executeOrchestrator: settled completed with valid output', () => {
       awaitResultQueue: [{ outcome: 'completed', text: 'The answer is 42', output: { answer: '42' } }],
     });
 
-    await store.createRun('run-4', runParams(), orchestratorDefinition({ outputSchema }), 'v1', OWNER);
+    await store.createRun('run-4', runParams(), threadDefinition({ outputSchema }), 'v1', OWNER);
     const attempt1 = await claimAttempt(store, 'run-4');
     const park1 = await driveUntilPark('run-4', attempt1, { store, engine, clock: clock.now });
     expect(park1.status).toBe('parked');
@@ -238,6 +238,7 @@ describe('executeOrchestrator: settled completed with valid output', () => {
     expect(byNode.get('o')?.status).toBe('completed');
     expect(byNode.get('o')?.result).toEqual({
       sessionId: 'orchestrator:user-1',
+      threadId: 'thread-1',
       response: 'The answer is 42',
       output: { answer: '42' },
     });
@@ -246,13 +247,13 @@ describe('executeOrchestrator: settled completed with valid output', () => {
 
 // ─── 5. isSettled false on re-entry: re-parks without calling awaitResult ────
 
-describe('executeOrchestrator: isSettled false on re-entry', () => {
+describe('executeThread: isSettled false on re-entry', () => {
   it('re-parks on the same submission (spurious wake) without calling awaitResult', async () => {
     const store = new InMemoryWorkflowStore();
     const clock = makeClock();
     const { engine, calls } = makeEngine({ isSettledQueue: [false] });
 
-    await store.createRun('run-5', runParams(), orchestratorDefinition(), 'v1', OWNER);
+    await store.createRun('run-5', runParams(), threadDefinition(), 'v1', OWNER);
     const attempt1 = await claimAttempt(store, 'run-5');
     const park1 = await driveUntilPark('run-5', attempt1, { store, engine, clock: clock.now });
     expect(park1.status).toBe('parked');
@@ -269,7 +270,7 @@ describe('executeOrchestrator: isSettled false on re-entry', () => {
 
 // ─── 6. Validation failure triggers exactly one repair, via promptOrchestrator ─
 
-describe('executeOrchestrator: schema validation failure triggers exactly one repair', () => {
+describe('executeThread: schema validation failure triggers exactly one repair', () => {
   it('dispatches dispatchId+":repair" with queueMode "followup" and the ownerHint, schema + error in the prompt, then parks', async () => {
     const store = new InMemoryWorkflowStore();
     const clock = makeClock();
@@ -279,7 +280,7 @@ describe('executeOrchestrator: schema validation failure triggers exactly one re
       awaitResultQueue: [{ outcome: 'completed', text: 'not json', error: 'result did not match schema: /answer: missing value' }],
     });
 
-    await store.createRun('run-6', runParams(), orchestratorDefinition({ outputSchema }), 'v1', OWNER);
+    await store.createRun('run-6', runParams(), threadDefinition({ outputSchema }), 'v1', OWNER);
     const attempt1 = await claimAttempt(store, 'run-6');
     await driveUntilPark('run-6', attempt1, { store, engine, clock: clock.now });
 
@@ -303,7 +304,7 @@ describe('executeOrchestrator: schema validation failure triggers exactly one re
 
 // ─── 7. Second validation failure fails the node ─────────────────────────────
 
-describe('executeOrchestrator: second validation failure fails the node', () => {
+describe('executeThread: second validation failure fails the node', () => {
   it('fails the node (and the run) once repairAttempted is already true', async () => {
     const store = new InMemoryWorkflowStore();
     const clock = makeClock();
@@ -316,7 +317,7 @@ describe('executeOrchestrator: second validation failure fails the node', () => 
       ],
     });
 
-    await store.createRun('run-7', runParams(), orchestratorDefinition({ outputSchema }), 'v1', OWNER);
+    await store.createRun('run-7', runParams(), threadDefinition({ outputSchema }), 'v1', OWNER);
     const attempt1 = await claimAttempt(store, 'run-7');
     await driveUntilPark('run-7', attempt1, { store, engine, clock: clock.now }); // dispatch, park
 
@@ -340,7 +341,7 @@ describe('executeOrchestrator: second validation failure fails the node', () => 
 
 // ─── 8. aborted outcome fails the node ────────────────────────────────────────
 
-describe('executeOrchestrator: non-completed outcome fails the node', () => {
+describe('executeThread: non-completed outcome fails the node', () => {
   it('fails the node with the submission error for an aborted outcome', async () => {
     const store = new InMemoryWorkflowStore();
     const clock = makeClock();
@@ -349,7 +350,7 @@ describe('executeOrchestrator: non-completed outcome fails the node', () => {
       awaitResultQueue: [{ outcome: 'aborted', error: 'cancelled by user' }],
     });
 
-    await store.createRun('run-8', runParams(), orchestratorDefinition(), 'v1', OWNER);
+    await store.createRun('run-8', runParams(), threadDefinition(), 'v1', OWNER);
     const attempt1 = await claimAttempt(store, 'run-8');
     await driveUntilPark('run-8', attempt1, { store, engine, clock: clock.now });
 
@@ -366,13 +367,13 @@ describe('executeOrchestrator: non-completed outcome fails the node', () => {
 
 // ─── 9. Missing run owner fails the node without dispatching ─────────────────
 
-describe('executeOrchestrator: missing run owner', () => {
+describe('executeThread: missing run owner', () => {
   it('fails the node immediately with a clear error, never calling promptOrchestrator', async () => {
     const store = new InMemoryWorkflowStore();
     const clock = makeClock();
     const { engine, calls } = makeEngine();
 
-    await store.createRun('run-9', runParams(), orchestratorDefinition(), 'v1'); // no owner
+    await store.createRun('run-9', runParams(), threadDefinition(), 'v1'); // no owner
     const attempt = await claimAttempt(store, 'run-9');
     const park = await driveUntilPark('run-9', attempt, { store, engine, clock: clock.now });
 
@@ -388,20 +389,20 @@ describe('executeOrchestrator: missing run owner', () => {
 
 // ─── 10. iteration > 0: id suffix + checkpoint keyed at the iteration ────────
 
-describe('executeOrchestrator: iteration > 0', () => {
+describe('executeThread: iteration > 0', () => {
   it('appends :{iteration} to the dispatchId and checkpoints at that iteration', async () => {
     const store = new InMemoryWorkflowStore();
     const clock = makeClock();
     const { engine, calls } = makeEngine();
 
-    const definition = orchestratorDefinition({ wait: { mode: 'none' } });
+    const definition = threadDefinition({ wait: { mode: 'none' } });
     await store.createRun('run-10', runParams(), definition, 'v1', OWNER);
     const attempt = await claimAttempt(store, 'run-10');
     const run = await store.getRun('run-10');
     if (!run) throw new Error('run vanished');
-    const node = definition.nodes.find((n): n is OrchestratorNode => n.id === 'o')!;
+    const node = definition.nodes.find((n): n is ThreadNode => n.id === 'o')!;
 
-    const result = await executeOrchestrator({
+    const result = await executeThread({
       run,
       node,
       attempt,
@@ -426,20 +427,20 @@ describe('executeOrchestrator: iteration > 0', () => {
 
 // ─── 11. aliases merge into the template context ─────────────────────────────
 
-describe('executeOrchestrator: aliases', () => {
+describe('executeThread: aliases', () => {
   it('resolves {{item}} from aliases when rendering the prompt', async () => {
     const store = new InMemoryWorkflowStore();
     const clock = makeClock();
     const { engine, calls } = makeEngine();
 
-    const definition = orchestratorDefinition({ prompt: 'process {{item}} at index {{index}}', wait: { mode: 'none' } });
+    const definition = threadDefinition({ prompt: 'process {{item}} at index {{index}}', wait: { mode: 'none' } });
     await store.createRun('run-11', runParams(), definition, 'v1', OWNER);
     const attempt = await claimAttempt(store, 'run-11');
     const run = await store.getRun('run-11');
     if (!run) throw new Error('run vanished');
-    const node = definition.nodes.find((n): n is OrchestratorNode => n.id === 'o')!;
+    const node = definition.nodes.find((n): n is ThreadNode => n.id === 'o')!;
 
-    await executeOrchestrator({
+    await executeThread({
       run,
       node,
       attempt,

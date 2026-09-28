@@ -97,9 +97,9 @@ The current structures already separate ownership, execution, and conversation:
 | Workflow run | Immutable definition snapshot, checkpoints, outcomes | One execution with links to its working threads |
 | Event subscription | Matching, authorized owner, delivery target | Route by workspace; keep delivery diagnostics separate from conversation history |
 
-### Workflow thread node recommendation
+### Workflow Thread node
 
-Build a future thread node from the existing orchestrator node. It already
+The Thread node now replaces the orchestrator workflow node. It reuses
 uses durable submissions, dispatch deduplication, checkpointing, waiting, and
 output-schema repair. The API already chooses an attended origin thread or
 a thread associated with the workflow run.
@@ -108,14 +108,15 @@ Keep the LLM node for a single model completion. It does not have a transcript
 or the durable submission lifecycle. Converting it to a conversational node
 would change cost, context, retries, and tool behavior.
 
-Before adding a general thread node, decide these behaviors:
+Current behavior and future decisions:
 
 - Use one shared thread per workflow run by default, or isolate each node.
   The current implementation shares a run thread, including loop iterations.
 - Keep completed workflow threads visible, or archive them automatically.
   The current implementation archives run-created threads after settlement.
-- Return `threadId` with node outputs so later steps can address the same
-  conversation. The current settled node result does not expose this value.
+- Node results expose `threadId` in both dispatch-only and settled modes.
+  Later steps can reference it as `nodes.<id>.result.threadId`. Explicitly
+  selecting arbitrary existing threads is outside this iteration.
 - Keep output delivery separate from execution context. A team home channel
   should not silently move an existing Slack conversation or broaden access.
 

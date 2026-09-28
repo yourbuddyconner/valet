@@ -77,7 +77,7 @@ const weeklyIssueTriage: WorkflowDefinition = {
     },
     {
       id: 'deliver',
-      type: 'orchestrator',
+      type: 'thread',
       wait: { mode: 'until_idle' },
       prompt: [
         'This is my weekly issue triage. Give me the summary, then the suggested changes as a list.',

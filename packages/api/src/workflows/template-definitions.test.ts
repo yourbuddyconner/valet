@@ -288,7 +288,7 @@ describe("plugin workflow templates", () => {
           }
         }
 
-        if (node.type === "orchestrator" || node.type === "session") {
+        if (node.type === "thread" || node.type === "session") {
           if (!SUBMISSION_RESULT_KEYS.has(field)) {
             wrong.push(`${path} — a ${node.type} result holds ${[...SUBMISSION_RESULT_KEYS].join(", ")}`);
             continue;
@@ -453,7 +453,7 @@ describe("template requirements", () => {
     const required = templateRequirements(definition, actionPluginByService, nothingConnected);
     expect(required.map((r) => r.service)).toContain("slack");
     expect(toolNodesOf(definition).map((node) => node.service)).toContain("slack");
-    expect(definition.nodes.some((node) => node.type === "orchestrator")).toBe(true);
+    expect(definition.nodes.some((node) => node.type === "thread")).toBe(true);
   });
 });
 

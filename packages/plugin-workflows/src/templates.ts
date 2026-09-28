@@ -36,7 +36,7 @@ const nightlyMemorySweep: WorkflowDefinition = {
       // reach memory. An orchestrator node is not a workaround here, it is
       // the only way to express this.
       id: "sweep",
-      type: "orchestrator",
+      type: "thread",
       wait: { mode: "until_idle" },
       prompt: [
         "Run your nightly memory self-improvement pass. The time now is {{ trigger.timestamp }}.",
@@ -210,7 +210,7 @@ const dailyTriageDigest: WorkflowDefinition = {
     },
     {
       id: "deliver",
-      type: "orchestrator",
+      type: "thread",
       wait: { mode: "until_idle" },
       prompt: [
         "This is my morning triage digest. Post it back to me as it is written.",
@@ -310,7 +310,7 @@ const meetingPrep: WorkflowDefinition = {
     },
     {
       id: "deliver",
-      type: "orchestrator",
+      type: "thread",
       wait: { mode: "until_idle" },
       prompt: [
         "This is my meeting prep for the week. Post it back to me as it is written,",

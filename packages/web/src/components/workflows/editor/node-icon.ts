@@ -37,7 +37,7 @@ export const NODE_ICON: Record<DagNodeType, LucideIcon> = {
   stop: CircleStop,
   foreach: Repeat,
   llm: Sparkles,
-  orchestrator: Bot,
+  thread: Bot,
   tool: Wrench,
   workflow: Workflow,
 };

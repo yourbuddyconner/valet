@@ -442,13 +442,13 @@ describe('validateWorkflowDefinition', () => {
     });
   });
 
-  describe('orchestrator node', () => {
-    it('accepts a valid orchestrator node', () => {
+  describe('thread node', () => {
+    it('accepts a valid thread node', () => {
       const result = validateWorkflowDefinition(
         definition({
           nodes: [
             { id: 'trigger', type: 'trigger' },
-            { id: 'ask', type: 'orchestrator', prompt: 'do the thing' },
+            { id: 'ask', type: 'thread', prompt: 'do the thing' },
             { id: 'stop', type: 'stop' },
           ],
           edges: [
@@ -465,7 +465,7 @@ describe('validateWorkflowDefinition', () => {
         definition({
           nodes: [
             { id: 'trigger', type: 'trigger' },
-            { id: 'ask', type: 'orchestrator', prompt: '' },
+            { id: 'ask', type: 'thread', prompt: '' },
             { id: 'stop', type: 'stop' },
           ],
           edges: [
@@ -476,7 +476,7 @@ describe('validateWorkflowDefinition', () => {
       );
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.errors.some((e) => e.includes('orchestrator.prompt must be a non-empty string'))).toBe(true);
+        expect(result.errors.some((e) => e.includes('thread.prompt must be a non-empty string'))).toBe(true);
       }
     });
   });

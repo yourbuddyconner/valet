@@ -109,7 +109,7 @@ describe("aggregateSourcePath", () => {
     expect(
       aggregateSourcePath({ id: "b", type: "session", mode: "start", prompt: "p", outputSchema: { type: "object" } }),
     ).toBe("nodes.b.result.output");
-    expect(aggregateSourcePath({ id: "c", type: "orchestrator", prompt: "p" })).toBe("nodes.c.result.response");
+    expect(aggregateSourcePath({ id: "c", type: "thread", prompt: "p" })).toBe("nodes.c.result.response");
     expect(aggregateSourcePath({ id: "d", type: "workflow", workflowId: "wf_1" })).toBe("nodes.d.result.output");
     expect(
       aggregateSourcePath({

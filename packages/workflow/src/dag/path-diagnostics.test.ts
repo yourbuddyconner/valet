@@ -5,7 +5,7 @@
  *
  * Every suggestion assertion is also a contract assertion. The shapes
  * below are the real ones: a trigger payload's fields under `data`, an llm
- * node's `text` (`llm.ts` `LlmResult`), a session or orchestrator node's
+ * node's `text` (`llm.ts` `LlmResult`), a session or thread node's
  * `response` (`session.ts` `buildSettledResult`), and a structured result
  * under `output`.
  */
@@ -26,7 +26,7 @@ const ctx: TemplateContext = {
     draft: { result: { text: 'hello', usage: { inputTokens: 10 } } },
     // llm node with an outputSchema.
     classify: { result: { text: '{"label":"billing"}', output: { label: 'billing' }, usage: {} } },
-    // session / orchestrator node.
+    // session / thread node.
     plan: { result: { sessionId: 's-1', response: 'done', output: { summary: 'do the thing' } } },
   },
 };
@@ -67,7 +67,7 @@ describe('diagnosePath', () => {
   });
 
   it('crosses between the two names for produced text', () => {
-    // An llm node answers at `text`; a session or orchestrator node
+    // An llm node answers at `text`; a session or thread node
     // answers at `response`. Each suggests the other's name.
     expect(diagnosePath(ctx, ['nodes', 'draft', 'result', 'response'], site())?.suggestion).toBe(
       'nodes.draft.result.text',

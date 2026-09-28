@@ -47,18 +47,21 @@ if (mode === 'bootstrap') {
   const name = '[Demo] Workspace routing check';
   const existing = await request(`/workflows?ownerType=team&ownerId=${encodeURIComponent(manifest.teamId)}`);
   let workflow = existing.workflows.find(row => row.name === name);
-  if (!workflow) workflow = await request('/workflows', 'POST', {
+  const payload = {
     name, teamId: manifest.teamId,
     definition: {
       version: 'dag/v1',
       nodes: [
         { id: 'start', type: 'trigger' },
-        { id: 'check', type: 'orchestrator', prompt: 'Local workspace routing check. Reply exactly: team-workflow-check-ok. Do not call tools.', wait: { mode: 'until_idle' } },
+        { id: 'check', type: 'thread', prompt: 'Local workspace routing check. Reply exactly: team-workflow-check-ok. Do not call tools.', wait: { mode: 'until_idle' } },
         { id: 'done', type: 'stop', outcome: 'success' },
       ],
       edges: [{ from: 'start', to: 'check' }, { from: 'check', to: 'done' }],
     },
-  });
+  };
+  workflow = workflow
+    ? await request(`/workflows/${workflow.id}`, 'PUT', payload)
+    : await request('/workflows', 'POST', payload);
   manifest.workflowId = workflow.id;
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   console.log(`Team-owned workflow, with no assistant selection: http://localhost:5173/workflows/${workflow.id}`);

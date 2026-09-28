@@ -4,7 +4,7 @@
  * completes or fails within one `driveUntilPark` call.
  *
  * Determinism / at-least-once dispatch:
- *   - Unlike `session`/`orchestrator`, `llmComplete` has no receiver-side
+ *   - Unlike `session`/`thread`, `llmComplete` has no receiver-side
  *     idempotency handle (no `dispatchId` to dedupe against) — the engine
  *     contract (`engine-deps.ts`) is explicit that this is at-least-once:
  *     the intent checkpoint narrows the duplicate window, and one duplicate

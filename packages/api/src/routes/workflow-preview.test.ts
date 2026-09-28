@@ -121,7 +121,7 @@ const EFFECTFUL_DEFINITION = {
   nodes: [
     { id: "trigger", type: "trigger", dataSchema: { topic: { type: "string" } } },
     { id: "draft", type: "llm", model: MODEL, prompt: "Write about {{trigger.data.topic}}" },
-    { id: "hand-off", type: "orchestrator", prompt: "Review: {{nodes.draft.result.response}}" },
+    { id: "hand-off", type: "thread", prompt: "Review: {{nodes.draft.result.response}}" },
   ],
   edges: [
     { from: "trigger", to: "draft" },
@@ -233,7 +233,21 @@ describe("POST /api/workflows/:id/preview — effectful nodes", () => {
     expect(draft.outputShape.paths).toContain("nodes.draft.result.text");
   });
 
-  it("describes an orchestrator node and still reports its unresolved paths", async () => {
+  it("rejects the retired orchestrator node type on workflow creation", async () => {
+    api = await bootTestApi();
+    const response = await fetch(`${api.baseUrl}/api/workflows`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Retired node", definition: {
+        version: "dag/v1",
+        nodes: [{ id: "start", type: "trigger" }, { id: "old", type: "orchestrator", prompt: "hello" }],
+        edges: [{ from: "start", to: "old" }],
+      } }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("describes a thread node and still reports its unresolved paths", async () => {
     api = await bootTestApi();
     const created = await createWorkflow(api.baseUrl, EFFECTFUL_DEFINITION);
 
@@ -242,6 +256,7 @@ describe("POST /api/workflows/:id/preview — effectful nodes", () => {
     const handOff = nodeNamed(body, "hand-off");
     expect(handOff.fidelity).toBe("described");
     expect(handOff.output).toBeUndefined();
+    expect(handOff.outputShape.paths).toContain("nodes.hand-off.result.threadId");
     // `draft` never ran, so its result is genuinely absent. The preview says
     // so rather than rendering the prompt with a hole in it and staying quiet.
     expect(handOff.unresolved.map((u) => u.path)).toEqual(["nodes.draft.result.response"]);
@@ -253,7 +268,7 @@ describe("POST /api/workflows/:id/preview — effectful nodes", () => {
       version: "dag/v1",
       nodes: [
         { id: "trigger", type: "trigger" },
-        { id: "kick", type: "orchestrator", prompt: "go", wait: { mode: "none" } },
+        { id: "kick", type: "thread", prompt: "go", wait: { mode: "none" } },
       ],
       edges: [{ from: "trigger", to: "kick" }],
     };
@@ -261,6 +276,7 @@ describe("POST /api/workflows/:id/preview — effectful nodes", () => {
 
     const kick = nodeNamed(await preview(api.baseUrl, created.id), "kick");
     expect(kick.warnings.join(" ")).toContain("wait.mode is 'none'");
+    expect(kick.outputShape.paths).toContain("nodes.kick.result.threadId");
     expect(kick.outputShape.paths).not.toContain("nodes.kick.result.response");
     expect(kick.outputShape.note).toContain("until_idle");
   });

@@ -29,7 +29,7 @@ import {
   type IfNode,
   type ForeachNode,
   type LlmNode,
-  type OrchestratorNode,
+  type ThreadNode,
   type TemplateContext,
   type ToolNode,
   type ValidateEnvironment,
@@ -143,9 +143,9 @@ function toolNode(definition: WorkflowDefinition, id: string): ToolNode {
   return node;
 }
 
-function orchestratorNode(definition: WorkflowDefinition, id: string): OrchestratorNode {
+function orchestratorNode(definition: WorkflowDefinition, id: string): ThreadNode {
   const node = definition.nodes.find(
-    (n): n is OrchestratorNode => n.type === "orchestrator" && n.id === id,
+    (n): n is ThreadNode => n.type === "thread" && n.id === id,
   );
   if (!node) throw new Error(`no orchestrator node "${id}"`);
   return node;

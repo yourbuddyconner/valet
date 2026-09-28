@@ -108,7 +108,7 @@ const inboxSweeper: WorkflowDefinition = {
     },
     {
       id: 'report',
-      type: 'orchestrator',
+      type: 'thread',
       wait: { mode: 'until_idle' },
       prompt: [
         'I swept low-priority unread mail out of my inbox. Report the counts to me in one short paragraph.',

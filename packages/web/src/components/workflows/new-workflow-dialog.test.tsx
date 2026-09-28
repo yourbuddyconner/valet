@@ -231,7 +231,7 @@ describe("workflow presets", () => {
           }
         }
 
-        if ((node.type === "orchestrator" || node.type === "session") && !SUBMISSION_RESULT_KEYS.has(field)) {
+        if ((node.type === "thread" || node.type === "session") && !SUBMISSION_RESULT_KEYS.has(field)) {
           wrong.push(`${path} — a ${node.type} result holds ${[...SUBMISSION_RESULT_KEYS].join(", ")}`);
         }
       }

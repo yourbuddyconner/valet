@@ -54,5 +54,6 @@ Open the printed workflow URL. Confirm that the switcher adopts Threads Demo.
 Select Run. Expand the check node result after the run completes.
 The expected model response is `team-workflow-check-ok`.
 
-This workflow uses the team owner and has no assistant selector. Running it uses
+This workflow uses a Thread node with the team owner and has no assistant selector.
+Its node result exposes the durable `threadId` alongside the response. Running it uses
 the configured model key. It does not call Slack or other integration tools.

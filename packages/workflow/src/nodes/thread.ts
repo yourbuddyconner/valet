@@ -1,5 +1,5 @@
 /**
- * `orchestrator` node executor (node-completion plan decision 5). Mirrors
+ * `thread` node executor (node-completion plan decision 5). Mirrors
  * the `session` executor's shape with `engine.promptOrchestrator` standing
  * in for `createSession` + `prompt`: dispatch a followup to the run
  * owner's orchestrator session, optionally park behind it, and on
@@ -28,29 +28,31 @@
  * without ever calling `promptOrchestrator`.
  */
 
-import type { OrchestratorNode } from '../dag/nodes.js';
+import type { ThreadNode } from '../dag/nodes.js';
 import { renderTemplate, type TemplateContext } from '../dag/expression.js';
 import { executeSubmissionNode, type SubmissionDispatch } from './submission-node.js';
 import { iterationSuffix, resolveTemplateContext, type NodeExecuteResult, type NodeExecutorArgs } from './index.js';
 
-export interface OrchestratorDispatchedResult {
+export interface ThreadDispatchedResult {
   sessionId: string;
+  threadId: string;
   receipt: { threadId: string; queueItemId: string };
 }
 
-export interface OrchestratorSettledResult {
+export interface ThreadSettledResult {
   sessionId: string;
+  threadId: string;
   response?: string;
   output?: unknown;
 }
 
-export async function executeOrchestrator(args: NodeExecutorArgs<OrchestratorNode>): Promise<NodeExecuteResult> {
+export async function executeThread(args: NodeExecutorArgs<ThreadNode>): Promise<NodeExecuteResult> {
   const { run, node, attempt, iteration, store, clock, engine, existingCheckpoint } = args;
   const templateContext = resolveTemplateContext(args);
 
   const owner = run.owner;
   if (owner === undefined) {
-    const error = `orchestrator node "${node.id}" requires a run owner`;
+    const error = `thread node "${node.id}" requires a run owner`;
     await store.putIntent({
       runId: run.runId,
       nodeId: node.id,
@@ -76,10 +78,10 @@ export async function executeOrchestrator(args: NodeExecutorArgs<OrchestratorNod
   const suffix = iterationSuffix(iteration);
   const dispatchId = `workflow:${run.runId}:${node.id}${suffix}`;
 
-  return await executeSubmissionNode<OrchestratorDispatchedResult, OrchestratorSettledResult>(
+  return await executeSubmissionNode<ThreadDispatchedResult, ThreadSettledResult>(
     { run, nodeId: node.id, attempt, iteration, store, clock, engine, existingCheckpoint },
     {
-      nodeKind: 'orchestrator',
+      nodeKind: 'thread',
       dispatchId,
       initialEffects: {},
       waitMode: node.wait?.mode,
@@ -104,8 +106,8 @@ export async function executeOrchestrator(args: NodeExecutorArgs<OrchestratorNod
         });
         return { threadId: dispatched.threadId, queueItemId: dispatched.queueItemId };
       },
-      buildDispatchedResult: (dispatch) => ({ sessionId: dispatch.sessionId, receipt: dispatch.receipt }),
-      buildSettledResult: (id, result) => ({ sessionId: id, response: result.text, output: result.output }),
+      buildDispatchedResult: (dispatch) => ({ sessionId: dispatch.sessionId, threadId: dispatch.receipt.threadId, receipt: dispatch.receipt }),
+      buildSettledResult: (id, result, receipt) => ({ sessionId: id, threadId: receipt.threadId, response: result.text, output: result.output }),
     },
   );
 }

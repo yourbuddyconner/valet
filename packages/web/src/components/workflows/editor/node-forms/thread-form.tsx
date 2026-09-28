@@ -1,11 +1,11 @@
-import type { OrchestratorNode } from "@valet/workflow";
+import type { ThreadNode } from "@valet/workflow";
 import { JsonTextarea, LabeledTextarea, SelectField } from "../fields";
 
-export function OrchestratorForm({
+export function ThreadForm({
   node,
   onChange,
 }: {
-  node: OrchestratorNode;
+  node: ThreadNode;
   onChange: (patch: Record<string, unknown>) => void;
 }) {
   return (
@@ -18,7 +18,7 @@ export function OrchestratorForm({
       />
       <SelectField
         label="Wait mode"
-        value={node.wait?.mode ?? "none"}
+        value={node.wait?.mode ?? "until_idle"}
         onChange={(value) => onChange({ wait: { mode: value } })}
         options={[
           { value: "none", label: "None — don't wait" },

@@ -9,7 +9,7 @@ import { ApprovalForm } from "./approval-form";
 import { ForeachForm } from "./foreach-form";
 import { IfForm } from "./if-form";
 import { LlmForm } from "./llm-form";
-import { OrchestratorForm } from "./orchestrator-form";
+import { ThreadForm } from "./thread-form";
 import { SessionForm } from "./session-form";
 import { SetForm } from "./set-form";
 import { StopForm } from "./stop-form";
@@ -47,8 +47,8 @@ export function NodeForm({
       return <ForeachForm node={node} onChange={onChange} />;
     case "llm":
       return <LlmForm node={node} onChange={onChange} />;
-    case "orchestrator":
-      return <OrchestratorForm node={node} onChange={onChange} />;
+    case "thread":
+      return <ThreadForm node={node} onChange={onChange} />;
     case "tool":
       return <ToolForm node={node} onChange={onChange} />;
     case "workflow":

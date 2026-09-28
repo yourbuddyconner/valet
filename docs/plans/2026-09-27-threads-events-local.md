@@ -73,3 +73,30 @@ No production integration was reconnected, and no Slack messages were sent.
 - Extend event diagnostics across receipt, classification, matching, and delivery.
 - Add home-channel routing and personal DM preferences with explicit semantics.
 - Remove unused internal assistant-routing fields. No backward compatibility needed.
+
+## Thread workflow node checkpoint
+
+Branch: `xbalbinus/threads-events-refactor`. Workspace foundation commit: `6fb6ce120`.
+
+- Replaced the orchestrator workflow node discriminator, exported type, executor,
+  palette entry, and form with Thread. No legacy node alias is retained.
+- Reused `promptOrchestrator` and shared submission machinery internally.
+- Exposed `threadId` in both dispatch-only and settled results and preview shapes.
+- Updated built-in templates, workflow creation tool help, and workflow skill.
+- Retained shared context within a run, separate threads across runs, and automatic
+  archival on settlement. Arbitrary thread selection is outside this checkpoint.
+- Added API assertions for shared context, run isolation, durable result identity,
+  output previews, and rejection of the retired node type.
+- Independent review found stale tool help; corrected it.
+
+Validation: the CI-mode canonical subset passed unit, workflow-unit, plugins-unit,
+core integration, builds, conventions, and docs lint. Its initial typecheck caught
+an invalid negative-test fixture; the fixture moved to the HTTP boundary, and the
+canonical typecheck rerun passed. Logs: `/tmp/valet-thread-scorecard.log` and
+`/tmp/valet-thread-typecheck-scorecard.log`. Focused API checks passed 33 tests
+with two key-gated cases skipped. Infrastructure limitations from the prior full
+scorecard remain; no new clean full infrastructure pass is claimed.
+
+Local run `wfrun_mukmx2rihh87kr` completed using the Thread node and returned
+`team-workflow-check-ok` with `threadId: th-mukmx2sp-2`. The existing demo workflow
+URL remains valid. The seed now updates its demo definition when rerun.
