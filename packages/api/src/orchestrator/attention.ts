@@ -17,9 +17,9 @@
  * rather than inventing a second admin signal.
  *
  * Preference gating: `user_notification_preferences` (userId, kind, web)
- * gates web delivery only (this phase ships no other channel). A user with
- * no row for a kind defaults to enabled — the table only ever needs a row
- * for someone who opted OUT.
+ * gates web delivery and opt-in team DM copies. A missing row enables web
+ * delivery and disables team DM copies. Shared home-channel delivery is
+ * configured by the team.
  *
  * Idempotent insert: wired producers pass `dedupeKey` (a gate id or queue
  * item id) so the notification row id is deterministic
@@ -33,7 +33,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, isNull, like } from "drizzle-orm";
 import type { DecisionAction, Principal } from "@valet/engine";
 import type { AppDb } from "../lib/drizzle.js";
-import { notifications, orgMembers, teamMembers, userNotificationPreferences } from "../schema/index.js";
+import { notifications, orgMembers, teamMembers, teams, userNotificationPreferences } from "../schema/index.js";
 
 export type AttentionKind = "notification" | "question" | "escalation" | "approval" | "review";
 export type AttentionUrgency = "low" | "normal" | "high";
@@ -44,6 +44,8 @@ export interface AttentionEvent {
   owner: Principal;
   actorUserId?: string;
   sessionId?: string;
+  /** Origin thread, when attention belongs to an existing conversation. */
+  threadId?: string;
   title: string;
   body?: string;
   href?: string;
@@ -90,6 +92,8 @@ export function principalFromOwner(
 /** Best-effort per-recipient channel delivery (e.g. Telegram DM). Must never throw. */
 export interface AttentionChannelDeliverer {
   deliver(userId: string, event: AttentionEvent): Promise<void>;
+  /** One shared destination per event, separate from personal DM copies. */
+  deliverTeam?(event: AttentionEvent): Promise<void>;
 }
 
 export interface AttentionDeps {
@@ -129,6 +133,8 @@ async function fetchMembership(db: AppDb, owner: Principal): Promise<Membership>
     const rows = await db
       .select({ userId: teamMembers.userId, role: teamMembers.role })
       .from(teamMembers)
+      .innerJoin(teams, eq(teams.id, teamMembers.teamId))
+      .innerJoin(orgMembers, and(eq(orgMembers.orgId, teams.orgId), eq(orgMembers.userId, teamMembers.userId)))
       .where(eq(teamMembers.teamId, owner.id));
     return { teamMembers: rows };
   }
@@ -209,6 +215,11 @@ export async function routeAttention(deps: AttentionDeps, event: AttentionEvent)
   const audience = resolveAudience(event.owner, event.kind, membership);
   if (audience.length === 0) return;
 
+  for (const ch of deps.channels ?? []) {
+    if (event.owner.type === "team" && ch.deliverTeam) {
+      await ch.deliverTeam(event).catch(err => console.error("attention router: team delivery failed:", err));
+    }
+  }
   const now = Date.now();
   for (const userId of audience) {
     if (await isWebEnabled(deps.db, userId, event.kind)) {
@@ -229,6 +240,12 @@ export async function routeAttention(deps: AttentionDeps, event: AttentionEvent)
         .onConflictDoNothing();
     }
 
+    if (event.owner.type === "team") {
+      const [preference] = await deps.db.select({ teamDm: userNotificationPreferences.teamDm })
+        .from(userNotificationPreferences)
+        .where(and(eq(userNotificationPreferences.userId, userId), eq(userNotificationPreferences.kind, event.kind))).limit(1);
+      if (preference?.teamDm !== true) continue;
+    }
     for (const ch of deps.channels ?? []) {
       void ch.deliver(userId, event).catch((err) => {
         console.error("attention router: channel deliverer failed:", err);

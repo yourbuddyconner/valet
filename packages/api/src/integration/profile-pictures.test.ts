@@ -1,9 +1,9 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 import { eq } from "drizzle-orm";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { users } from "../schema/index.js";
 import type {
-  CreateAssistantResponse,
   ProfilePictureUploadResponse,
 } from "../wire/types.js";
 import { PROFILE_PICTURE_MAX_BYTES } from "../wire/types.js";
@@ -39,15 +39,6 @@ function uploadBody(bytes: Uint8Array, type = "image/png"): FormData {
   return form;
 }
 
-async function createAssistant(api: TestApi): Promise<CreateAssistantResponse> {
-  const response = await fetch(`${api.baseUrl}/api/assistants`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  expect(response.status).toBe(200);
-  return response.json() as Promise<CreateAssistantResponse>;
-}
 
 describe("profile-picture uploads", () => {
   let api: TestApi;
@@ -87,12 +78,12 @@ describe("profile-picture uploads", () => {
     expect(replacementResponse.status).toBe(200);
     expect((await fetch(userResult.avatarUrl)).status).toBe(404);
 
-    const assistant = await createAssistant(api);
+    const assistant = await seedWorkspaceAssistant(api.providers.db, "local-org", { type: "user", id: "local-user" }, "Valet");
     const assistantResponse = await fetch(`${api.baseUrl}/api/assistants/${assistant.id}/avatar`, {
       method: "POST",
       body: uploadBody(source),
     });
-    expect(assistantResponse.status).toBe(409);
+    expect(assistantResponse.status).toBe(404);
 
   });
 
@@ -111,7 +102,7 @@ describe("profile-picture uploads", () => {
       .where(eq(users.id, "local-user"));
     expect(rows[0]?.image).toBeNull();
 
-    const assistant = await createAssistant(api);
+    const assistant = await seedWorkspaceAssistant(api.providers.db, "local-org", { type: "user", id: "local-user" }, "Valet");
     const forbidden = await fetch(`${api.baseUrl}/api/assistants/${assistant.id}/avatar`, {
       method: "POST",
       headers: MEMBER_HEADERS,

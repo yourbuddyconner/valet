@@ -21,7 +21,6 @@ const uploadMyAvatarMutateAsync = vi.fn().mockResolvedValue({ avatarUrl: "/avata
 const patchOrgMutateAsync = vi.fn().mockResolvedValue({ ok: true });
 const setPrefMutate = vi.fn();
 const navigateMock = vi.fn();
-const saveIdentityMutateAsync = vi.fn().mockResolvedValue({ ok: true });
 const createApiKeyMutate = vi.fn();
 const revokeApiKeyMutate = vi.fn();
 
@@ -101,7 +100,6 @@ vi.mock("~/api/orchestrator", () => ({
     isLoading: false,
     error: null,
   }),
-  useSaveIdentity: () => ({ mutateAsync: saveIdentityMutateAsync, isPending: false, error: null }),
 }));
 
 // importOriginal: see -new-session-dialog.test.tsx for why a bare

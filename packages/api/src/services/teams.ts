@@ -322,7 +322,6 @@ export async function seedMissingTeamDefaults(db: AppDb): Promise<string[]> {
         eq(assistants.ownerType, "team"),
         eq(assistants.ownerId, teams.id),
         eq(assistants.orgId, teams.orgId),
-        eq(assistants.isDefault, true),
       ),
     )
     .where(isNull(assistants.id))
@@ -390,6 +389,7 @@ export async function createTeam(db: AppDb, opts: CreateTeamOptions): Promise<Cr
     createdAt: now,
     defaultModel: null,
     defaultReasoning: null,
+    slackHomeChannelId: null,
   };
   const adoptedSources: ContentSourceRow[] = [];
 
@@ -533,6 +533,7 @@ export async function listTeamsForUser(db: AppDb, userId: string): Promise<TeamR
       createdAt: teams.createdAt,
       defaultModel: teams.defaultModel,
       defaultReasoning: teams.defaultReasoning,
+      slackHomeChannelId: teams.slackHomeChannelId,
     })
     .from(teamMembers)
     .innerJoin(teams, eq(teamMembers.teamId, teams.id))
@@ -643,6 +644,7 @@ export async function listTeamsForOrg(db: AppDb, orgId: string): Promise<TeamRow
       createdAt: teams.createdAt,
       defaultModel: teams.defaultModel,
       defaultReasoning: teams.defaultReasoning,
+      slackHomeChannelId: teams.slackHomeChannelId,
     })
     .from(teams)
     .where(eq(teams.orgId, orgId))

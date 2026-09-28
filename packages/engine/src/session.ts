@@ -259,6 +259,7 @@ export class Session {
   readonly skills = new Map<string, SkillSource>();
   private threads = new Map<string, Thread>();
   private threadsByKey = new Map<string, Thread>();
+  private creatingThreads = new Map<string, Promise<Thread>>();
   /** Lazily-built slash-command registry; invalidated by refreshCommandRegistry(). */
   private commandRegistryCache: CommandRegistry | null = null;
   /**
@@ -799,8 +800,28 @@ export class Session {
   async createThread(key: string, initial?: ThreadInitialSettings): Promise<Thread> {
     const existing = this.threadsByKey.get(key);
     if (existing) return existing;
-    const data = this.buildThreadData(key, initial);
-    await this.providers.store.saveThread(this.id, data);
+    const pending = this.creatingThreads.get(key);
+    if (pending) return pending;
+    const creating = this.createKeyedThread(key, initial);
+    this.creatingThreads.set(key, creating);
+    try {
+      return await creating;
+    } finally {
+      this.creatingThreads.delete(key);
+    }
+  }
+
+  private async createKeyedThread(key: string, initial?: ThreadInitialSettings): Promise<Thread> {
+    let data = this.buildThreadData(key, initial);
+    try {
+      await this.providers.store.saveThread(this.id, data);
+    } catch (error) {
+      // A different host can win the durable (session_id, key) constraint.
+      // Recover only when that winner exists; preserve unrelated failures.
+      const winner = (await this.providers.store.listThreads(this.id)).find(thread => thread.key === key);
+      if (!winner) throw error;
+      data = winner;
+    }
     const thread = new Thread(this, data);
     this.attachThread(thread);
     return thread;

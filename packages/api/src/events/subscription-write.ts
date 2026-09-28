@@ -144,7 +144,7 @@ export function validateSubscription(
   }
   if (target.kind === "workflow") {
     if (target.assistantId !== undefined) {
-      return "assistantId is only valid on an orchestrator target";
+      return "Assistant selection is not supported. Choose the personal or team workspace instead.";
     }
     // A workflow keeps its own prompt configuration on its llm and session
     // nodes. A prompt field here would name a prompt nothing renders.

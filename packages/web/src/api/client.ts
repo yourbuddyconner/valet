@@ -11,12 +11,7 @@ import type {
   AbortThreadRequest,
   AddTeamMemberRequest,
   AuthConfigResponse,
-  CreateAssistantRequest,
-  CreateAssistantResponse,
-  EnsureAssistantSessionResponse,
   ListAssistantsResponse,
-  PatchAssistantRequest,
-  PatchAssistantResponse,
   AllowWorkflowPermissionsRequest,
   AllowWorkflowPermissionsResponse,
   CancelWorkflowRunResponse,
@@ -91,6 +86,7 @@ import type {
   SecuritySetConfigResponse,
   SecuritySetPlanResponse,
   GetWorkflowResponse,
+  EnsureWorkflowConversationResponse,
   GetWorkflowRunResponse,
   GetWorkflowTriggerCatalogResponse,
   DeliverIdentityLinkFallback,
@@ -163,8 +159,6 @@ import type {
   PatchMeRequest,
   PatchMeResponse,
   ProfilePictureUploadResponse,
-  PatchOrchestratorInfoRequest,
-  PatchOrchestratorInfoResponse,
   PatchOrgMemberRequest,
   PatchOrgMemberResponse,
   PatchIdentityLinkRequest,
@@ -563,6 +557,8 @@ export const api = {
       "GET",
       kind ? `/sessions?kind=${kind}${ownerSuffix(owner)}` : `/sessions${ownerQuery(owner)}`,
     ),
+  listWork: (owner: OwnerFilter, cursor?: string) =>
+    request<ListSessionsResponse>("GET", `/sessions?discovery=true&limit=25${ownerSuffix(owner)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
   getSession: (id: string) =>
     request<GetSessionResponse>("GET", `/sessions/${encodeURIComponent(id)}`),
   /** GET /sessions/:id/security — the session's engagement + cells
@@ -720,8 +716,6 @@ export const api = {
     request<EnsureOrchestratorResponse>("POST", "/orchestrator"),
   getOrchestratorInfo: () =>
     request<GetOrchestratorInfoResponse>("GET", "/orchestrator/info"),
-  patchOrchestratorInfo: (body: PatchOrchestratorInfoRequest) =>
-    request<PatchOrchestratorInfoResponse>("PATCH", "/orchestrator/info", body),
   /** `sessionId` scopes the list to one assistant's children — the open
    * assistant in the chat thread tree, so a team assistant's runs nest under
    * it. Omitted = your own default assistant. */
@@ -742,25 +736,6 @@ export const api = {
   // also how the client learns each assistant's session id, so it replaces
   // the client-side id derivation the rail used to do.
   listAssistants: () => request<ListAssistantsResponse>("GET", "/assistants"),
-  createAssistant: (body: CreateAssistantRequest) =>
-    request<CreateAssistantResponse>("POST", "/assistants", body),
-  patchAssistant: (id: string, body: PatchAssistantRequest) =>
-    request<PatchAssistantResponse>("PATCH", `/assistants/${encodeURIComponent(id)}`, body),
-  uploadAssistantAvatar: (id: string, file: File) =>
-    uploadProfilePicture(`/assistants/${encodeURIComponent(id)}/avatar`, file),
-  // Archive, not destroy: the row keeps `archived_at` and the conversation
-  // it held survives. `DELETE` carries it because the wire's
-  // `PatchAssistantRequest` covers `name` and `isDefault` only, and the
-  // house convention for a soft remove is the same verb as `deleteTeam`.
-  archiveAssistant: (id: string) =>
-    request<{ ok: true }>("DELETE", `/assistants/${encodeURIComponent(id)}`),
-  /** Get-or-create one assistant's session. Creating an assistant writes no
-   * session, so the chat page calls this before opening the conversation. */
-  ensureAssistantSession: (id: string) =>
-    request<EnsureAssistantSessionResponse>(
-      "POST",
-      `/assistants/${encodeURIComponent(id)}/session`,
-    ),
 
   // memory (assistant-centered web UI decision 7; dashboard memory card +
   // the Task 6 explorer share these reads)
@@ -781,9 +756,11 @@ export const api = {
   // `mine=1` is the caller-scoped gallery view (server-filtered — see the
   // route's comment on why this replaced a client-side `actorUserId` match)
   // and composes with nothing, so it is a separate option, not `OwnerFilter`.
-  listArtifacts: (owner?: OwnerFilter, opts?: { mine?: boolean; limit?: number; cursor?: string }) => {
+  listArtifacts: (owner?: OwnerFilter, opts?: { mine?: boolean; limit?: number; cursor?: string; sourceSessionId?: string; sourceThreadId?: string }) => {
     const qs = new URLSearchParams(ownerParams(owner));
     if (opts?.mine) qs.set("mine", "1");
+    if (opts?.sourceSessionId) qs.set("sourceSessionId", opts.sourceSessionId);
+    if (opts?.sourceThreadId) qs.set("sourceThreadId", opts.sourceThreadId);
     if (opts?.limit !== undefined) qs.set("limit", String(opts.limit));
     if (opts?.cursor !== undefined) qs.set("cursor", opts.cursor);
     return request<ListArtifactsResponse>("GET", `/artifacts${qs.size ? `?${qs}` : ""}`);
@@ -950,6 +927,7 @@ export const api = {
    * half-specified pair rather than guessing. */
   listWorkflows: (owner?: OwnerFilter) =>
     request<ListWorkflowsResponse>("GET", `/workflows${ownerQuery(owner)}`),
+  ensureWorkflowConversation: (workflowId: string) => request<EnsureWorkflowConversationResponse>("POST", `/workflows/${encodeURIComponent(workflowId)}/conversation`),
   getWorkflow: (id: string) =>
     request<GetWorkflowResponse>("GET", `/workflows/${encodeURIComponent(id)}`),
   createWorkflow: (body: CreateWorkflowRequest) =>

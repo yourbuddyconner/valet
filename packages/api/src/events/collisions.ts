@@ -42,7 +42,6 @@ const SLACK_MENTION_KEY = "slack.app_mention";
 export interface CollisionTarget {
   kind: string;
   workflowId?: string;
-  assistantId?: string;
   follow?: boolean;
   orchestrator?: "user" | "team" | "org";
 }

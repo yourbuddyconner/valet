@@ -26,11 +26,11 @@ vi.mock("./client", () => ({
   api: { createTeam: (body: CreateTeamRequest) => createTeam(body) },
 }));
 
-import { qkAssistants } from "./assistants";
+import { qk } from "./queries";
 import { qkSettings, teamCreateQueryKeys, useCreateTeam } from "./settings";
 
 function assistant(id: string, owner: AssistantSummary["owner"]): AssistantSummary {
-  return { id, owner, sessionId: `assistant:${id}`, isDefault: true, createdAt: 1 };
+  return { id, owner, sessionId: `assistant:${id}`, createdAt: 1 };
 }
 
 const created: CreateTeamResponse = {
@@ -64,8 +64,8 @@ describe("teamCreateQueryKeys", () => {
     // transaction. The assistants key is the prefix (`["assistants"]`) so
     // every workspace's cache entry refreshes, same convention as
     // `qk.sessions()`.
-    expect(teamCreateQueryKeys()).toEqual([qkSettings.teams(), qkAssistants.list()]);
-    expect(qkAssistants.list()).toEqual(["assistants"]);
+    expect(teamCreateQueryKeys()).toEqual([qkSettings.teams(), qk.assistants()]);
+    expect(qk.assistants()).toEqual(["assistants"]);
   });
 });
 
@@ -74,13 +74,13 @@ describe("useCreateTeam", () => {
     createTeam.mockResolvedValueOnce(created);
     const client = makeClient();
     const mine = assistant("asst_own", { type: "user", id: "u1" });
-    client.setQueryData<ListAssistantsResponse>(qkAssistants.list(), { assistants: [mine] });
+    client.setQueryData<ListAssistantsResponse>(qk.assistants(), { assistants: [mine] });
 
     const { result } = renderHook(() => useCreateTeam(), { wrapper: wrapperFor(client) });
     await result.current.mutateAsync({ name: "Platform" });
 
     await waitFor(() =>
-      expect(client.getQueryData<ListAssistantsResponse>(qkAssistants.list())).toEqual({
+      expect(client.getQueryData<ListAssistantsResponse>(qk.assistants())).toEqual({
         assistants: [mine, created.defaultAssistant],
       }),
     );
@@ -98,8 +98,8 @@ describe("useCreateTeam", () => {
     const { result } = renderHook(() => useCreateTeam(), { wrapper: wrapperFor(client) });
     await result.current.mutateAsync({ name: "Platform" });
 
-    expect(client.getQueryData(qkAssistants.list())).toBeUndefined();
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: qkAssistants.list() });
+    expect(client.getQueryData(qk.assistants())).toBeUndefined();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: qk.assistants() });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: qkSettings.teams() });
   });
 });

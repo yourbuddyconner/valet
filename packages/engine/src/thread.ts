@@ -4926,7 +4926,8 @@ export class Thread {
    * overlays" ordering; do not "fix" it.
    */
   private buildBaseSystemPrompt(): string {
-    const base = this.session.options.systemPrompt ?? "";
+    const threadContext = this.session.options.threadSystemContext?.({ id: this.id, key: this.key });
+    const base = [this.session.options.systemPrompt, threadContext].filter(Boolean).join("\n\n");
     const fragments = this.session.options.systemContext ?? [];
     if (fragments.length === 0) return base;
     const sorted = [...fragments].sort((a, b) => {

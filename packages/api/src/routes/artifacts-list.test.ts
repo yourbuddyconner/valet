@@ -55,6 +55,32 @@ async function list(target: TestApi, query: string, userId = "local-user") {
 }
 
 describe("workspace artifact lists", () => {
+  it("filters source work before pagination and binds the cursor to that work", async () => {
+    const { target, teamRows } = await setup();
+    for (const row of teamRows) {
+      await target.providers.db.update(artifacts).set({ sourceSessionId: "work-one", sourceThreadId: "thread-one" }).where(eq(artifacts.id, row.id));
+    }
+    const query = "ownerType=team&ownerId=team-a&sourceSessionId=work-one&sourceThreadId=thread-one&limit=2";
+    const first = await list(target, query, "test-member");
+    expect(first.artifacts).toHaveLength(2);
+    expect(first.artifacts.every(row => row.sourceSessionId === "work-one" && row.sourceThreadId === "thread-one")).toBe(true);
+    const cursor = encodeURIComponent(first.nextCursor ?? "");
+    const second = await list(target, `${query}&cursor=${cursor}`, "test-member");
+    expect(second.artifacts).toHaveLength(1);
+    expect(second.nextCursor).toBeNull();
+    const wrongSource = await fetch(`${target.baseUrl}/api/artifacts?${query.replace("work-one", "work-two")}&cursor=${cursor}`, {
+      headers: { "x-valet-test-user-id": "test-member" },
+    });
+    expect(wrongSource.status).toBe(400);
+    const wrongThread = await list(target, query.replace("thread-one", "thread-two"), "test-member");
+    expect(wrongThread.artifacts).toEqual([]);
+    const wrongThreadCursor = await fetch(`${target.baseUrl}/api/artifacts?${query.replace("thread-one", "thread-two")}&cursor=${cursor}`, { headers: { "x-valet-test-user-id": "test-member" } });
+    expect(wrongThreadCursor.status).toBe(400);
+    const empty = await list(target, query.replace("work-one", "work-two"), "test-member");
+    expect(empty.artifacts).toEqual([]);
+    expect((await fetch(`${target.baseUrl}/api/artifacts?sourceSessionId=work-one`)).status).toBe(400);
+  });
+
   it("uses stored ownership, not publishing actor, for personal and team lists", async () => {
     const { target, personal, otherPersonal, teamRows } = await setup();
     const mine = await list(target, "ownerType=user&ownerId=local-user&limit=50");

@@ -52,12 +52,9 @@ vi.mock("~/api/events", () => ({
 // dedicated picker cases below re-mock it with several.
 let assistantsData: { assistants: unknown[] } = {
   assistants: [
-    { id: "a-mine", name: "Mine", isDefault: true, owner: { type: "user", id: "u1" } },
+    { id: "a-mine", name: "Mine", owner: { type: "user", id: "u1" } },
   ],
 };
-vi.mock("~/api/assistants", () => ({
-  useAssistants: () => ({ data: assistantsData, isLoading: false, error: null }),
-}));
 
 // The reply step warns when the caller's Slack account is not linked.
 vi.mock("~/api/queries", () => ({
@@ -117,7 +114,7 @@ beforeEach(() => {
   teamsData = { teams: [{ id: "t_platform", name: "Platform", memberCount: 3 }] };
   assistantsData = {
     assistants: [
-      { id: "a-mine", name: "Mine", isDefault: true, owner: { type: "user", id: "u1" } },
+      { id: "a-mine", name: "Mine", owner: { type: "user", id: "u1" } },
     ],
   };
 });
@@ -144,8 +141,8 @@ describe("AutomationWizard", () => {
 
   it("homepage setup requires channels and an explicit team assistant, then saves that target", () => {
     assistantsData = { assistants: [
-      { id: "a-team", name: "Reviewer", isDefault: true, owner: { type: "team", id: "t_platform" } },
-      { id: "a-other", name: "Other", isDefault: true, owner: { type: "team", id: "t_other" } },
+      { id: "a-team", name: "Reviewer", owner: { type: "team", id: "t_platform" } },
+      { id: "a-other", name: "Other", owner: { type: "team", id: "t_other" } },
     ] };
     render(<AutomationWizard open onOpenChange={() => {}} replyTeam={{ id: "t_platform", name: "Platform" }} />);
     expect(screen.getByRole("heading", { name: "Set up Slack replies" })).toBeTruthy();
@@ -169,7 +166,7 @@ describe("AutomationWizard", () => {
 
   it("homepage setup opens on the organization audience and posts it", () => {
     assistantsData = { assistants: [
-      { id: "a-team", name: "Reviewer", isDefault: true, owner: { type: "team", id: "t_platform" } },
+      { id: "a-team", name: "Reviewer", owner: { type: "team", id: "t_platform" } },
     ] };
     render(<AutomationWizard open onOpenChange={() => {}} replyTeam={{ id: "t_platform", name: "Platform" }} />);
     const anyone = screen.getByLabelText(/Anyone in the organization/) as HTMLInputElement;
@@ -192,7 +189,7 @@ describe("AutomationWizard", () => {
 
   it("the team-only audience posts audience team", () => {
     assistantsData = { assistants: [
-      { id: "a-team", name: "Reviewer", isDefault: true, owner: { type: "team", id: "t_platform" } },
+      { id: "a-team", name: "Reviewer", owner: { type: "team", id: "t_platform" } },
     ] };
     render(<AutomationWizard open onOpenChange={() => {}} replyTeam={{ id: "t_platform", name: "Platform" }} />);
     fireEvent.click(screen.getByLabelText(/Only members of Platform/));
@@ -282,8 +279,8 @@ describe("AutomationWizard", () => {
   it("a team reply rule keeps the selected assistant through review and create", () => {
     scopeTeamId = "t_platform";
     assistantsData = { assistants: [
-      { id: "team-default", name: "Default", isDefault: true, owner: { type: "team", id: "t_platform" } },
-      { id: "team-ops", name: "Ops", isDefault: false, owner: { type: "team", id: "t_platform" } },
+      { id: "team-default", name: "Default", owner: { type: "team", id: "t_platform" } },
+      { id: "team-ops", name: "Ops", owner: { type: "team", id: "t_platform" } },
     ] };
     render(<AutomationWizard open onOpenChange={() => {}} />);
     clickNext();
@@ -600,7 +597,7 @@ describe("AutomationWizard", () => {
   }
 
   it("homepage setup never offers to override a colliding responder", () => {
-    assistantsData = { assistants: [{ id: "a-team", name: "Reviewer", isDefault: true, owner: { type: "team", id: "t_platform" } }] };
+    assistantsData = { assistants: [{ id: "a-team", name: "Reviewer", owner: { type: "team", id: "t_platform" } }] };
     createSubscription.mockImplementation((_body: unknown, handlers: { onError: (err: Error) => void }) => {
       handlers.onError(new ApiError(409, "collision", { error: "collides", collisions: collisionPayload("blocking") }));
     });

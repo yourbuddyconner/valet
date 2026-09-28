@@ -73,7 +73,7 @@ describe("api integration: default assistant lifecycle", () => {
       .from(assistants)
       .where(eq(assistants.sessionId, firstBody.sessionId));
     expect(assistantRows).toHaveLength(1);
-    expect(assistantRows[0]?.isDefault).toBe(true);
+    expect(assistantRows[0]).toBeDefined();
     expect(assistantRows[0]?.ownerType).toBe("user");
     expect(assistantRows[0]?.ownerId).toBe("local-user");
     expect(await db.select().from(assistants)).toHaveLength(1);

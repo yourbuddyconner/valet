@@ -9,7 +9,7 @@
  */
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ListAssistantsResponse, ListTeamsResponse, SessionDetail } from "@valet/api/wire";
+import type { ListTeamsResponse, SessionDetail } from "@valet/api/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "~/components/primitives";
 import { useStreamStore } from "~/stores/stream";
@@ -44,11 +44,10 @@ let setProfileMutateAsync = vi.fn().mockResolvedValue({ ok: true });
  * the orchestrator probe have data (TKAI-253). Set either to `undefined`
  * to model its query still in flight. */
 let teamsData: ListTeamsResponse = { teams: [] };
-let assistantsData: ListAssistantsResponse | undefined = { assistants: [] };
+let isWorkspaceRuntime: boolean | undefined = false;
 /** The viewer's own orchestrator probe — the header matches its sessionId
  * against `session.id`. Defaults to a non-matching id so ordinary sessions
  * read as ordinary. */
-let orchInfoData: { sessionId: string; name: string | null } | undefined = undefined;
 
 // importOriginal, not a bare replacement: vitest.config.ts sets
 // `isolate: false` to share the module registry across test files in a
@@ -86,17 +85,6 @@ vi.mock("~/api/settings", () => ({
   useOrgReasoning: () => ({ data: undefined, isLoading: false, error: null }),
 }));
 
-vi.mock("~/api/orchestrator", () => ({
-  useOrchestratorInfo: () => ({ data: orchInfoData, isLoading: false, error: null }),
-}));
-
-vi.mock("~/api/assistants", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("~/api/assistants")>();
-  return {
-    ...actual,
-    useAssistants: () => ({ data: assistantsData, isLoading: false, error: null }),
-  };
-});
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
@@ -107,6 +95,7 @@ import { SandboxChip, SessionHeader } from "./session-header";
 function baseSession(): SessionDetail {
   return {
     id: "sess-1",
+    isWorkspaceRuntime,
     workspace: "acme/repo",
     status: "active",
     kind: "code",
@@ -187,8 +176,7 @@ beforeEach(() => {
   renameMutateAsync = vi.fn().mockResolvedValue({ ok: true });
   setProfileMutateAsync = vi.fn().mockResolvedValue({ ok: true });
   teamsData = { teams: [] };
-  assistantsData = { assistants: [] };
-  orchInfoData = { sessionId: "assistant:asst_viewer_default", name: null };
+  isWorkspaceRuntime = false;
 });
 
 describe("SandboxChip — suspended state", () => {
@@ -520,7 +508,7 @@ describe("SessionHeader — overflow menu", () => {
  */
 describe("SessionHeader — no delete on the user's own assistant", () => {
   it("hides Delete session on the orchestrator page, keeps Replace sandbox", async () => {
-    orchInfoData = { sessionId: "sess-1", name: "Aurora" };
+    isWorkspaceRuntime = true;
     const user = userEvent.setup();
     renderHeader({ state: "ready", epoch: 1 });
 
@@ -529,18 +517,8 @@ describe("SessionHeader — no delete on the user's own assistant", () => {
     expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
   });
 
-  it("hides delete on a personal assistant from the assistants list", async () => {
-    assistantsData = {
-      assistants: [
-        {
-          id: "asst_me",
-          owner: { type: "user", id: "u1" },
-          sessionId: "sess-1",
-          isDefault: true,
-          createdAt: 1,
-        },
-      ],
-    };
+  it("hides delete on a personal workspace runtime", async () => {
+    isWorkspaceRuntime = true;
     const user = userEvent.setup();
     renderHeader({ state: "ready", epoch: 1 });
 
@@ -549,8 +527,8 @@ describe("SessionHeader — no delete on the user's own assistant", () => {
     expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
   });
 
-  it("fails closed while the assistants list is loading", async () => {
-    assistantsData = undefined;
+  it("fails closed without a runtime identity", async () => {
+    isWorkspaceRuntime = undefined;
     const user = userEvent.setup();
     renderHeader({ state: "ready", epoch: 1 });
 
@@ -559,8 +537,8 @@ describe("SessionHeader — no delete on the user's own assistant", () => {
     expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
   });
 
-  it("fails closed while the orchestrator probe is loading", async () => {
-    orchInfoData = undefined;
+  it("fails closed when a detail response omits runtime identity", async () => {
+    isWorkspaceRuntime = undefined;
     const user = userEvent.setup();
     renderHeader({ state: "ready", epoch: 1 });
 
@@ -695,21 +673,10 @@ describe("SessionHeader — Terminal and VS Code switch", () => {
         },
       ],
     };
-    assistantsData = {
-      assistants: [
-        {
-          id: "asst_team",
-          owner: { type: "team", id: "team_1" },
-          sessionId: "assistant:asst_team",
-          isDefault: true,
-          createdAt: 1,
-        },
-      ],
-    };
     render(
       <TooltipProvider>
         <SessionHeader
-          session={{ ...baseSession(), id: "assistant:asst_team" }}
+          session={{ ...baseSession(), id: "assistant:asst_team", isWorkspaceRuntime: true, owner: { type: "team", id: "team_1" } }}
           agentStatus="idle"
           conn="open"
         />
@@ -823,7 +790,7 @@ describe("SessionHeader — rename", () => {
 
 describe("SessionHeader — team assistant", () => {
   function teamSession(): SessionDetail {
-    return { ...baseSession(), id: "assistant:asst_team", title: "Assistant" };
+    return { ...baseSession(), id: "assistant:asst_team", title: "Assistant", isWorkspaceRuntime: true, owner: { type: "team", id: "team_1" } };
   }
 
   function renderTeamHeader() {
@@ -834,7 +801,7 @@ describe("SessionHeader — team assistant", () => {
     );
   }
 
-  function withTeam(callerRole: "admin" | "member" | null, assistantName?: string) {
+  function withTeam(callerRole: "admin" | "member" | null, _assistantName?: string) {
     teamsData = {
       teams: [
         {
@@ -847,18 +814,6 @@ describe("SessionHeader — team assistant", () => {
           memberCount: 3,
           callerRole,
           defaultModel: null,
-        },
-      ],
-    };
-    assistantsData = {
-      assistants: [
-        {
-          id: "asst_team",
-          owner: { type: "team", id: "team_1" },
-          ...(assistantName === undefined ? {} : { name: assistantName }),
-          sessionId: "assistant:asst_team",
-          isDefault: true,
-          createdAt: 1,
         },
       ],
     };
@@ -949,38 +904,14 @@ describe("SessionHeader — team assistant", () => {
     expect(screen.getByRole("button", { name: "Thread menu" })).toBeTruthy();
   });
 
-  // TKAI-253 removed delete for the user's OWN assistant only. A team's
-  // assistant keeps it: this menu is a team admin's only delete surface.
-  it("keeps the team-assistant delete for a team admin", async () => {
+  it("never offers move or delete for a team workspace runtime, including to admins", async () => {
     withTeam("admin");
     const user = userEvent.setup();
     renderTeamHeader();
-
     await user.click(screen.getByRole("button", { name: "Thread menu" }));
-    expect(
-      screen.getByRole("menuitem", { name: /delete this team's assistant/i }),
-    ).toBeTruthy();
-  });
-
-  // The team-assistant copy names the team that loses the conversation —
-  // the one thing the plain-session copy cannot say.
-  it("names the team in the assistant's confirm dialog, and deletes only on confirm", async () => {
-    withTeam("admin", "Triage");
-    const user = userEvent.setup();
-    renderTeamHeader();
-
-    await user.click(screen.getByRole("button", { name: "Thread menu" }));
-    await user.click(screen.getByRole("menuitem", { name: /delete this team's assistant/i }));
-
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Delete New thread?")).toBeTruthy();
-    expect(
-      within(dialog).getByText("Everyone on Platform loses this conversation and its threads."),
-    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /move to workspace/i })).toBeNull();
     expect(deleteMutateAsync).not.toHaveBeenCalled();
-
-    await user.click(within(dialog).getByRole("button", { name: "Delete assistant" }));
-    expect(deleteMutateAsync).toHaveBeenCalledWith("assistant:asst_team");
   });
 
   it("keeps the controls on a personal session", () => {

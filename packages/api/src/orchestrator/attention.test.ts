@@ -14,7 +14,7 @@ import {
   type AttentionChannelDeliverer,
   type AttentionEvent,
 } from "./attention.js";
-import { notifications, teamMembers, teams, userNotificationPreferences } from "../schema/index.js";
+import { notifications, orgMembers, teamMembers, teams, userNotificationPreferences } from "../schema/index.js";
 
 let api: TestApi | undefined;
 
@@ -195,8 +195,10 @@ describe("routeAttention (DB-backed)", () => {
         { teamId: "team-2", userId: "test-member", role: "member" },
       ]);
 
+    const teamCalls: AttentionEvent[] = [];
     const calls: Array<{ userId: string; event: AttentionEvent }> = [];
     const stub: AttentionChannelDeliverer = {
+      deliverTeam: async (event) => { teamCalls.push(event); },
       deliver: async (userId, event) => {
         calls.push({ userId, event });
       },
@@ -207,8 +209,16 @@ describe("routeAttention (DB-backed)", () => {
       { kind: "notification", owner: { type: "team", id: "team-2" }, title: "fanout" },
     );
 
-    expect(calls.map((c) => c.userId).sort()).toEqual(["local-user", "test-member"]);
+    expect(calls).toHaveLength(0);
+    expect(teamCalls).toHaveLength(1);
+    await db.insert(userNotificationPreferences).values({ userId: "local-user", kind: "notification", web: true, teamDm: true });
+    await routeAttention({ db, channels: [stub] }, { kind: "notification", owner: { type: "team", id: "team-2" }, title: "fanout" });
+    expect(calls.map((c) => c.userId)).toEqual(["local-user"]);
     expect(calls.every((c) => c.event.title === "fanout")).toBe(true);
+    await db.delete(orgMembers).where(eq(orgMembers.userId, "local-user"));
+    await routeAttention({ db, channels: [stub] }, { kind: "notification", owner: { type: "team", id: "team-2" }, title: "removed" });
+    expect(calls).toHaveLength(1);
+
   });
 
   it("a rejecting deliverer does not prevent notification inserts or other deliverers", async () => {

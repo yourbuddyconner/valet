@@ -713,8 +713,7 @@ describe('positionNewNodes', () => {
   });
 });
 
-it('preserves explicit assistant routing through canvas saves and detects external routing changes', () => {
+it('does not propagate obsolete assistant routing through canvas saves', () => {
   const definition = { ...baseDefinition(), assistantId: 'chosen' };
-  expect(fromFlow(toFlow(definition), definition).assistantId).toBe('chosen');
-  expect(graphSignature(definition)).not.toBe(graphSignature({ ...definition, assistantId: 'other' }));
+  expect(fromFlow(toFlow(definition), definition)).not.toHaveProperty('assistantId');
 });

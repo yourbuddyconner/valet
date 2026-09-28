@@ -166,6 +166,7 @@ describe("PATCH /api/sessions/:id — profile", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as PatchSessionResponse;
     expect(body.profile).toBe("full");
+    expect(body.isWorkspaceRuntime).toBe(false);
     expect(await storedProfile(api, "pf-cold")).toBe("full");
     // Nothing was running, so nothing had to be replaced. The next
     // provision reads the row.
@@ -275,6 +276,8 @@ describe("PATCH /api/sessions/:id — profile", () => {
     expect(ensure.status).toBe(200);
     const { sessionId } = (await ensure.json()) as { sessionId: string };
     expect(await storedProfile(api, sessionId)).toBe("headless");
+    const detail = await fetch(`${api.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}`);
+    expect(((await detail.json()) as PatchSessionResponse).isWorkspaceRuntime).toBe(true);
 
     const res = await patchProfile(api, sessionId, "full");
     expect(res.status).toBe(200);

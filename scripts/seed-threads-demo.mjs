@@ -15,8 +15,8 @@ const scenarios = [
   { title: '[Demo] NDA request received', scope: 'team', question: 'Review the NDA request from the intake form.', answer: 'This is a seeded local example of a successful intake conversation. The real thread history API serves this transcript. No Slack event or legal review was executed.' },
   { title: '[Demo] Investigate a missed form', scope: 'team', question: 'Why did the workflow not run for the next form?', answer: 'Open Events → Problems to compare the recorded explanations. Those examples are fixtures; an absent log entry does not establish that Slack delivered the message.' },
 ];
-async function request(path, method = 'GET', body) {
-  const response = await fetch(`${base}/api${path}`, { method, headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+async function request(path, method = 'GET', body, headers = {}) {
+  const response = await fetch(`${base}/api${path}`, { method, headers: { 'Content-Type': 'application/json', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${await response.text()}`);
   return response.json();
 }
@@ -65,6 +65,31 @@ if (mode === 'bootstrap') {
   manifest.workflowId = workflow.id;
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   console.log(`Team-owned workflow, with no assistant selection: http://localhost:5173/workflows/${workflow.id}`);
+} else if (mode === 'review') {
+  const me = await request('/me');
+  if (me.id !== 'local-user' || me.orgId !== 'local-org') throw new Error('Seed requires the local stub identity.');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  if (!manifest.workSessionId) {
+    const work = await request('/sessions', 'POST', {
+      workspace: `${dataDir}/demo-work`, title: '[Demo] Standalone work retained in Threads', teamId: manifest.teamId,
+    });
+    manifest.workSessionId = work.id;
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+  const origin = manifest.records.find(record => record.scope === 'team');
+  if (!origin) throw new Error('Run bootstrap before review seeding.');
+  const artifact = await request(`/artifacts/share?ownerType=team&ownerId=${encodeURIComponent(manifest.teamId)}`, 'POST', {
+    key: 'threads-demo/nda-review.md', title: '[Demo] NDA review artifact', format: 'markdown',
+    content: '# Local review fixture\n\nThis seeded artifact belongs to the NDA demo thread. It is not a legal review. Use its source link to return to that conversation.',
+  }, { 'x-valet-session-id': origin.sessionId, 'x-valet-thread-id': origin.threadId });
+  manifest.artifactId = artifact.id;
+  if (manifest.workflowId) {
+    const editor = await request(`/workflows/${manifest.workflowId}/conversation`, 'POST', {});
+    manifest.editorThreadId = editor.threadId;
+  }
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  console.log(`Work and artifacts: http://localhost:5173/chat?workspace=${encodeURIComponent(manifest.teamId)}&view=work`);
+  console.log(`Thread artifact: http://localhost:5173/chat?workspace=${encodeURIComponent(manifest.teamId)}&thread=${encodeURIComponent(origin.threadId)}`);
 } else if (mode === 'offline') {
   // PGlite permits one owner. Do not open the data directory while the API runs.
   try {
@@ -101,5 +126,5 @@ if (mode === 'bootstrap') {
     for (const row of manifest.records) console.log(`${row.title}: http://localhost:5173/chat?workspace=${encodeURIComponent(row.scope === 'team' ? manifest.teamId : 'user')}&thread=${encodeURIComponent(row.threadId)}`);
   } finally { await db.close(); }
 } else {
-  throw new Error('Use bootstrap or workflow with the API running, or offline after stopping it.');
+  throw new Error('Use bootstrap, workflow, or review with the API running, or offline after stopping it.');
 }

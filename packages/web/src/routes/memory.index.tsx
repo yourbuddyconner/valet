@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemoryTree } from "~/api/memory";
 import { useListOwner } from "~/lib/use-list-owner";
-import { useScopedAssistantName } from "~/api/assistants";
+import { useWorkspaceName } from "~/lib/workspace-name";
 
 /**
  * `/memory` index child — the explorer's resting state (Task 6 brief,
@@ -18,9 +18,8 @@ function MemoryIndexPage() {
   // view of yours. The switcher says which one is being read.
   const owner = useListOwner();
   const treeQ = useMemoryTree(owner);
-  // Name the assistant of the ACTIVE workspace — a team's default under team
-  // scope — not always the caller's personal one.
-  const name = useScopedAssistantName(owner);
+  // Name the workspace whose memory is being read.
+  const name = useWorkspaceName(owner);
 
   const nothingRemembered = treeQ.data !== undefined && treeQ.data.entries.length === 0;
 
@@ -29,7 +28,7 @@ function MemoryIndexPage() {
     // `main` landmark, and this route paints inside it.
     <div className="hidden md:flex flex-1 min-h-0 items-center justify-center p-8 text-center text-sm text-muted">
       {nothingRemembered ? (
-        <p>Nothing remembered yet. Talk to {name}, or use Import in the left pane to load a memory bundle.</p>
+        <p>Nothing remembered yet. Start a thread in {name}, or use Import in the left pane to load a memory bundle.</p>
       ) : (
         <p>Select a file from the tree to read it.</p>
       )}

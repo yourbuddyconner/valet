@@ -52,7 +52,7 @@ describe("teams routes", () => {
     expect(createRes.status).toBe(201);
     const { team, defaultAssistant } = (await createRes.json()) as CreateTeamResponse;
     expect(team.name).toBe("Platform");
-    expect(defaultAssistant.isDefault).toBe(true);
+    expect(defaultAssistant.sessionId).toBeTruthy();
     expect(defaultAssistant.owner).toEqual({ type: "team", id: team.id });
     // The response carries the row the create transaction seeded, not a
     // second one minted by a re-read.
@@ -140,9 +140,7 @@ describe("teams routes", () => {
   // the team's assistant, so a surviving row and session are unreachable
   // orphans. Team delete retires the assistant and soft-deletes its session.
   //
-  // The seeded default (TKAI-337) already lives on the team, so the fixture
-  // adds a second, non-default assistant and asserts every team-owned row
-  // is retired.
+  // Team creation owns the singleton that team deletion must retire.
   it("deleting a team retires its assistant and deletes the assistant's session", async () => {
     api = await bootTestApi();
     const { baseUrl, providers } = api;
@@ -151,21 +149,10 @@ describe("teams routes", () => {
     const createRes = await createTeam(baseUrl, "Platform");
     const { team } = (await createRes.json()) as CreateTeamResponse;
 
-    await db.insert(assistants).values({
-      id: "asst_team_del",
-      orgId: "local-org",
-      ownerType: "team",
-      ownerId: team.id,
-      name: null,
-      personality: null,
-      behavior: null,
-      sessionId: "assistant:asst_team_del",
-      isDefault: false,
-      createdAt: Date.now(),
-      archivedAt: null,
-    });
+    const [singleton] = await db.select().from(assistants).where(and(eq(assistants.ownerType, "team"), eq(assistants.ownerId, team.id)));
+    if (!singleton) throw new Error("Team singleton missing");
     await db.insert(agentSessions).values({
-      id: "assistant:asst_team_del",
+      id: singleton.sessionId,
       userId: "local-user",
       orgId: "local-org",
       workspace: "/tmp/team-del",
@@ -183,18 +170,17 @@ describe("teams routes", () => {
     expect(delRes.status).toBe(200);
 
     const row = (
-      await db.select().from(assistants).where(eq(assistants.id, "asst_team_del"))
+      await db.select().from(assistants).where(eq(assistants.id, singleton.id))
     )[0];
     expect(row?.archivedAt).not.toBeNull();
-    expect(row?.isDefault).toBe(false);
     const sess = (
       await db
         .select()
         .from(agentSessions)
-        .where(eq(agentSessions.id, "assistant:asst_team_del"))
+        .where(eq(agentSessions.id, singleton.sessionId))
     )[0];
     expect(sess?.status).toBe("deleted");
-    // The seeded default is retired too — every team-owned row goes.
+    // The one team-owned row is retired.
     const teamOwned = await db
       .select()
       .from(assistants)
@@ -213,23 +199,10 @@ describe("teams routes", () => {
     const createRes = await createTeam(baseUrl, "Platform");
     const { team } = (await createRes.json()) as CreateTeamResponse;
 
-    await db.insert(assistants).values({
-      id: "asst_team_order",
-      orgId: "local-org",
-      ownerType: "team",
-      ownerId: team.id,
-      name: null,
-      personality: null,
-      behavior: null,
-      sessionId: "assistant:asst_team_order",
-      // Non-default, so the case also holds once a team is seeded with a
-      // default assistant at creation (TKAI-337).
-      isDefault: false,
-      createdAt: Date.now(),
-      archivedAt: null,
-    });
+    const [singleton] = await db.select().from(assistants).where(and(eq(assistants.ownerType, "team"), eq(assistants.ownerId, team.id)));
+    if (!singleton) throw new Error("Team singleton missing");
     await db.insert(agentSessions).values({
-      id: "assistant:asst_team_order",
+      id: singleton.sessionId,
       userId: "local-user",
       orgId: "local-org",
       workspace: "/tmp/team-order",
@@ -252,9 +225,8 @@ describe("teams routes", () => {
     });
     expect(delRes.status).toBe(200);
 
-    expect(destroy).toHaveBeenCalledWith("assistant:asst_team_order");
-    // Every assistant the team owned (the seeded default included) is torn
-    // down, and each teardown ran after the team row was gone.
+    expect(destroy).toHaveBeenCalledWith(singleton.sessionId);
+    // Teardown runs after the team row is gone.
     expect(teamRowsAtDestroy).toHaveLength(destroy.mock.calls.length);
     expect(teamRowsAtDestroy.every((n) => n === 0)).toBe(true);
     destroy.mockRestore();
@@ -295,21 +267,9 @@ describe("teams routes", () => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
-    // A second (non-default) assistant beside the seeded default (TKAI-337).
-    // The refusal must leave both rows untouched.
-    await db.insert(assistants).values({
-      id: "asst_wf_team",
-      orgId: "local-org",
-      ownerType: "team",
-      ownerId: team.id,
-      name: null,
-      personality: null,
-      behavior: null,
-      sessionId: "assistant:asst_wf_team",
-      isDefault: false,
-      createdAt: Date.now(),
-      archivedAt: null,
-    });
+    // The refusal must leave the singleton untouched.
+    const [singleton] = await db.select().from(assistants).where(and(eq(assistants.ownerType, "team"), eq(assistants.ownerId, team.id)));
+    if (!singleton) throw new Error("Team singleton missing");
 
     const delRes = await fetch(`${baseUrl}/api/teams/${team.id}`, {
       method: "DELETE",
@@ -318,17 +278,16 @@ describe("teams routes", () => {
     expect(delRes.status).toBe(409);
 
     const row = (
-      await db.select().from(assistants).where(eq(assistants.id, "asst_wf_team"))
+      await db.select().from(assistants).where(eq(assistants.id, singleton.id))
     )[0];
     expect(row?.archivedAt).toBeNull();
-    // Every team-owned assistant survives untouched — the seeded default
-    // included.
+    // The team-owned singleton survives untouched.
     const teamOwned = await db
       .select()
       .from(assistants)
       .where(and(eq(assistants.ownerType, "team"), eq(assistants.ownerId, team.id)));
     expect(teamOwned.every((r) => r.archivedAt === null)).toBe(true);
-    expect(teamOwned.some((r) => r.isDefault)).toBe(true);
+    expect(teamOwned).toHaveLength(1);
   });
 
   it("404s on a team id that doesn't exist (or belongs to another org)", async () => {

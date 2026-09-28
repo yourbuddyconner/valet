@@ -149,6 +149,15 @@ describe("send threads on the conversation key's thread root", () => {
   });
 });
 
+describe("home channel", () => {
+  it("starts a new top-level message", async () => {
+    const transport = makeTransport();
+    await transport.sendToChannel("C0123456789", { markdown: "Team update" });
+    expect(lastCall("chat.postMessage").channel).toBe("C0123456789");
+    expect(lastCall("chat.postMessage").thread_ts).toBeUndefined();
+  });
+});
+
 describe("threadKeyFromEvent", () => {
   it("builds a thread key from an app_mention payload", () => {
     const transport = makeTransport();

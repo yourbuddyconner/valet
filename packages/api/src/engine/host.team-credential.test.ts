@@ -1,3 +1,4 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 /**
  * Team-owned sessions resolve credentials from the team principal, not the
  * prompting member. GitHub uses the App installation. Slack uses the org
@@ -20,7 +21,7 @@ import { EngineHost, sessionPrincipal } from "./host.js";
 import { githubTokenArgsForOwner, isUsableGithubRow } from "../services/session-github-token.js";
 import { agentSessions, orgs, teamMembers, teams } from "../schema/index.js";
 import { createLlmProvider } from "../services/llm-providers.js";
-import { createAssistant } from "../assistants/service.js";
+
 import { OnePasswordAuthError, type OnePasswordService } from "../services/onepassword.js";
 
 const orgId = "team-cred-org";
@@ -503,7 +504,7 @@ describe("EngineHost team-owned session credentials", () => {
         type: "api_key",
         apiKey: "member-linear",
       });
-      const assistant = await createAssistant(appDb, orgId, { type: "team", id: teamId }, "Team bot");
+      const assistant = await seedWorkspaceAssistant(appDb, orgId, { type: "team", id: teamId }, "Team bot");
       await appDb.insert(agentSessions).values({
         id: assistant.sessionId,
         userId,

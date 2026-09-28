@@ -342,14 +342,18 @@ describe("POST /api/channels/slack/webhook", () => {
     api = await bootTestApi({ plugins: [slackPlugin] });
     await seedRunningTransport(api);
 
-    const body = envelope(homeOpened(), "Ev-home");
+    const body = envelope({ ...homeOpened(), text: "private classifier payload", token: "classifier-secret" }, "Ev-home");
     expect((await post(api.baseUrl, body, sign(body))).status).toBe(200);
 
     // Under per-thread routing, app_home_opened has no thread_ts to anchor a
     // conversation key, so parseUpdate returns null. The webhook acks (200)
-    // but there's no event to route and no drop reason logged.
-    await new Promise((r) => setTimeout(r, 100)); // let any async work settle
-    expect(await dropReasons(api!)).toEqual([]);
+    // but there is no subscription event. Record that classification outcome.
+    await expect.poll(() => dropReasons(api!), { timeout: 5_000 }).toContain("slack_classifier_rejected");
+    const rows = await api.providers.db.select().from(eventDropLog).where(eq(eventDropLog.reason, "slack_classifier_rejected"));
+    expect(rows[0]?.detail).toContain("No enabled Slack trigger classifier");
+    expect(rows[0]?.eventMetadata).toBeNull();
+    expect(JSON.stringify(rows)).not.toContain("private classifier payload");
+    expect(JSON.stringify(rows)).not.toContain("classifier-secret");
   });
 
   it("persists a subscribed slack.message and skips it when nothing subscribes", async () => {

@@ -1,3 +1,4 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 /**
  * Session-backed agent actions must resolve their sender identity when they
  * post through a Slack action. `Session.options` is the engine's public seam.
@@ -7,7 +8,7 @@ import { eq } from "drizzle-orm";
 import { fauxAssistantMessage, fauxToolCall, registerFauxProvider, type FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import slackPlugin from "@valet/plugin-slack/plugin";
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
-import { createAssistant } from "../assistants/service.js";
+
 import { actionPolicies, assistants } from "../schema/index.js";
 
 const USER = "local-user";
@@ -105,7 +106,7 @@ describe("EngineHost outbound sender identity", () => {
 
   it("uses the current default assistant for a workflow session node", async () => {
     api = await bootTestApi({ plugins: [] });
-    const assistant = await createAssistant(api.providers.db, ORG, { type: "user", id: USER }, "Release bot");
+    const assistant = await seedWorkspaceAssistant(api.providers.db, ORG, { type: "user", id: USER }, "Release bot");
     await api.providers.db
       .update(assistants)
       .set({ avatarUrl: AVATAR_URL })
@@ -123,7 +124,7 @@ describe("EngineHost outbound sender identity", () => {
 
   it("uses the current parent assistant for a child-agent session", async () => {
     api = await bootTestApi({ plugins: [] });
-    const assistant = await createAssistant(api.providers.db, ORG, { type: "user", id: USER }, "Release bot");
+    const assistant = await seedWorkspaceAssistant(api.providers.db, ORG, { type: "user", id: USER }, "Release bot");
     await api.providers.db
       .update(assistants)
       .set({ avatarUrl: AVATAR_URL })
@@ -150,7 +151,7 @@ describe("EngineHost outbound sender identity", () => {
     faux = registerFauxProvider({ api: "anthropic-messages", provider: "anthropic" });
     api = await bootTestApi({ plugins: [slackPlugin] });
     await allowSlackSend(api);
-    const assistant = await createAssistant(api.providers.db, ORG, { type: "user", id: USER }, "Release bot");
+    const assistant = await seedWorkspaceAssistant(api.providers.db, ORG, { type: "user", id: USER }, "Release bot");
     await api.providers.db
       .update(assistants)
       .set({ avatarUrl: AVATAR_URL })

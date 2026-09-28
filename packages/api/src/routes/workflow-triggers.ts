@@ -149,6 +149,7 @@ workflowTriggersRouter.post("/schedules", async (c) => {
   if (!body.name || typeof body.name !== "string") {
     return c.json({ error: "name is required" }, 400);
   }
+  if (body.target && typeof body.target === "object" && "assistantId" in body.target) return c.json({ error: "Choose a workspace instead of an assistant." }, 400);
   if (!body.target || (body.target.kind !== "workflow" && body.target.kind !== "orchestrator")) {
     return c.json(
       {
@@ -158,17 +159,6 @@ workflowTriggersRouter.post("/schedules", async (c) => {
       400,
     );
   }
-  // Shape only, matching the subscription validator. Whether the id names a
-  // live assistant of this schedule's owner is checked in the service, which
-  // is where the owner is settled.
-  if (
-    body.target.kind === "orchestrator" &&
-    body.target.assistantId !== undefined &&
-    (typeof body.target.assistantId !== "string" || body.target.assistantId.length === 0)
-  ) {
-    return c.json({ error: "target.assistantId must be a non-empty string" }, 400);
-  }
-
   // An orchestrator-prompt schedule created in a team workspace fires the
   // TEAM's assistant, so it is team-owned. `resolveCreateOwner` settles the
   // owner before anything is written: a cookie caller's team id needs live
@@ -196,7 +186,6 @@ workflowTriggersRouter.post("/schedules", async (c) => {
     prompt: body.target.kind === "orchestrator" ? body.target.prompt : undefined,
     input: body.target.kind === "workflow" ? body.target.input : undefined,
     teamId,
-    assistantId: body.target.kind === "orchestrator" ? body.target.assistantId : undefined,
   });
   if (!result.ok) return c.json({ error: withCronHint(result.error) }, 400);
   const resp: WorkflowScheduleResponse = { schedule: result.schedule };

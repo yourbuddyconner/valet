@@ -264,32 +264,9 @@ describe("computeCollisions — target policy", () => {
     expect(report.blocking).toHaveLength(1);
   });
 
-  // The assistant arm of the same fan-out rule the workflow cases above prove:
-  // telling two named assistants about one event is deliberate, not a clobber.
-  it("blocks duplicate workspace delivery even when stale targets name different assistants", () => {
+  it("blocks identical coverage aimed at the same workspace runtime", () => {
     const report = computeCollisions(
-      candidate({ target: { kind: "orchestrator", assistantId: "a-ops" } }),
-      [sub({ target: { kind: "orchestrator", assistantId: "a-eng" } })],
-      CATALOG,
-    );
-    expect(report.blocking).toHaveLength(1);
-    expect(report.overlapping).toHaveLength(0);
-  });
-
-  it("blocks identical coverage aimed at the SAME assistant", () => {
-    const report = computeCollisions(
-      candidate({ target: { kind: "orchestrator", assistantId: "a-ops" } }),
-      [sub({ target: { kind: "orchestrator", assistantId: "a-ops" } })],
-      CATALOG,
-    );
-    expect(report.blocking).toHaveLength(1);
-  });
-
-  it("still blocks when one side names no assistant: it may BE the other", () => {
-    // An absent id means the owner's default, which the named rule may also
-    // resolve to. Nothing here can tell, so the pair keeps blocking.
-    const report = computeCollisions(
-      candidate({ target: { kind: "orchestrator", assistantId: "a-ops" } }),
+      candidate({ target: { kind: "orchestrator" } }),
       [sub({ target: { kind: "orchestrator" } })],
       CATALOG,
     );

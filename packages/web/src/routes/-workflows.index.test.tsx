@@ -117,7 +117,6 @@ const actionRequiredData: ListWorkflowActionRequiredResponse = {
       owner: { type: "user", id: "u-1" },
       // The run's snapshot, which is NOT what `wf_1` pins today. The row
       // must badge the assistant the parked run actually executes as.
-      assistantId: "asst_archivist",
       trigger: { type: "manual" },
       gate: {
         nodeId: "review",
@@ -204,50 +203,6 @@ vi.mock("~/api/settings", () => ({
 
 // The badge links by assistant id, so it reads the assistants list to find
 // the team's default one.
-vi.mock("~/api/assistants", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("~/api/assistants")>();
-  return {
-    ...actual,
-    useAssistants: () => ({
-      data: {
-        assistants: [
-          {
-            id: "asst_personal",
-            owner: { type: "user" as const, id: "u-1" },
-            sessionId: "assistant:asst_personal",
-            isDefault: true,
-            createdAt: 1,
-          },
-          {
-            id: "asst_team_1",
-            owner: { type: "team" as const, id: "team_1" },
-            sessionId: "assistant:asst_team_1",
-            isDefault: true,
-            createdAt: 1,
-          },
-          {
-            id: "asst_scribe",
-            owner: { type: "user" as const, id: "u1" },
-            sessionId: "assistant:asst_scribe",
-            name: "Scribe",
-            isDefault: false,
-            createdAt: 1,
-          },
-          {
-            id: "asst_archivist",
-            owner: { type: "user" as const, id: "u-1" },
-            sessionId: "assistant:asst_archivist",
-            name: "Archivist",
-            isDefault: false,
-            createdAt: 1,
-          },
-        ],
-      },
-      isLoading: false,
-      error: null,
-    }),
-  };
-});
 
 vi.mock("~/api/workflows", () => ({
   useWorkflows: () => ({ data: workflowsData, isLoading: false, error: null }),

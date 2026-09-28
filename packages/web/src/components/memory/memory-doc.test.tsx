@@ -187,7 +187,7 @@ describe("MemoryDoc", () => {
       refetch: vi.fn(),
     });
     renderWithClient(<MemoryDoc path="journal/2026-07-13.md" onNavigateToChat={vi.fn()} />);
-    expect(screen.getByText(/Talk to Nova/)).toBeTruthy();
+    expect(screen.getByText(/Start a thread in your personal workspace/)).toBeTruthy();
   });
 
   it("shows a retry affordance on a non-404 error", () => {
@@ -203,13 +203,13 @@ describe("MemoryDoc", () => {
     expect(refetch).toHaveBeenCalled();
   });
 
-  it("seeds the composer-prefill store and navigates when 'Ask Nova to update this' is clicked", () => {
+  it("seeds the composer-prefill store and navigates when 'Ask in your personal workspace to update this' is clicked", () => {
     const rendered = '---\ntype: "note"\n---\n\nBody.\n';
     docMock.mockReturnValue({ isLoading: false, error: null, data: renderedDoc(rendered), refetch: vi.fn() });
     const onNavigateToChat = vi.fn();
 
     renderWithClient(<MemoryDoc path="preferences/style.md" onNavigateToChat={onNavigateToChat} />);
-    screen.getByText("Ask Nova to update this").click();
+    screen.getByText("Ask in your personal workspace to update this").click();
 
     expect(useComposerPrefillStore.getState().text).toBe(
       "Update memory file preferences/style.md: ",

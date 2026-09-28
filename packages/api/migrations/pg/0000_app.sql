@@ -280,6 +280,7 @@ CREATE TABLE "teams" (
 	"id" text PRIMARY KEY NOT NULL,
 	"org_id" text NOT NULL,
 	"name" text NOT NULL,
+	"slack_home_channel_id" text,
 	"origin" text DEFAULT 'local' NOT NULL,
 	"external_id" text,
 	"created_at" bigint NOT NULL,
@@ -321,18 +322,13 @@ CREATE TABLE "assistants" (
 	"model" text,
 	"reasoning" text,
 	"session_id" text NOT NULL,
-	"is_default" boolean DEFAULT false NOT NULL,
 	"created_at" bigint NOT NULL,
 	"archived_at" bigint
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX "assistants_session" ON "assistants" ("session_id");
 --> statement-breakpoint
--- Exactly one default per principal. PARTIAL, not a plain unique: every
--- non-default assistant shares the same (org, owner_type, owner_id), so a
--- full unique index would allow only one assistant per principal — the very
--- rule this table exists to remove.
-CREATE UNIQUE INDEX "assistants_default_owner" ON "assistants" ("org_id","owner_type","owner_id") WHERE "is_default";
+CREATE UNIQUE INDEX "assistants_workspace" ON "assistants" ("org_id","owner_type","owner_id");
 --> statement-breakpoint
 CREATE INDEX "assistants_owner" ON "assistants" ("org_id","owner_type","owner_id");
 --> statement-breakpoint
@@ -377,6 +373,7 @@ CREATE TABLE "user_notification_preferences" (
 	"user_id" text NOT NULL,
 	"kind" text NOT NULL,
 	"web" boolean DEFAULT true NOT NULL,
+	"team_dm" boolean DEFAULT false NOT NULL,
 	PRIMARY KEY("user_id", "kind")
 );
 --> statement-breakpoint
@@ -528,6 +525,7 @@ CREATE TABLE "artifacts" (
 	"org_id" text NOT NULL,
 	"actor_user_id" text NOT NULL,
 	"source_session_id" text DEFAULT '' NOT NULL,
+	"source_thread_id" text,
 	"source_memory_path" text NOT NULL,
 	"title" text DEFAULT '' NOT NULL,
 	"content" text NOT NULL,
@@ -1065,7 +1063,6 @@ CREATE TABLE "followed_threads" (
 	"created_at" bigint NOT NULL,
 	"last_activity_at" bigint NOT NULL,
 	"last_seen_ts" text,
-	"assistant_id" text,
 	-- The mention rule that bound this thread. The follow router reads that
 	-- rule's CURRENT invocation audience, so a rule narrowed back to the team
 	-- narrows the threads it opened, and a disabled or deleted rule narrows
@@ -1083,7 +1080,6 @@ CREATE TABLE "workflow_schedules" (
 	"target_kind" text DEFAULT 'workflow' NOT NULL,
 	"workflow_id" text,
 	"prompt" text,
-	"assistant_id" text,
 	"name" text NOT NULL,
 	"cron" text NOT NULL,
 	"timezone" text DEFAULT 'UTC' NOT NULL,

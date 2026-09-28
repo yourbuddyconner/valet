@@ -325,7 +325,7 @@ function ThreadTreeInner({ sessionId, showChildren }: { sessionId: string; showC
     const thread = await createThread.mutateAsync(
       activeThreadId ? { sourceThreadId: activeThreadId } : {},
     );
-    navigate({ search: (prev) => ({ ...prev, thread: thread.id, child: undefined }) });
+    navigate({ search: (prev) => ({ ...prev, view: undefined, thread: thread.id, child: undefined }) });
     // Land the cursor in the composer — a fresh thread exists to be
     // typed into.
     useComposerPrefillStore.getState().requestFocus();
@@ -334,7 +334,7 @@ function ThreadTreeInner({ sessionId, showChildren }: { sessionId: string; showC
   const archiveActive = useCallback(() => {
     if (!activeThreadId) return;
     void setArchived.mutateAsync({ threadId: activeThreadId, archived: true });
-    navigate({ search: (prev) => ({ ...prev, thread: undefined, child: undefined }) });
+    navigate({ search: (prev) => ({ ...prev, view: undefined, thread: undefined, child: undefined }) });
   }, [activeThreadId, navigate, setArchived]);
 
   // Register this surface's hotkey targets for the global listener.
@@ -473,7 +473,7 @@ function ThreadTreeInner({ sessionId, showChildren }: { sessionId: string; showC
                 // view on a thread absent from the list — return to the
                 // default thread.
                 if (threadId === activeThreadId) {
-                  navigate({ search: (prev) => ({ ...prev, thread: undefined, child: undefined }) });
+                  navigate({ search: (prev) => ({ ...prev, view: undefined, thread: undefined, child: undefined }) });
                 }
               }}
               onReplaceSandbox={() => void replaceSandbox.mutateAsync()}
@@ -687,6 +687,7 @@ function ThreadNode({
               to="/chat"
               search={(prev) => ({
                 ...prev,
+                view: undefined,
                 thread: isDefault ? undefined : thread.id,
                 child: undefined,
               })}
@@ -778,7 +779,7 @@ function ThreadNode({
             <li key={c.sessionId} className="group/child flex items-center gap-1">
               <Link
                 to="/chat"
-                search={(prev) => ({ ...prev, child: c.sessionId })}
+                search={(prev) => ({ ...prev, view: undefined, child: c.sessionId })}
                 className={cn(
                   "flex-1 min-w-0 max-md:min-h-11 flex items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors",
                   "focus-visible:outline-none focus-visible:bg-ink-wash",

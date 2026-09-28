@@ -459,7 +459,7 @@ describe("reconcileInstanceConfig — teams pass", () => {
 
     const teamId = configTeamId("Engineering");
     const seeded = await findDefaultAssistant(db, org.id, { type: "team", id: teamId });
-    expect(seeded?.isDefault).toBe(true);
+    expect(seeded).toBeDefined();
     expect(seeded?.archivedAt).toBeNull();
   });
 

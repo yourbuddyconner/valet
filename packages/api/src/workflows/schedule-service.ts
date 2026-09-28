@@ -28,9 +28,6 @@ export interface WorkflowScheduleSummary {
   targetKind: "workflow" | "orchestrator";
   workflowId?: string;
   prompt?: string;
-  /** Which of the owner's assistants an orchestrator schedule prompts.
-   * Absent → the owner's default. */
-  assistantId?: string;
   name: string;
   cron: string;
   timezone: string;
@@ -77,7 +74,6 @@ function rowToSummary(row: typeof workflowSchedules.$inferSelect): WorkflowSched
     targetKind: row.targetKind,
     workflowId: row.workflowId ?? undefined,
     prompt: row.prompt ?? undefined,
-    assistantId: row.assistantId ?? undefined,
     name: row.name,
     cron: row.cron,
     timezone: row.timezone,
@@ -114,12 +110,6 @@ export async function createWorkflowSchedule(
      * workflow target (owner follows the workflow).
      */
     teamId?: string;
-    /**
-     * Which of the owner's assistants the prompt goes to. Absent → the
-     * owner's default. Only meaningful with `prompt`; the caller checks that
-     * the assistant belongs to the resolved owner.
-     */
-    assistantId?: string;
   },
   now = Date.now(),
 ): Promise<{ ok: true; schedule: WorkflowScheduleSummary } | { ok: false; error: string }> {
@@ -195,7 +185,7 @@ export async function createWorkflowSchedule(
     scheduleOwner = { ownerType: "team", ownerId: input.teamId };
   }
 
-  if (input.assistantId !== undefined) {
+  if ("assistantId" in input) {
     return { ok: false, error: "Assistant selection is not supported. Choose the schedule workspace instead." };
   }
 
@@ -207,9 +197,6 @@ export async function createWorkflowSchedule(
     targetKind: hasWorkflow ? "workflow" as const : "orchestrator" as const,
     workflowId: hasWorkflow ? input.workflowId! : null,
     prompt: hasPrompt ? input.prompt! : null,
-    // A workflow target has no assistant to name, so the column stays null
-    // there whatever the caller sent.
-    assistantId: null,
     name: input.name,
     cron: input.cron,
     timezone,

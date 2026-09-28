@@ -26,6 +26,7 @@ describe("GET /api/notifications/preferences", () => {
 
     expect(preferences.map((p) => p.kind).sort()).toEqual(["approval", "escalation", "notification", "question", "review"]);
     expect(preferences.every((p) => p.web === true)).toBe(true);
+    expect(preferences.every((p) => p.teamDm === false)).toBe(true);
   });
 });
 
@@ -36,7 +37,7 @@ describe("PUT /api/notifications/preferences", () => {
     const putRes = await fetch(`${api.baseUrl}/api/notifications/preferences`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "escalation", web: false }),
+      body: JSON.stringify({ kind: "escalation", web: false, teamDm: true }),
     });
     expect(putRes.status).toBe(200);
     expect(await putRes.json()).toEqual({ ok: true });
@@ -58,6 +59,7 @@ describe("PUT /api/notifications/preferences", () => {
     const getRes2 = await fetch(`${api.baseUrl}/api/notifications/preferences`);
     const { preferences: preferences2 } = (await getRes2.json()) as ListNotificationPreferencesResponse;
     expect(preferences2.find((p) => p.kind === "escalation")?.web).toBe(true);
+    expect(preferences2.find((p) => p.kind === "escalation")?.teamDm).toBe(true);
   });
 
   it("rejects an invalid kind", async () => {

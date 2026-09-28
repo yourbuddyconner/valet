@@ -40,7 +40,6 @@ import { assemblePlugins } from "../plugins/assemble.js";
 import { ensurePluginStoreIndexes } from "../services/plugin-store.js";
 import { workflowsActionPlugin } from "../workflows/actions.js";
 import { skillsActionPlugin } from "../services/skills-actions.js";
-import { assistantsActionPlugin } from "../assistants/actions.js";
 import { eventsActionPlugin } from "../events/actions.js";
 import { ContentSyncService } from "../services/content-sync/service.js";
 import { SkillCollector } from "../services/content-sync/skill-collector.js";
@@ -391,19 +390,7 @@ export async function buildNodeProviders(opts: NodeProviderOpts): Promise<Provid
     description: "Agent-facing received event diagnostics.",
     actions: [eventsActionPlugin(db)],
   };
-  const assistantsActions: ValetPlugin = {
-    name: "assistants-actions",
-    version: "0.1.0",
-    description: "Agent-facing assistant profile management actions.",
-    actions: [
-      assistantsActionPlugin(db, (sessionId) => {
-        if (!evictRef.current) {
-          throw new Error("assistants actions invoked before provider wiring completed");
-        }
-        evictRef.current(sessionId);
-      }),
-    ],
-  };
+
   // Plugin filter: config file `plugins` block takes precedence over
   // VALET_PLUGINS env var. Both set simultaneously is a configuration error —
   // the operator must remove one to avoid ambiguity.
@@ -432,7 +419,7 @@ export async function buildNodeProviders(opts: NodeProviderOpts): Promise<Provid
         // Config-declared MCP servers (instance config `mcpServers`). A
         // service collision with a bundled plugin throws in assemblePlugins.
         configMcpPlugins(opts.instanceConfig?.mcpServers, process.env),
-        [workflowsActions, skillsActions, eventsActions, assistantsActions],
+        [workflowsActions, skillsActions, eventsActions],
       ]);
   const pluginLoadFailures = nodeModulesResult.quarantined.map(({ pkg, reason }) => ({
     service: pkg.replace(/^@valet\/plugin-/, "").replace(/^plugin-/, ""),
@@ -672,7 +659,7 @@ export async function buildNodeProviders(opts: NodeProviderOpts): Promise<Provid
       if (!owner) return; // no recorded owner: nothing to notify
       const isPolicyGate = info.kind === "policy_gate";
       await routeAttention(
-        { db },
+        { db, channels: [channelHost.attentionDeliverer()] },
         {
           kind: "approval",
           owner,
@@ -754,7 +741,7 @@ export async function buildNodeProviders(opts: NodeProviderOpts): Promise<Provid
     engineStore,
     store: workflowStore,
   });
-  const runSettledAttention = buildRunSettledAttention({ db, store: workflowStore });
+  const runSettledAttention = buildRunSettledAttention({ db, store: workflowStore, channels: [channelHost.attentionDeliverer()] });
   const runThreadArchive = buildRunThreadArchive({ db, store: workflowStore, engineStore });
 
   const workflowRunHost = new LocalRunHost({

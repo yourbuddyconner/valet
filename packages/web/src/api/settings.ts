@@ -68,7 +68,7 @@ import type {
   TestLlmProviderRequest,
   TestLlmProviderResponse,
 } from "@valet/api/wire";
-import { qkAssistants } from "./assistants";
+import { qk } from "./queries";
 import { api } from "./client";
 import { qkIntegrations } from "./integrations";
 import { qkRepos } from "./repos";
@@ -482,7 +482,7 @@ export function usePatchOrgReasoning() {
  * or `/chat` treats the new team as empty until the next list fetch.
  */
 export function teamCreateQueryKeys() {
-  return [qkSettings.teams(), qkAssistants.list()] as const;
+  return [qkSettings.teams(), qk.assistants()] as const;
 }
 
 export function useJoinSuggestedTeam() {
@@ -492,7 +492,7 @@ export function useJoinSuggestedTeam() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qkSettings.suggestedTeams() });
       qc.invalidateQueries({ queryKey: qkSettings.teams() });
-      qc.invalidateQueries({ queryKey: qkAssistants.list() });
+      qc.invalidateQueries({ queryKey: qk.assistants() });
     },
   });
 }
@@ -507,7 +507,7 @@ export function useCreateTeam() {
       // below fetches the real list: a one-row list seeded here would
       // satisfy every "list resolved" gate with the caller's own
       // assistants missing until the refetch landed.
-      qc.setQueryData<ListAssistantsResponse>(qkAssistants.list(), (prev) => {
+      qc.setQueryData<ListAssistantsResponse>(qk.assistants(), (prev) => {
         if (prev === undefined) return prev;
         const row = created.defaultAssistant;
         if (prev.assistants.some((a) => a.id === row.id)) return prev;

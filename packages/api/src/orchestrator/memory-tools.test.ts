@@ -19,7 +19,7 @@ import type {
 } from "@valet/engine";
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
 import { eq } from "drizzle-orm";
-import { artifacts, teamMembers } from "../schema/index.js";
+import { agentSessions, artifacts, teamMembers } from "../schema/index.js";
 import { createTeam } from "../services/teams.js";
 import { internalToken } from "../lib/internal-auth.js";
 import {
@@ -63,6 +63,17 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
     setModel: async ({ model }: { model: string }) => ({ fromModel: model, toModel: model }),
     ...overrides,
   };
+}
+
+async function seedPublishingContext(api: TestApi, ctx: ToolContext) {
+  await api.providers.db.insert(agentSessions).values({
+    id: ctx.sessionId, userId: ctx.userId, orgId: "local-org", workspace: "/tmp",
+    ownerType: ctx.owner?.type ?? "user", ownerId: ctx.owner?.id ?? ctx.userId, createdAt: 1, updatedAt: 1,
+  });
+  await api.providers.engineStore.saveThread(ctx.sessionId, {
+    id: ctx.threadId, sessionId: ctx.sessionId, key: `web:${ctx.threadId}`, status: "active",
+    queueMode: "followup", createdAt: 1, updatedAt: 1,
+  });
 }
 
 let api: TestApi;
@@ -365,12 +376,16 @@ describe("mem_* tools: real HTTP round trip", () => {
 
     await memWriteTool.execute({ path: "artifacts/report.md", content: "# Report\n\nBody.\n" }, ctx);
 
+    await seedPublishingContext(api, ctx);
     const shared = await memShareTool.execute({ path: "artifacts/report.md" }, ctx);
     expect(shared.text).toContain("shared artifacts/report.md → ");
     expect(shared.text).toContain("/a/");
     // The audience line is what the agent relays — it must state the login
     // requirement, not imply a public link.
     expect(shared.text).toContain("Logged-in members");
+    const [savedShare] = await api.providers.db.select().from(artifacts).where(eq(artifacts.sourceMemoryPath, "artifacts/report.md"));
+    expect(savedShare.sourceSessionId).toBe(ctx.sessionId);
+    expect(savedShare.sourceThreadId).toBe(ctx.threadId);
 
     const revoked = await memShareTool.execute({ path: "artifacts/report.md", revoke: true }, ctx);
     expect(revoked.text).toBe("revoked share for artifacts/report.md");
@@ -387,6 +402,7 @@ describe("mem_* tools: real HTTP round trip", () => {
       owner: { type: "user", id: "local-user" },
     });
 
+    await seedPublishingContext(api, ctx);
     const published = await artifactPublishTool.execute(
       { key: "pages/board", content: "<h1>Board</h1>", format: "html", icon: "📊" },
       ctx,
@@ -395,6 +411,9 @@ describe("mem_* tools: real HTTP round trip", () => {
     expect(published.text).toContain("/a/");
     expect(published.text).toContain("(version 1)");
     expect(published.text).toContain("Logged-in members");
+    const [savedPage] = await api.providers.db.select().from(artifacts).where(eq(artifacts.sourceMemoryPath, "pages/board"));
+    expect(savedPage.sourceSessionId).toBe(ctx.sessionId);
+    expect(savedPage.sourceThreadId).toBe(ctx.threadId);
 
     // Same key = same page, next version.
     const republished = await artifactPublishTool.execute(
@@ -511,6 +530,7 @@ describe("copy-to-team tools", () => {
     const ctx = makeCtx({ userId: "local-user", owner: { type: "user", id: "local-user" },
       config: { apiBaseUrl: api.baseUrl, internalToken: internalToken() } });
     const team = await createTeam(api.providers.db, { orgId: "local-org", name: "Artifact team", creatorUserId: "local-user" });
+    await seedPublishingContext(api, ctx);
     const published = await artifactPublishTool.execute(
       { key: "pages/source", content: "# Exact source", format: "markdown" },
       ctx,

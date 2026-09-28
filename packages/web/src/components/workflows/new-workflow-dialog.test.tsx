@@ -47,7 +47,6 @@ const navigate = vi.fn();
 const createMutateAsync = vi.fn();
 let teamId: string | undefined;
 let assistantsResult: { data?: ListAssistantsResponse; isLoading: boolean; error: Error | null };
-vi.mock("~/api/assistants", () => ({ useAssistants: () => ({ ...assistantsResult, refetch: vi.fn() }) }));
 vi.mock("~/api/settings", () => ({
   useModels: () => ({ data: { models: [] }, isLoading: false, error: null }),
   useModelTiers: () => ({ data: { xs: [], s: [], m: [], l: [], xl: [] }, isLoading: false, error: null }),
@@ -345,10 +344,10 @@ function renderDialog() {
 beforeEach(() => {
   teamId = undefined;
   assistantsResult = { data: { assistants: [
-    { id: "personal", owner: { type: "user", id: "user1" }, name: "Personal", sessionId: "assistant:personal", isDefault: true, createdAt: 1 },
-    { id: "team-a", owner: { type: "team", id: "team1" }, name: "Team default", sessionId: "assistant:team-a", isDefault: true, createdAt: 1 },
-    { id: "team-b", owner: { type: "team", id: "team1" }, name: "Release bot", sessionId: "assistant:team-b", isDefault: false, createdAt: 1 },
-    { id: "other", owner: { type: "team", id: "team2" }, name: "Other team", sessionId: "assistant:other", isDefault: true, createdAt: 1 },
+    { id: "personal", owner: { type: "user", id: "user1" }, name: "Personal", sessionId: "assistant:personal", createdAt: 1 },
+    { id: "team-a", owner: { type: "team", id: "team1" }, name: "Team default", sessionId: "assistant:team-a", createdAt: 1 },
+    { id: "team-b", owner: { type: "team", id: "team1" }, name: "Release bot", sessionId: "assistant:team-b", createdAt: 1 },
+    { id: "other", owner: { type: "team", id: "team2" }, name: "Other team", sessionId: "assistant:other", createdAt: 1 },
   ] }, isLoading: false, error: null };
   navigate.mockReset();
   createMutateAsync.mockReset();

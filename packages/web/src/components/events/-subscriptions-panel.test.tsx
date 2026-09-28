@@ -127,13 +127,6 @@ vi.mock("~/api/workflows", () => ({
 /** The assistants the caller can see. A row badges one of these, so an empty
  * list is the unresolved case. Mutable per case, reset in `beforeEach`. */
 let assistantsData: ListAssistantsResponse = { assistants: [] };
-vi.mock("~/api/assistants", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("~/api/assistants")>();
-  return {
-    ...actual,
-    useAssistants: () => ({ data: assistantsData, isLoading: false, error: null }),
-  };
-});
 
 // The assistant badge links to the assistant editor, and the real `Link`
 // wants a router this suite has no reason to mount. `params` is serialized
@@ -375,7 +368,6 @@ describe("SubscriptionsPanel", () => {
           owner: { type: "team", id: "t_eng" },
           sessionId: "assistant:asst_eng",
           name: "Release Captain",
-          isDefault: true,
           createdAt: 1,
         },
       ],
@@ -417,7 +409,6 @@ describe("SubscriptionsPanel", () => {
           id: "asst_org",
           owner: { type: "org", id: "org_1" },
           sessionId: "assistant:asst_org",
-          isDefault: true,
           createdAt: 1,
         },
       ],
@@ -451,7 +442,6 @@ describe("SubscriptionsPanel", () => {
           id: "asst_mine",
           owner: { type: "user", id: "u1" },
           sessionId: "assistant:asst_mine",
-          isDefault: true,
           createdAt: 1,
         },
       ],

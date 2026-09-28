@@ -241,13 +241,30 @@ END $cost_view$`;
  * `0000_app.sql`. Delete this list at 1.0, when numbered migrations take
  * over.
  *
- * Every entry must also be safe to ROLL BACK: the previous release may boot
+ * Except for the explicit development singleton cutover below, each entry
+ * must also be safe to ROLL BACK: the previous release may boot
  * this database again. Adding a column or a table is safe; renaming or
  * dropping is not, because the older release repairs the OLD name and its
  * statement then stops its boot. Do not rename or drop here.
  */
 
 const SCHEMA_REPAIRS: SchemaRepair[] = [
+  {
+    describe: "workspace assistant singleton cutover",
+    probe: { kind: "index", index: "assistants_workspace" },
+    // Dev-only cutover: older builds are not supported after this change.
+    // Existing duplicate profiles require a dev database reset, never silent history deletion.
+    sql: `DO $$ BEGIN
+      DROP INDEX IF EXISTS assistants_default_owner;
+      ALTER TABLE assistants DROP COLUMN IF EXISTS is_default;
+      ALTER TABLE followed_threads DROP COLUMN IF EXISTS assistant_id;
+      ALTER TABLE workflow_schedules DROP COLUMN IF EXISTS assistant_id;
+      CREATE UNIQUE INDEX assistants_workspace ON assistants(org_id, owner_type, owner_id);
+    END $$`,
+  },
+  { describe: "teams.slack_home_channel_id column", probe: { kind: "column", table: "teams", column: "slack_home_channel_id" }, sql: 'ALTER TABLE "teams" ADD COLUMN IF NOT EXISTS "slack_home_channel_id" text' },
+  { describe: "user_notification_preferences.team_dm column", probe: { kind: "column", table: "user_notification_preferences", column: "team_dm" }, sql: 'ALTER TABLE "user_notification_preferences" ADD COLUMN IF NOT EXISTS "team_dm" boolean DEFAULT false NOT NULL' },
+
   {
     describe: "session_threads.last_user_activity_at column",
     probe: { kind: "column", table: "session_threads", column: "last_user_activity_at" },
@@ -467,22 +484,8 @@ const SCHEMA_REPAIRS: SchemaRepair[] = [
     probe: { kind: "column", table: "event_subscriptions", column: "origin" },
     sql: `ALTER TABLE "event_subscriptions" ADD COLUMN IF NOT EXISTS "origin" text NOT NULL DEFAULT 'local'`,
   },
-  {
-    // Which of the owner's assistants a followed thread routes to. Null on
-    // rows from before the column, and on any follow whose rule named no
-    // assistant — both read as "the owner's default", the old behavior.
-    describe: "followed_threads.assistant_id column",
-    probe: { kind: "column", table: "followed_threads", column: "assistant_id" },
-    sql: 'ALTER TABLE "followed_threads" ADD COLUMN IF NOT EXISTS "assistant_id" text',
-  },
-  {
-    // Which of the owner's assistants an orchestrator-target schedule prompts.
-    // Null on rows from before the column and on schedules that named none;
-    // both resolve to the owner's default at fire time.
-    describe: "workflow_schedules.assistant_id column",
-    probe: { kind: "column", table: "workflow_schedules", column: "assistant_id" },
-    sql: 'ALTER TABLE "workflow_schedules" ADD COLUMN IF NOT EXISTS "assistant_id" text',
-  },
+
+
   {
     // Records which person's GitHub credential a team source may use.
     // Null on every row written before the column existed, which the sync
@@ -597,6 +600,11 @@ const SCHEMA_REPAIRS: SchemaRepair[] = [
       "updated_at" bigint NOT NULL,
       "revoked_at" bigint
     )`,
+  },
+  {
+    describe: "artifacts.source_thread_id column",
+    probe: { kind: "column", table: "artifacts", column: "source_thread_id" },
+    sql: 'ALTER TABLE "artifacts" ADD COLUMN IF NOT EXISTS "source_thread_id" text',
   },
   {
     describe: "artifacts_token_unique index",

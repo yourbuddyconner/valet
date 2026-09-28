@@ -103,6 +103,7 @@ export interface ShareArtifactOpts {
   orgId: string;
   /** Session that ran the tool, when the publish came from a tool call. */
   sourceSessionId?: string;
+  sourceThreadId?: string;
 }
 
 export interface PublishArtifactOpts {
@@ -114,6 +115,7 @@ export interface PublishArtifactOpts {
   icon?: string;
   orgId: string;
   sourceSessionId?: string;
+  sourceThreadId?: string;
 }
 
 /** What every publish path hands the upsert, after its own validation. */
@@ -126,6 +128,7 @@ interface PublishInput {
   icon: string;
   orgId: string;
   sourceSessionId?: string;
+  sourceThreadId?: string;
 }
 
 /**
@@ -155,6 +158,7 @@ export async function shareArtifact(db: AppDb, scope: ArtifactScope, opts: Share
     icon: "",
     orgId: opts.orgId,
     sourceSessionId: opts.sourceSessionId,
+    sourceThreadId: opts.sourceThreadId,
   });
 }
 
@@ -190,6 +194,7 @@ export async function publishArtifact(db: AppDb, scope: ArtifactScope, opts: Pub
     icon: normalizeArtifactIcon(opts.icon),
     orgId: opts.orgId,
     sourceSessionId: opts.sourceSessionId,
+    sourceThreadId: opts.sourceThreadId,
   });
 }
 
@@ -279,6 +284,7 @@ async function writeArtifact(db: AppDb, scope: ArtifactScope, input: PublishInpu
         version: nextVersion,
         actorUserId: scope.actorUserId,
         sourceSessionId: input.sourceSessionId ?? existing.sourceSessionId,
+        sourceThreadId: input.sourceSessionId ? input.sourceThreadId ?? null : existing.sourceThreadId,
         updatedAt: now,
         revokedAt: null,
         ...(reactivating
@@ -302,6 +308,7 @@ async function writeArtifact(db: AppDb, scope: ArtifactScope, input: PublishInpu
       orgId: input.orgId,
       actorUserId: scope.actorUserId,
       sourceSessionId: input.sourceSessionId ?? "",
+      sourceThreadId: input.sourceThreadId ?? null,
       sourceMemoryPath: input.key,
       title: input.title,
       content: input.content,
@@ -463,6 +470,8 @@ export async function setArtifactSharedVersion(
  * `content`: a list of shares must not drag every snapshot body out of
  * the database. */
 export interface ArtifactSummaryRow {
+  sourceSessionId: string | null;
+  sourceThreadId: string | null;
   ownerType: string;
   id: string;
   token: string;
@@ -480,6 +489,8 @@ export interface ArtifactSummaryRow {
 }
 
 const summaryColumns = {
+  sourceSessionId: artifacts.sourceSessionId,
+  sourceThreadId: artifacts.sourceThreadId,
   ownerType: artifacts.ownerType,
   id: artifacts.id,
   token: artifacts.token,
@@ -526,7 +537,7 @@ export async function listArtifactsForOwner(
   db: AppDb,
   orgId: string,
   owner: { type: string; id: string },
-  page?: { limit: number; cursor?: { updatedAt: number; id: string } },
+  page?: { limit: number; cursor?: { updatedAt: number; id: string }; sourceSessionId?: string; sourceThreadId?: string },
 ): Promise<ArtifactSummaryRow[]> {
   const query = db
     .select(summaryColumns)
@@ -536,6 +547,8 @@ export async function listArtifactsForOwner(
         eq(artifacts.orgId, orgId),
         eq(artifacts.ownerType, owner.type),
         eq(artifacts.ownerId, owner.id),
+        page?.sourceSessionId ? eq(artifacts.sourceSessionId, page.sourceSessionId) : undefined,
+        page?.sourceThreadId ? eq(artifacts.sourceThreadId, page.sourceThreadId) : undefined,
         // The paged gallery omits revoked links before selecting a page.
         page ? isNull(artifacts.revokedAt) : undefined,
         page?.cursor ? or(

@@ -1,9 +1,9 @@
-import { orchestratorName } from "~/lib/assistant-name";
 import { WorkflowAgentApprovals } from "~/components/workflows/agent-approvals";
 import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import type { OrchestratorChildSummary } from "@valet/api/wire";
-import { useOrchestratorChildren, useOrchestratorInfo } from "~/api/orchestrator";
+import { useOrchestratorChildren } from "~/api/orchestrator";
+import { useOwnerConversation } from "~/hooks/use-workspace-conversation";
 import { useSession } from "~/api/queries";
 import { useAdoptWorkspaceScope } from "~/lib/workspace-scope";
 import { SecuritySessionLayout } from "~/components/security/engagement-panel";
@@ -53,15 +53,13 @@ function SessionPage() {
   return sessionId.startsWith("wf:") ? <WorkflowAgentApprovals sessionId={sessionId} /> : <AppSessionPage />;
 }
 
-function AppSessionPage() {
+export function AppSessionPage() {
   const { sessionId } = Route.useParams();
   const { thread, tab, finding, child: childPanelId } = Route.useSearch();
   const navigate = Route.useNavigate();
   const openChild = (childId: string) =>
     navigate({ search: (prev) => ({ ...prev, child: childId }) });
   const closeChild = () => navigate({ search: (prev) => ({ ...prev, child: undefined }) });
-  const childrenQ = useOrchestratorChildren();
-  const info = useOrchestratorInfo();
   // Read the session kind: `kind === "security"` swaps in the engagement
   // panel layout. The query is shared with SessionView's own read, so this
   // adds no request.
@@ -71,17 +69,12 @@ function AppSessionPage() {
   // header (which badges the owning team) instead of leaving you in Personal.
   useAdoptWorkspaceScope(session.data?.owner);
 
-  // The assistant's own session lives at `/chat`, not this standalone
-  // session route. Notification/activity hrefs built server-side (see
-  // `packages/api`'s attention-wiring) still point `/sessions/{orchestratorId}`
-  // at this route, so redirect here rather than changing the API — this
-  // future-proofs any such link regardless of where it originates.
-  if (info.data?.sessionId && info.data.sessionId === sessionId) {
-    // Forward the thread. This route already validates a `thread` param and
-    // /chat already reads one, but the redirect used to drop it — so a link
-    // naming a specific thread (a workflow run's, say) landed on whichever
-    // thread happened to be newest.
-    return <Navigate to="/chat" replace search={thread ? { thread } : {}} />;
+  const workspace = session.data?.owner.type === "team" ? session.data.owner.id
+    : session.data?.owner.type === "user" ? "user" : undefined;
+  const conversation = useOwnerConversation(workspace);
+  const childrenQ = useOrchestratorChildren(conversation.data?.sessionId, { enabled: !!conversation.data?.sessionId });
+  if (conversation.data?.sessionId === sessionId) {
+    return <Navigate to="/chat" replace search={{ workspace, thread, child: childPanelId }} />;
   }
 
   const child = findChild(childrenQ.data?.children ?? [], sessionId);
@@ -97,7 +90,7 @@ function AppSessionPage() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {child && <ChildBreadcrumb name={orchestratorName(info.data?.name)} />}
+      {child && <ChildBreadcrumb workspace={workspace} threadId={child.parentThreadId} />}
       {/* Standalone page (decision 14): no thread sidebar, full header —
           the root layout hides the sidebar for this route (see
           `__root.tsx`). Children opened full-page render the same way, with
@@ -120,14 +113,15 @@ function AppSessionPage() {
   );
 }
 
-function ChildBreadcrumb({ name }: { name: string }) {
+function ChildBreadcrumb({ workspace, threadId }: { workspace?: string; threadId: string }) {
   return (
     <Link
       to="/chat"
+      search={{ workspace, thread: threadId }}
       className="flex items-center gap-1.5 border-b border-line bg-neutral-50 px-4 py-2 text-xs text-muted hover:text-moss dark:bg-neutral-900/40"
     >
       <ArrowLeft className="h-3 w-3" aria-hidden />
-      spawned by {name} · back to chat
+      Back to originating thread
     </Link>
   );
 }

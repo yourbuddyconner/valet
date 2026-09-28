@@ -1,4 +1,5 @@
-import { createAssistant, toAssistantSummary } from "../assistants/service.js";
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
+import { toAssistantSummary } from "../assistants/service.js";
 /**
  * The three reads behind the team dashboard
  * (`docs/specs/2026-08-27-team-dashboard-design.md`):
@@ -17,7 +18,7 @@ import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentSessions, artifacts, childWatches, teamMembers, teams } from "../schema/index.js";
 import type {
-  CreateAssistantResponse,
+  AssistantSummary,
   GetTeamChildrenResponse,
   ListArtifactsResponse,
   UsageBreakdownResponse,
@@ -42,9 +43,9 @@ async function seedTeam(target: TestApi): Promise<void> {
     .values({ teamId: "team_1", userId: "local-user", role: "admin" });
 }
 
-async function createTeamAssistant(target: TestApi, name: string): Promise<CreateAssistantResponse> {
+async function createTeamAssistant(target: TestApi, name: string): Promise<AssistantSummary> {
   // Historical multiple profiles remain readable after the public creation path is retired.
-  return toAssistantSummary(await createAssistant(target.providers.db, "local-org", { type: "team", id: "team_1" }, name));
+  return toAssistantSummary(await seedWorkspaceAssistant(target.providers.db, "local-org", { type: "team", id: "team_1" }, name));
 }
 
 async function seedChild(
@@ -77,11 +78,11 @@ async function seedChild(
 }
 
 describe("GET /api/teams/:id/children", () => {
-  it("lists runs across every team assistant, newest first, attributed to the spawning assistant", async () => {
+  it("lists runs from the singleton team runtime, newest first", async () => {
     api = await bootTestApi();
     await seedTeam(api);
     const sentinel = await createTeamAssistant(api, "Sentinel");
-    const triage = await createTeamAssistant(api, "Triage");
+    const triage = sentinel;
 
     const now = Date.now();
     await seedChild(api, { childId: "child-a", parentSessionId: sentinel.sessionId, title: "Audit PR", settled: true, createdAt: now });
@@ -97,7 +98,7 @@ describe("GET /api/teams/:id/children", () => {
       title: "Rotate creds",
       status: "running",
       assistantId: triage.id,
-      assistantName: "Triage",
+      assistantName: "Sentinel",
     });
     expect(body.children[1]).toMatchObject({
       sessionId: "child-a",

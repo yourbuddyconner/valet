@@ -150,6 +150,17 @@ async function seedTeamWithCaller(a: TestApi, teamId: string): Promise<void> {
 // ── 1. POST /api/workflows/schedules — orchestrator target ────────────────
 
 describe("POST /api/workflows/schedules", () => {
+  it.each(["invalid", 42, true, null])("400s a malformed schedule target %j without storing a row", async target => {
+    const a = await boot();
+    const response = await fetch(`${a.baseUrl}/api/workflows/schedules`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Malformed", cron: VALID_CRON, target }),
+    });
+    expect(response.status).toBe(400);
+    expect(await a.providers.db.select().from(workflowSchedules)).toEqual([]);
+  });
+
   it("201s an orchestrator-target schedule with nextFireAt > now", async () => {
     const a = await boot();
     const before = Date.now();

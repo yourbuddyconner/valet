@@ -13,11 +13,7 @@ import {
   setNaviModeEnabled,
 } from "~/lib/notification-sound";
 
-/**
- * `/settings/notifications` — You · Notifications. Per-kind web delivery
- * toggle, carried over verbatim-ish from the old flat `/settings` page
- * (Task 6 restyles this into the new section layout; behavior unchanged).
- */
+/** Personal web delivery and optional team direct-message copies, by notification kind. */
 export const Route = createFileRoute("/settings/notifications")({
   component: NotificationsPage,
 });
@@ -56,7 +52,7 @@ export function NotificationsPage() {
   // Deliberately unexplained. See the sparkle button below.
   const [navi, setNavi] = useState(() => isNaviModeEnabled());
 
-  const byKind = new Map(prefsQ.data?.preferences.map((p) => [p.kind, p.web]));
+  const byKind = new Map(prefsQ.data?.preferences.map((p) => [p.kind, p]));
 
   return (
     <Section title="Notifications" description="Choose which updates reach you here.">
@@ -102,6 +98,8 @@ export function NotificationsPage() {
         </div>
       </FieldRow>
 
+      <p className="py-3 text-sm text-muted">Team DM copies are off by default. Enable copies for teams you can access using your linked messaging account. Approval permissions stay unchanged.</p>
+      {setPref.error && <div role="alert" className="text-sm text-danger-500">Could not save your preference. Try again.</div>}
       {prefsQ.isLoading && (
         <div className="flex items-center gap-2 py-4 text-sm text-muted">
           <Spinner size={14} /> Loading…
@@ -117,14 +115,15 @@ export function NotificationsPage() {
         NOTIFICATION_KINDS.map((kind) => {
           // Web delivery defaults to on until the caller has an explicit
           // row — mirrors the API's own default (see notifications.ts).
-          const web = byKind.get(kind) ?? true;
+          const web = byKind.get(kind)?.web ?? true;
           return (
             <FieldRow key={kind} label={KIND_LABEL[kind]} hint={KIND_DESCRIPTION[kind]}>
-              <Switch
+              <div className="flex items-center gap-4"><label className="flex items-center gap-2 text-sm">Web<Switch
+                disabled={setPref.isPending}
                 checked={web}
                 onCheckedChange={(next) => setPref.mutate({ kind, web: next })}
                 aria-label={`${KIND_LABEL[kind]} web notifications`}
-              />
+              /></label>{kind !== "review" && <label className="flex items-center gap-2 text-sm">Team DM copies<Switch checked={byKind.get(kind)?.teamDm ?? false} disabled={setPref.isPending} onCheckedChange={(teamDm) => setPref.mutate({ kind, web, teamDm })} aria-label={`${KIND_LABEL[kind]} team DM copies`} /></label>}</div>
             </FieldRow>
           );
         })}

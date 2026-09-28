@@ -1,3 +1,4 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { AppDb } from "../lib/drizzle.js";
@@ -38,7 +39,7 @@ import {
   TeamNameConflictError,
   TeamOwnsWorkflowsError,
 } from "./teams.js";
-import { createAssistant, findDefaultAssistant } from "../assistants/service.js";
+import { findDefaultAssistant } from "../assistants/service.js";
 
 async function seedUser(db: AppDb, id: string, orgId: string) {
   await db.insert(users).values({ id, email: `${id}@x.test`, name: id, role: "member" });
@@ -97,14 +98,14 @@ describe("teams service", () => {
     const now = Date.now();
     await db.insert(teams).values({ id: "team_old", orgId, name: "Old", origin: "local", createdAt: now });
     await db.insert(teams).values({ id: "team_named", orgId, name: "Named", origin: "local", createdAt: now });
-    await createAssistant(db, orgId, { type: "team", id: "team_named" }, "Bot");
+    await seedWorkspaceAssistant(db, orgId, { type: "team", id: "team_named" }, "Bot");
     const seeded = await createTeam(db, { orgId, name: "Fresh", creatorUserId: "u1" });
 
     // "Named" already holds a default: its first assistant became one.
     expect(await seedMissingTeamDefaults(db)).toEqual(["team_old"]);
     for (const id of ["team_old", "team_named", seeded.id]) {
       const row = await findDefaultAssistant(db, orgId, { type: "team", id });
-      expect(row?.isDefault).toBe(true);
+      expect(row).toBeDefined();
     }
     const namedRows = await db.select().from(assistants).where(and(eq(assistants.ownerType, "team"), eq(assistants.ownerId, "team_named")));
     expect(namedRows.map((r) => r.name)).toEqual(["Bot"]);
@@ -134,7 +135,7 @@ describe("teams service", () => {
       .from(assistants)
       .where(and(eq(assistants.ownerType, "team"), eq(assistants.ownerId, team.id)));
     expect(owned).toHaveLength(1);
-    expect(owned[0]?.isDefault).toBe(true);
+    expect(owned[0]).toBeDefined();
     expect(owned[0]?.archivedAt).toBeNull();
     expect(owned[0]?.orgId).toBe(orgId);
     // Session address follows the assistant id (`assistant:{id}`), so the
@@ -153,7 +154,7 @@ describe("teams service", () => {
       .from(assistants)
       .where(and(eq(assistants.ownerType, "team"), eq(assistants.ownerId, team.id)));
     expect(team.defaultAssistant).toEqual(owned[0]);
-    expect(team.defaultAssistant.isDefault).toBe(true);
+    expect(team.defaultAssistant).toBeDefined();
   });
 
   it("createTeam rolls the assistant back with the team on a name conflict", async () => {

@@ -287,6 +287,7 @@ function TeamRow({
         <div className="ml-6 mt-2 space-y-2 border-l border-line pl-4">
           <TeamDeletionRequests key={`deletion-requests:${team.id}`} teamId={team.id} canManage={canMutate} />
           <TeamDefaults team={team} canMutate={canMutate} />
+          <TeamHomeChannel key={team.id} team={team} canMutate={canMutate} />
           <TeamCredentials team={team} orgMembers={orgMembers} canMutate={canMutate} />
           <TeamOnePasswordToken key={team.id} teamId={team.id} teamName={team.name} canMutate={canMutate} />
           <TeamMembers team={team} orgMembers={orgMembers} canMutate={canMutate} />
@@ -676,4 +677,16 @@ function AddMemberPicker({
       </PopoverContent>
     </Popover>
   );
+}
+
+function TeamHomeChannel({ team, canMutate }: { team: TeamSummary; canMutate: boolean }) {
+  const [channel, setChannel] = useState(team.slackHomeChannelId ?? "");
+  const patch = usePatchTeam();
+  useEffect(() => { setChannel(team.slackHomeChannelId ?? ""); }, [team.slackHomeChannelId]);
+  return <div className="space-y-2 py-3">
+    <div className="text-sm font-medium">Slack home channel</div>
+    <p className="text-sm text-muted">New team notifications go here. Replies stay in their original Slack thread. This does not subscribe to channel messages. Add the Valet bot to the channel first.</p>
+    {canMutate ? <div className="flex gap-2"><Input aria-label="Slack home channel ID" placeholder="C0123456789" value={channel} onChange={(event) => setChannel(event.target.value)} /><Button disabled={patch.isPending || channel.trim() === (team.slackHomeChannelId ?? "")} onClick={() => patch.mutate({ id: team.id, body: { slackHomeChannelId: channel.trim() || null } })}>Save</Button></div> : <p className="text-sm">{team.slackHomeChannelId ?? "No home channel configured"}</p>}
+    {patch.error && <ErrorRow>{errorText(patch.error)}</ErrorRow>}
+  </div>;
 }

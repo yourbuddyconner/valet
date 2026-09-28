@@ -1,3 +1,4 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 /**
  * Unit tests for `buildActionInvoker` (plugin-system-v2 plan Task 6) — the
  * headless dispatch primitive behind the workflow `tool` node's
@@ -35,7 +36,7 @@ import type { OnePasswordCtx, OnePasswordService } from "../services/onepassword
 import { buildActionInvoker, type ActionInvocationContext } from "./action-invoker.js";
 import { workflowsActionPlugin } from "../workflows/actions.js";
 import { InMemoryWorkflowStore } from "@valet/workflow";
-import { createAssistant } from "../assistants/service.js";
+
 import { slackPlugin } from "@valet/plugin-slack/actions";
 
 /** Fake `OnePasswordService` — only `resolveCredential` is exercised by the invoker's credential providers. */
@@ -546,7 +547,7 @@ describe("buildActionInvoker", () => {
 
   it("workflow slack.send_message posts as the owner's configured assistant", async () => {
     const db = await makeDb();
-    const assistant = await createAssistant(db, "org1", { type: "user", id: "u1" }, "Release bot");
+    const assistant = await seedWorkspaceAssistant(db, "org1", { type: "user", id: "u1" }, "Release bot");
     await db
       .update(assistants)
       .set({ avatarUrl: "https://cdn.example.com/release-bot.png" })

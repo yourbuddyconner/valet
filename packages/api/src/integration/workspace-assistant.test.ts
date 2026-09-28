@@ -6,22 +6,17 @@ let api: TestApi | undefined;
 afterEach(async () => { await api?.cleanup(); api = undefined; });
 const headers = { "Content-Type": "application/json" };
 
-function idOf(value: unknown): string {
-  if (value && typeof value === "object" && "id" in value && typeof value.id === "string") return value.id;
-  throw new Error("Expected an assistant response");
-}
-
 describe("workspace assistant contract", () => {
   it("concurrent initialization returns one personal assistant", async () => {
     api = await bootTestApi();
     const base = api.baseUrl;
-    const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(`${base}/api/assistants`, {
+    const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(`${base}/api/orchestrator`, {
       method: "POST", headers, body: "{}",
     })));
     expect(responses.map(r => r.status)).toEqual([200, 200, 200, 200]);
     const rows = await api.providers.db.select().from(assistants);
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.isDefault).toBe(true);
+    expect(rows[0]?.ownerId).toBe("local-user");
   });
 
   it("rejects creating customized profiles and editing the workspace assistant", async () => {
@@ -29,25 +24,29 @@ describe("workspace assistant contract", () => {
     const custom = await fetch(`${api.baseUrl}/api/assistants`, {
       method: "POST", headers, body: JSON.stringify({ name: "Custom agent", personality: "custom" }),
     });
-    expect(custom.status).toBe(409);
-    await fetch(`${api.baseUrl}/api/assistants`, { method: "POST", headers, body: "{}" });
+    expect(custom.status).toBe(404);
+    await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST", headers, body: "{}" });
     const [row] = await api.providers.db.select().from(assistants);
     expect(row).toBeDefined();
     const edited = await fetch(`${api.baseUrl}/api/assistants/${row!.id}`, {
       method: "PATCH", headers, body: JSON.stringify({ name: "Another agent" }),
     });
-    expect(edited.status).toBe(409);
+    expect(edited.status).toBe(404);
     expect((await api.providers.db.select().from(assistants))[0]?.name).toBeNull();
   });
   it("keeps the team singleton separate from personal work and rejects nonmembers", async () => {
     api = await bootTestApi();
     await api.providers.db.insert(teams).values({ id: "team-one", orgId: "local-org", name: "Team", createdAt: Date.now() });
     await api.providers.db.insert(teamMembers).values({ teamId: "team-one", userId: "local-user", role: "admin" });
-    const personal = await fetch(`${api.baseUrl}/api/assistants`, { method: "POST", headers, body: "{}" }).then(r => r.json()).then(idOf);
-    const initialize = () => fetch(`${api!.baseUrl}/api/assistants`, { method: "POST", headers,
-      body: JSON.stringify({ owner: { type: "team", id: "team-one" } }) }).then(r => r.json()).then(idOf);
+    const personal = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" }).then(r => r.json()) as { sessionId: string };
+    const initialize = async () => {
+      const response = await fetch(`${api!.baseUrl}/api/teams/team-one/orchestrator`, { method: "POST" });
+      expect(response.status).toBe(200);
+      return await response.json() as { sessionId: string };
+    };
     const [first, second] = await Promise.all([initialize(), initialize()]);
-    expect(first).toBe(second); expect(first).not.toBe(personal);
+    expect(first.sessionId).toBe(second.sessionId);
+    expect(first.sessionId).not.toBe(personal.sessionId);
     const denied = await fetch(`${api.baseUrl}/api/teams/team-one/orchestrator`, {
       method: "POST", headers: { "x-valet-test-user-id": "test-member" },
     });
@@ -60,7 +59,7 @@ describe("workspace assistant contract", () => {
     const response = await fetch(`${api.baseUrl}/api/orchestrator/info`, {
       method: "PATCH", headers, body: JSON.stringify({ name: "Custom", personality: "custom" }),
     });
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(404);
     expect(await api.providers.db.select().from(assistants)).toHaveLength(0);
   });
 

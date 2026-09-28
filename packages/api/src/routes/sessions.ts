@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, count, desc, eq, inArray, notExists, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, lt, notExists, or, sql } from "drizzle-orm";
 import { mkdir, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { parseAssistantSessionId, type Principal } from "@valet/engine";
@@ -18,7 +18,7 @@ import { canAdministerSession, canViewSession, isSessionDirectOwner } from "../s
 import { isOrgAdminUser } from "./_org-admin.js";
 import { assertModelSelectable } from "../services/approved-models.js";
 import { assertReasoningSelectable } from "../services/reasoning.js";
-import { loadAssistantBySessionId, retireAssistant } from "../assistants/service.js";
+import { loadAssistantBySessionId } from "../assistants/service.js";
 import {
   createSecurityEngagementService,
   type SecurityConfigContext,
@@ -27,7 +27,7 @@ import { seedSecurityReview, seededConfigContext } from "../services/security-se
 import { planCellInputToCell, PlanCellInputError } from "./security.js";
 import { resolveApiTokenOrNull, resolveRefSha } from "../bakes/source-service.js";
 import { checkRepoExistence } from "../services/repo-existence.js";
-import { isTeamMember, listTeamsForUser } from "../services/teams.js";
+import { getTeamInOrg, isTeamMember, listTeamsForUser } from "../services/teams.js";
 import { requirePrincipal } from "../middleware/auth.js";
 import { resolveCreateOwner } from "../lib/request-principal.js";
 import { orgAllowsPluginForUser } from "../services/plugin-entitlements.js";
@@ -66,6 +66,8 @@ import type {
   SessionStatus,
   SessionSummary,
 } from "../wire/types.js";
+
+import { decodePageCursor, encodePageCursor, readLimit } from "../lib/page-cursor.js";
 
 export const sessionsRouter = new Hono<AppEnv>();
 
@@ -233,6 +235,42 @@ sessionsRouter.get("/", async (c) => {
     // 404, not 403: the same existence-hiding every cross-owner read here uses.
     if (!reachable) return c.json({ error: "owner not found" }, 404);
     owner = { type: ownerType, id: ownerId };
+  }
+
+  // Discovery preserves each execution's runtime and authorization boundary.
+  if (c.req.query("discovery") === "true") {
+    if (!owner) return c.json({ error: "Choose a workspace to browse work." }, 400);
+    if (owner.type === "team" && !await getTeamInOrg(db, c.var.user.orgId, owner.id)) {
+      return c.json({ error: "Workspace not found. Choose a workspace you can access." }, 404);
+    }
+    const limit = readLimit(c.req.query("limit"), 25, 100);
+    if (limit === undefined) return c.json({ error: "Send a positive whole number for limit." }, 400);
+    const rawCursor = c.req.query("cursor");
+    const cursor = rawCursor === undefined ? undefined : decodePageCursor(rawCursor);
+    if (rawCursor !== undefined && (!cursor || typeof cursor.createdAt !== "number" ||
+        !Number.isSafeInteger(cursor.createdAt) || typeof cursor.id !== "string" || !cursor.id ||
+        cursor.ownerType !== owner.type || cursor.ownerId !== owner.id)) {
+      return c.json({ error: "Invalid work cursor. Remove it to start at the first page." }, 400);
+    }
+    const rows = await db.select().from(agentSessions).where(and(
+      eq(agentSessions.orgId, c.var.user.orgId),
+      eq(agentSessions.ownerType, owner.type), eq(agentSessions.ownerId, owner.id),
+      inArray(agentSessions.status, ["active", "hibernated", "archived"]),
+      sql`${agentSessions.id} NOT LIKE 'assistant:%'`,
+      notExists(db.select({ id: assistants.sessionId }).from(assistants)
+        .where(eq(assistants.sessionId, agentSessions.id))),
+      cursor ? or(lt(agentSessions.createdAt, Number(cursor.createdAt)),
+        and(eq(agentSessions.createdAt, Number(cursor.createdAt)), lt(agentSessions.id, String(cursor.id)))) : undefined,
+    )).orderBy(desc(agentSessions.createdAt), desc(agentSessions.id)).limit(limit + 1);
+    const visible = rows.slice(0, limit);
+    const bySession = groupSubmissionsBySession(await engineStore.listAllUnsettledSubmissions(visible.map(row => row.id)));
+    const last = visible.at(-1);
+    const body: ListSessionsResponse = {
+      sessions: visible.map(row => rowToSummary(row, deriveRunFields(runStateRow(row), bySession.get(row.id) ?? []))),
+      nextCursor: rows.length > limit && last
+        ? encodePageCursor({ createdAt: last.createdAt, id: last.id, ownerType: owner.type, ownerId: owner.id }) : null,
+    };
+    return c.json(body);
   }
 
   // Optional kind filter, the shape the security hub reads
@@ -910,6 +948,7 @@ sessionsRouter.get("/:id", async (c) => {
   const unsettled = await engineStore.listUnsettledSubmissions(id);
 
   const detail: GetSessionResponse = {
+    isWorkspaceRuntime: (await loadAssistantBySessionId(db, id)) !== undefined,
     ...rowToSummary(row, deriveRunFields(runStateRow(row), unsettled)),
     messageCount: Number(n ?? 0),
     model,
@@ -1215,6 +1254,7 @@ sessionsRouter.patch("/:id", async (c) => {
     .where(eq(messagesTable.sessionId, id));
   const unsettled = await engineStore.listUnsettledSubmissions(id);
   const detail: GetSessionResponse = {
+    isWorkspaceRuntime: (await loadAssistantBySessionId(db, id)) !== undefined,
     ...rowToSummary(effectiveRow, deriveRunFields(runStateRow(effectiveRow), unsettled)),
     messageCount: Number(n ?? 0),
     model,
@@ -1459,40 +1499,9 @@ sessionsRouter.delete("/:id", async (c) => {
     return c.json({ error: "session not found" }, 404);
   }
 
-  // A user's own assistant session is not deletable (TKAI-253): deleting
-  // it destroyed the orchestrator and every thread it held, and sandbox
-  // replace covers the reset. The web UI hides the action; the API is the
-  // contract, so it refuses too — the same rule as the move refusal above.
-  // A TEAM's assistant stays deletable: the session header menu is a team
-  // admin's only surface for that.
-  // Looked up by the `session_id` COLUMN, not `parseAssistantSessionId`:
-  // rows migrated from orchestrator_identities keep legacy `orchestrator:*`
-  // ids the prefix parse cannot recognize, and those must get the same
-  // refusal and the same retire.
+  // The workspace runtime is permanent; users archive conversations instead.
   const assistant = await loadAssistantBySessionId(db, id);
-  if (assistant && assistant.ownerType !== "team") {
-    return c.json(
-      {
-        error:
-          "your assistant's session cannot be deleted. Use Replace sandbox to reset its workspace.",
-      },
-      400,
-    );
-  }
-
-  // Explicit operator cleanup only. The actor stamp identifies pre-update
-  // team assistants; a child with the same stamp is not an assistant.
-  if (c.req.query("retireLegacyTeam") === "true") {
-    if (
-      row.ownerType !== "team" || row.credentialOwnerMode !== "actor" ||
-      assistant?.ownerType !== "team" || assistant.ownerId !== row.ownerId
-    ) {
-      return c.json({ error: "not a legacy team assistant. Choose a session from the cleanup inventory." }, 400);
-    }
-    if ((await c.var.providers.engineStore.listUnsettledSubmissions(id)).length > 0) {
-      return c.json({ error: "a turn is running. Pause the assistant and wait for it to finish, then retry." }, 409);
-    }
-  }
+  if (assistant) return c.json({ error: "The workspace assistant cannot be deleted. Archive individual threads instead." }, 409);
 
   // Keep the owning session visible until required teardown succeeds.
   try {
@@ -1502,22 +1511,15 @@ sessionsRouter.delete("/:id", async (c) => {
     return c.json({ error: err instanceof Error ? err.message : "Session teardown failed. Restore the sandbox connection, then retry deletion." }, 503);
   }
 
-  // Deleting a team assistant's session IS removing the assistant — the
-  // header item is labeled "Delete this team's assistant". Retire the row
-  // in the same transaction as the soft-delete (TKAI-296): a live row kept
-  // the assistant in every teammate's rail, pointing at a dead session.
+  // Mark standalone execution deleted only after resource teardown succeeds.
   await db.transaction(async (tx) => {
     await tx
       .update(agentSessions)
       .set({ status: "deleted", updatedAt: Date.now() })
       .where(eq(agentSessions.id, id));
-    if (assistant) await retireAssistant(tx, assistant.id);
   });
 
-  // Destroy again after the commit: a wake racing the window between the
-  // destroy above and this transaction rebuilds from the not-yet-retired
-  // row and re-caches — and cache hits bypass the archived-wake guard.
-  // Now the row is retired, so a torn-down ghost cannot rebuild.
+  // Clear any runtime that was reopened between teardown and the row update.
   try {
     await engineHost.destroy(id);
   } catch (err) {

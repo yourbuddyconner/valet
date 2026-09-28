@@ -1768,12 +1768,12 @@ describe("GET /api/workflows/action-required", () => {
     const res = await fetch(`${api.baseUrl}/api/workflows/action-required`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as ListWorkflowActionRequiredResponse;
-    expect(body.items.find((item) => item.runId === "wfrun_pinned")?.assistantId).toBeUndefined();
+    expect(body.items.find((item) => item.runId === "wfrun_pinned")).not.toHaveProperty("assistantId");
     // A snapshot with an unusable id reports none, and the row still lists:
     // its approval is the only way that run ever settles.
     const brokenItem = body.items.find((item) => item.runId === "wfrun_broken");
     expect(brokenItem).toBeDefined();
-    expect(brokenItem?.assistantId).toBeUndefined();
+    expect(brokenItem).not.toHaveProperty("assistantId");
   });
 
   it("lists both gate classes and hides another user's gate", async () => {

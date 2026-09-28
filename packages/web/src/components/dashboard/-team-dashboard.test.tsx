@@ -34,13 +34,6 @@ vi.mock("@tanstack/react-router", () => ({
 // importOriginal, not a bare replacement: these modules export more than the
 // dashboard's own graph reads, and a partial factory would govern the module
 // for everything else in the file.
-vi.mock("~/api/assistants", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("~/api/assistants")>();
-  return {
-    ...actual,
-    useAssistants: () => ({ data: assistantsData, isLoading: false, error: null }),
-  };
-});
 vi.mock("~/api/settings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/api/settings")>();
   return { ...actual, useTeams: () => ({ data: teamsData, isLoading: false, error: null }) };
@@ -106,7 +99,6 @@ function teamAssistant(overrides: Partial<AssistantSummary> = {}): AssistantSumm
     id: "asst_team",
     owner: { type: "team", id: "team-1" },
     sessionId: "assistant:asst_team",
-    isDefault: true,
     createdAt: 10,
     ...overrides,
   };

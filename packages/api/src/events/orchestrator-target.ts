@@ -48,9 +48,7 @@ export function buildOrchestratorTarget(deps: {
   fetchThreadContext?: (origin: ChannelOrigin) => Promise<string | null>;
 }): OrchestratorDeliverFn {
   return async ({ orgId, ownerType, ownerId, actorUserId, signal, dispatchId }) => {
-    // A subscription names an owner and MAY name one of that owner's
-    // assistants. Without one the shared delivery helper resolves the owner's
-    // default, which is what every rule written before the field did.
+    // Every subscription resolves the singleton runtime of its owner.
     await deliverToAssistantThread(deps, {
       orgId,
       owner: { type: ownerType, id: ownerId },

@@ -37,13 +37,6 @@ function team(id: string): TeamSummary {
   };
 }
 
-function assistant(
-  id: string,
-  owner: AssistantSummary["owner"],
-  isDefault = false,
-): AssistantSummary {
-  return { id, owner, sessionId: `assistant:${id}`, isDefault, createdAt: 0 };
-}
 
 
 describe("resolveWorkspaceKey", () => {

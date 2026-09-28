@@ -132,6 +132,7 @@ async function rowToSummary(
     callerRole: membership.callerRole,
     defaultModel: row.defaultModel,
     defaultReasoning: row.defaultReasoning,
+    slackHomeChannelId: row.slackHomeChannelId,
   };
 }
 
@@ -469,7 +470,7 @@ teamsRouter.post("/", async (c) => {
 
 // ── Update ────────────────────────────────────────────────────────────────
 
-const PATCH_TEAM_FIELDS = new Set(["defaultModel", "defaultReasoning"]);
+const PATCH_TEAM_FIELDS = new Set(["defaultModel", "defaultReasoning", "slackHomeChannelId"]);
 
 /**
  * Team settings (TKAI-255). Strict whitelist, same shape as `PATCH /api/me`:
@@ -503,7 +504,7 @@ teamsRouter.patch("/:id", async (c) => {
   const unknownFields = Object.keys(raw).filter((k) => !PATCH_TEAM_FIELDS.has(k));
   if (unknownFields.length > 0) {
     return c.json(
-      { error: `unknown field(s): ${unknownFields.join(", ")}. Send only defaultModel or defaultReasoning.` },
+      { error: `unknown field(s): ${unknownFields.join(", ")}. Send only defaultModel, defaultReasoning, or slackHomeChannelId.` },
       400,
     );
   }
@@ -511,7 +512,14 @@ teamsRouter.patch("/:id", async (c) => {
   // `team` from `loadTeamInOrg` above is fresh within this request; the
   // write branch swaps it for the UPDATE's own returned row, so no re-read.
   let fresh: TeamRow = team;
-  const update: { defaultModel?: string | null; defaultReasoning?: string | null } = {};
+  const update: { defaultModel?: string | null; defaultReasoning?: string | null; slackHomeChannelId?: string | null } = {};
+  if ("slackHomeChannelId" in raw) {
+    const channel = raw.slackHomeChannelId;
+    if (channel !== null && (typeof channel !== "string" || !/^[CG][A-Z0-9]{2,}$/.test(channel))) {
+      return c.json({ error: "Use a Slack channel ID starting with C or G, or null to disable home-channel notifications." }, 400);
+    }
+    update.slackHomeChannelId = channel;
+  }
   if ("defaultModel" in raw) {
     const defaultModel = raw.defaultModel;
     if (defaultModel !== null && typeof defaultModel !== "string") {

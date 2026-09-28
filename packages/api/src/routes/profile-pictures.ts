@@ -11,8 +11,6 @@ import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createHash, randomBytes } from "node:crypto";
 import type sharpType from "sharp";
-import { assistantOwner, canAdministerAssistantOwner } from "../assistants/access.js";
-import { loadAssistant, WORKSPACE_ASSISTANT_MESSAGE } from "../assistants/service.js";
 import { publicUrlFromEnv } from "../channels/host.js";
 import type { AppEnv } from "../env.js";
 import { requireUser } from "../middleware/auth.js";
@@ -233,15 +231,4 @@ profilePicturesRouter.post("/me/avatar", limitUploadBody, async (c) => {
   return storePicture(c, "users", user.id, current?.image, async (avatarUrl) => {
     await c.var.providers.db.update(users).set({ image: avatarUrl }).where(eq(users.id, user.id));
   });
-});
-
-profilePicturesRouter.post("/assistants/:id/avatar", limitUploadBody, async (c) => {
-  const user = requireUser(c);
-  if (!user) return c.json({ error: "unauthorized" }, 401);
-  const row = await loadAssistant(c.var.providers.db, c.req.param("id"));
-  if (!row || row.orgId !== user.orgId) return c.json({ error: "assistant not found" }, 404);
-  if (!(await canAdministerAssistantOwner(c.var.providers.db, assistantOwner(row), c.var.principal))) {
-    return c.json({ error: "assistant not found" }, 404);
-  }
-  return c.json({ error: WORKSPACE_ASSISTANT_MESSAGE }, 409);
 });

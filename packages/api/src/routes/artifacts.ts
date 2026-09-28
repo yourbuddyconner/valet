@@ -112,6 +112,8 @@ function shareUrl(c: Context<AppEnv>, token: string): string {
 function toListItem(c: Context<AppEnv>, row: ArtifactSummaryRow): ArtifactListItem {
   return {
     id: row.id,
+    sourceSessionId: row.sourceSessionId,
+    sourceThreadId: row.sourceThreadId,
     path: row.sourceMemoryPath,
     title: row.title,
     format: row.format === "html" ? "html" : "markdown",
@@ -413,6 +415,7 @@ export function buildArtifactsPublicRouter(auth: ValetAuth | null): Hono<AppEnv>
           const text = `[artifact comment] on "${artifact.title}" (${anchor}): ${row.body}`;
           const resp = await submitSessionPrompt(providers, send.row, text, {
             author: promptAuthorFromUser(user),
+            threadId: artifact.sourceThreadId ?? undefined,
           });
           if (resp) {
             await markArtifactCommentSent(providers.db, row.id, artifact.sourceSessionId);
@@ -523,12 +526,32 @@ artifactsRouter.post("/share", async (c) => {
       return c.json({ ok: true });
     }
 
+    const sourceSessionId = c.req.header("x-valet-session-id");
+    const sourceThreadId = c.req.header("x-valet-thread-id");
+    if (sourceThreadId !== undefined && !sourceSessionId) {
+      return c.json({ error: "Send the source session with the source thread." }, 400);
+    }
+    if (sourceSessionId !== undefined) {
+      // Source metadata controls discovery and comment delivery. The verified
+      // publishing scope must own it, including calls with an internal token.
+      const [source] = await db.select({ id: agentSessions.id }).from(agentSessions).where(and(
+        eq(agentSessions.id, sourceSessionId), eq(agentSessions.orgId, orgId),
+        eq(agentSessions.ownerType, scope.owner.type), eq(agentSessions.ownerId, scope.owner.id),
+      )).limit(1);
+      if (!source) return c.json({ error: "Source work not found. Publish from work in this workspace." }, 404);
+      if (sourceThreadId !== undefined &&
+          !(await c.var.providers.engineStore.getThread(sourceSessionId, sourceThreadId))) {
+        return c.json({ error: "Source thread not found. Publish from a thread in the source work." }, 404);
+      }
+    }
+
     let row: ArtifactRow;
     if (hasPath) {
       row = await shareArtifact(db, scope, {
         path: body.path!,
         orgId,
-        sourceSessionId: c.req.header("x-valet-session-id"),
+        sourceSessionId,
+        sourceThreadId,
       });
     } else {
       if (typeof body.content !== "string" || body.content.length === 0) {
@@ -542,7 +565,8 @@ artifactsRouter.post("/share", async (c) => {
         description: typeof body.description === "string" ? body.description : undefined,
         icon: typeof body.icon === "string" ? body.icon : undefined,
         orgId,
-        sourceSessionId: c.req.header("x-valet-session-id"),
+        sourceSessionId,
+        sourceThreadId,
       });
     }
     const resp: ShareArtifactResponse = {
@@ -588,6 +612,14 @@ artifactsRouter.get("/", async (c) => {
   const ownerType = c.req.query("ownerType");
   const ownerId = c.req.query("ownerId");
   const mine = truthyQuery(c.req.query("mine"));
+  const sourceSessionId = c.req.query("sourceSessionId");
+  const sourceThreadId = c.req.query("sourceThreadId");
+  if (sourceSessionId === "" || sourceThreadId === "") {
+    return c.json({ error: "Use nonempty source identifiers to filter artifacts." }, 400);
+  }
+  if (sourceThreadId !== undefined && !sourceSessionId) {
+    return c.json({ error: "Send sourceSessionId with sourceThreadId to filter artifacts." }, 400);
+  }
 
   // `mine` composes with nothing: it names a caller-scoped view, so pairing
   // it with an owner filter is an ambiguous request rather than one where
@@ -597,7 +629,7 @@ artifactsRouter.get("/", async (c) => {
     return c.json({ error: "mine cannot be combined with an owner filter." }, 400);
   }
 
-  if ((c.req.query("limit") !== undefined || c.req.query("cursor") !== undefined) &&
+  if ((c.req.query("limit") !== undefined || c.req.query("cursor") !== undefined || sourceSessionId !== undefined) &&
       ownerType === undefined && ownerId === undefined) {
     return c.json({ error: "Send an owner filter to paginate artifacts." }, 400);
   }
@@ -626,7 +658,7 @@ artifactsRouter.get("/", async (c) => {
     }
     const limitParam = c.req.query("limit");
     const cursorParam = c.req.query("cursor");
-    const paged = limitParam !== undefined || cursorParam !== undefined;
+    const paged = limitParam !== undefined || cursorParam !== undefined || sourceSessionId !== undefined;
     const limit = readLimit(limitParam, 50, 100);
     if (limit === undefined) return c.json({ error: "Send a positive whole number for limit." }, 400);
     const decoded = cursorParam === undefined ? undefined : decodePageCursor(cursorParam);
@@ -634,20 +666,20 @@ artifactsRouter.get("/", async (c) => {
     if (cursorParam !== undefined) {
       if (!decoded || typeof decoded.updatedAt !== "number" || !Number.isSafeInteger(decoded.updatedAt) ||
           typeof decoded.id !== "string" || !decoded.id ||
-          decoded.ownerType !== ownerType || decoded.ownerId !== ownerId) {
+          decoded.ownerType !== ownerType || decoded.ownerId !== ownerId || decoded.sourceSessionId !== sourceSessionId || decoded.sourceThreadId !== sourceThreadId) {
         return c.json({ error: "Invalid artifact cursor. Remove it to start at the first page." }, 400);
       }
       cursor = { updatedAt: decoded.updatedAt, id: decoded.id };
     }
     const rows = await listArtifactsForOwner(
-      db, user.orgId, { type: ownerType, id: ownerId }, paged ? { limit, cursor } : undefined,
+      db, user.orgId, { type: ownerType, id: ownerId }, paged ? { limit, cursor, sourceSessionId, sourceThreadId } : undefined,
     );
     const visible = paged ? rows.slice(0, limit) : rows;
     const last = visible.at(-1);
     const body: ListArtifactsResponse = { artifacts: visible.map((row) => toListItem(c, row)) };
     if (paged) {
       body.nextCursor = rows.length > limit && last
-        ? encodePageCursor({ updatedAt: last.updatedAt, id: last.id, ownerType, ownerId })
+        ? encodePageCursor({ updatedAt: last.updatedAt, id: last.id, ownerType, ownerId, ...(sourceSessionId ? { sourceSessionId } : {}), ...(sourceThreadId ? { sourceThreadId } : {}) })
         : null;
     }
     return c.json(body);

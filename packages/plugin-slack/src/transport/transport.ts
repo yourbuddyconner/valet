@@ -836,6 +836,13 @@ export class SlackTransport implements ChannelTransport {
     }
   }
 
+  async sendToChannel(channelId: string, message: OutboundChannelMessage): Promise<SendRef> {
+    if (!/^[CG][A-Z0-9]{2,}$/.test(channelId)) throw new Error("Choose a Slack channel ID starting with C or G.");
+    const key = conversationKeyFor(this.teamId, channelId, `${Math.floor(Date.now() / 1000)}.${String(this.syntheticTsCounter++ % 1_000_000).padStart(6, "0")}`);
+    this.remember(this.syntheticKeys, key, true);
+    return this.send(key, message);
+  }
+
   async send(conversationKey: string, message: OutboundChannelMessage): Promise<SendRef> {
     const target = this.mustParse(conversationKey);
     const threadTs = this.replyThreadTs(conversationKey);

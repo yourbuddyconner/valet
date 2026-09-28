@@ -286,14 +286,28 @@ describe("team-owned session lifecycle routes", () => {
     expect(body).toEqual({ error: "model is required" });
   });
 
-  it("lets an org admin delete a session stamped with another member's id", async () => {
+  it("refuses an org admin deletion of the team singleton opened by another member", async () => {
     api = await bootTestApi();
     await seedTeam(api, "member");
     const sessionId = await openTeamAssistant(api, MEMBER_HEADERS);
+    const response = await fetch(`${api.baseUrl}/api/sessions/${sessionId}`, { method: "DELETE" });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("Archive individual threads") });
+    expect(await statusOf(api, sessionId)).toBe("active");
+  });
 
-    const res = await fetch(`${api.baseUrl}/api/sessions/${sessionId}`, { method: "DELETE" });
-    expect(res.status).toBe(200);
-    expect(await statusOf(api, sessionId)).toBe("deleted");
+  it("lets an org admin delete a standalone team session opened by another member", async () => {
+    api = await bootTestApi();
+    await seedTeam(api, "member");
+    const now = Date.now();
+    await api.providers.db.insert(agentSessions).values({
+      id: "standalone-team-session", userId: "test-member", orgId: "local-org",
+      workspace: "/tmp", status: "active", ownerType: "team", ownerId: "team_1",
+      createdAt: now, updatedAt: now,
+    });
+    const response = await fetch(`${api.baseUrl}/api/sessions/standalone-team-session`, { method: "DELETE" });
+    expect(response.status).toBe(200);
+    expect(await statusOf(api, "standalone-team-session")).toBe("deleted");
   });
 
   it("leaves user-owned sessions direct-owner-only", async () => {

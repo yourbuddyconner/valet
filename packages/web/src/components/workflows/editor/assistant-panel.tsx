@@ -83,9 +83,7 @@ export function WorkflowAssistantPanel({
       </div>
 
       {assistant.error !== undefined ? (
-        // Recovery without a page reload. The hook releases both guards and
-        // the remembered attempt, so this genuinely repeats the failed call
-        // rather than re-rendering the same stuck state.
+        // Recovery repeats the server request without a page reload.
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           <p className="text-sm text-danger-500">{assistant.error}</p>
           <Button size="sm" variant="secondary" onClick={assistant.retry}>

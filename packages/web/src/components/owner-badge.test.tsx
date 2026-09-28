@@ -26,7 +26,6 @@ function teamAssistants(): ListAssistantsResponse {
         id: "asst_team_1",
         owner: { type: "team", id: "team_1" },
         sessionId: "assistant:asst_team_1",
-        isDefault: true,
         createdAt: 1,
       },
     ],
@@ -38,13 +37,6 @@ vi.mock("~/api/settings", () => ({
   useTeams: () => ({ data: teamsData, isLoading: false, error: null }),
 }));
 
-vi.mock("~/api/assistants", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("~/api/assistants")>();
-  return {
-    ...actual,
-    useAssistants: () => ({ data: assistantsData, isLoading: false, error: null }),
-  };
-});
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({

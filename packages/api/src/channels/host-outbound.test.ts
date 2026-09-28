@@ -273,6 +273,35 @@ describe("ChannelHost outbound delivery", () => {
     vi.restoreAllMocks();
   });
 
+  it("home channel receives a safe new notification, never a Slack-thread reply or foreign team", async () => {
+    await host.stop();
+    class HomeTransport extends FakeTransport {
+      override readonly channelType = "slack";
+      async sendToChannel(channelId: string, message: OutboundChannelMessage) {
+        return this.send(channelId, message);
+      }
+    }
+    const home = new HomeTransport();
+    await engineCredentials.save({ type: "org", id: ORG_ID }, "slack", { type: "bot_token", accessToken: "fake" });
+    host = new ChannelHost({ db: testDb.appDb, engineHost, engineStore, eventStream, engineCredentials, workflowStore, actionPluginByService,
+      plugins: [{ name: "home-test", version: "0", transports: [{ channelType: "slack", create: () => home }] }], resolveOrgId: async () => ORG_ID });
+    await host.start();
+    await testDb.appDb.insert(teams).values({ id: "home-team", orgId: ORG_ID, name: "Home", createdAt: Date.now(), slackHomeChannelId: "C0123456789" });
+    const event: AttentionEvent = { kind: "approval", owner: { type: "team", id: "home-team" }, title: "private approval content", body: "sensitive" };
+    await host.attentionDeliverer().deliverTeam?.(event);
+    expect(home.sent).toHaveLength(1);
+    expect(home.sent[0]?.conversationKey).toBe("C0123456789");
+    expect(home.sent[0]?.message.markdown).not.toContain("private");
+    expect(home.sent[0]?.message.markdown).not.toContain("sensitive");
+    expect(home.gatePrompts).toHaveLength(0);
+    const session = await defaultAssistantSessionFor({ db: testDb.appDb, engineHost }, { type: "user", id: USER_ID }, { actorUserId: USER_ID, orgId: ORG_ID });
+    const thread = session.thread("slack:COTHER:123.456");
+    await host.attentionDeliverer().deliverTeam?.({ ...event, sessionId: session.id, threadId: thread.id });
+    expect(home.sent).toHaveLength(1);
+    await host.attentionDeliverer().deliverTeam?.({ ...event, owner: { type: "team", id: "inaccessible-team" } });
+    expect(home.sent).toHaveLength(1);
+  });
+
   async function emitTerminalTurn(args: {
     queueItemId: string;
     messageId?: string;
@@ -2094,7 +2123,6 @@ describe("ChannelHost.attentionDeliverer", () => {
       name: "Ledger",
       avatarUrl: "https://cdn.example.com/ledger.png",
       sessionId: "sess-1",
-      isDefault: false,
       createdAt: Date.now(),
     });
 

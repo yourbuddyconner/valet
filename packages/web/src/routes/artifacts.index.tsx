@@ -130,6 +130,7 @@ function ArtifactRow({ artifact, canManage }: { artifact: ArtifactListItem; canM
           </p>
         </Link>
         <div className="flex shrink-0 flex-wrap items-center gap-3">
+          {artifact.sourceSessionId && <Link to="/sessions/$sessionId" params={{ sessionId: artifact.sourceSessionId }} search={{ thread: artifact.sourceThreadId ?? undefined }} className="text-xs underline">Open originating work</Link>}
           <button
             type="button"
             onClick={() => void copy(artifact.url)}

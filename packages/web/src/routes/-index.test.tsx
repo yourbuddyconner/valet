@@ -28,7 +28,6 @@ vi.mock("~/api/orchestrator", () => ({
     error: null,
     refetch: vi.fn(),
   }),
-  useSaveIdentity: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
 }));
 
 // importOriginal: see -new-session-dialog.test.tsx for why a bare

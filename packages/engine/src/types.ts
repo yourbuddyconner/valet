@@ -2496,6 +2496,8 @@ export interface CreateSessionOptions {
    * ordering; do not "fix" it back.
    */
   systemContext?: Array<{ name: string; content: string; order?: number }>;
+  /** Host context for one thread, assembled with the session system context. */
+  threadSystemContext?: (thread: { id: string; key: string }) => string | undefined;
   /**
    * Host-supplied, session-scoped config surfaced verbatim as
    * `ToolContext.config` inside every tool execution (Phase 4 decision 7).

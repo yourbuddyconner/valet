@@ -1,6 +1,6 @@
 # Threads and Events local iteration
 
-Status: workspace routing foundation implemented locally. Broader event diagnostics and discovery work remain.
+Status: workspace singleton, shared threads, discovery, and notification routing implemented locally.
 
 ## Confirmed direction
 
@@ -23,13 +23,13 @@ Sources:
 - Xiangan's September 27 clarification: singleton workspace assistants, no customization,
   no backward compatibility, and local verification before further iteration.
 
-## Implemented foundation
+## Implemented behavior
 
 - Threads replaces Chat in navigation. Sessions and Artifacts leave primary navigation.
-- Existing runtime detail routes remain until Threads provides their replacement surface.
+- Work and artifacts in Threads opens isolated execution details through existing routes.
 - Problems shows recorded explanations, references, and accurate coverage limitations.
 - Personal and team initialization uses the existing atomic default resolver.
-- Custom profile creation, editing, deletion, and avatar writes are refused.
+- Custom profile creation, editing, deletion, avatar, and direct-open routes are removed.
 - Agent tools cannot create or modify assistant profiles.
 - Chat URLs use workspace and thread identity. Both rail and page share an owner-addressed ensure.
 - The workflow editor resolves its owning workspace and adopts that scope in navigation.
@@ -60,28 +60,39 @@ Sources:
 - Local fixtures do not establish whether Slack delivered a production message.
 - Do not connect local Slack or send external notifications during this review.
 
-## Next iteration
+## Events and notifications
 
-- Make standalone and child execution discoverable through Threads.
-- Place artifacts beside their originating work.
-- Add outcome-oriented event presets while retaining the advanced subscription editor.
-- Distinguish event receipt, classification, matching, delivery, and workflow outcomes.
-- Record bounded explanations for currently silent classifier rejections.
-- Add a team home channel and personal notification preferences after confirming semantics.
-- Remove unused assistant routing columns and remaining internal selection types.
+The existing automation wizard and advanced subscription editor remain the event
+configuration surfaces. They use validated workspace ownership and cannot select
+an assistant. No second matcher or delivery engine was introduced.
 
-Recommended home-channel rule: default new team notifications to that channel.
-Keep replies in the originating Slack thread. Choosing a home channel does not
-subscribe to every message in it. Personal DM copies should be opt-in and should
-not affect team access or approval authority.
+Problems shows recorded receipt, classification, matching, and delivery stages.
+Slack classifier rejections now record bounded metadata without raw message bodies
+or credentials. A missing record does not prove that Slack delivered an event.
+
+Team administrators can choose a Slack home channel. New team attention uses that
+channel, with generic links that keep content and approval controls behind web
+access checks. Replies stay in the originating Slack thread. Choosing a home
+channel does not subscribe to every message in it.
+
+Personal team DM copies are opt-in by notification kind. Delivery verifies current
+team and organization membership. Preferences do not change team access or approval
+authority. Team deletion reviews remain web-only under their existing policy.
 
 ## Verification
 
 Verify singleton initialization under concurrency, cross-owner denial, workspace
 switching, deep links, workflow origins, retries, and persistence after restart.
 Run the canonical scorecard and identify each environmental failure separately.
-Exercise the actual browser and a local workflow with a real model response.
+Exercise the local APIs and a workflow with a real model response.
+Browser automation was unavailable in this session; browser review remains manual.
 Live Slack ingress remains unverified in this local environment.
+
+Local review fixtures are created with `node scripts/seed-threads-demo.mjs review`
+after bootstrap and workflow seeding. The command creates standalone work, an
+artifact with a thread origin, and the shared workflow editor conversation. It
+sends no model prompt and makes no Slack connection. The separate workflow run
+check uses the real Thread node and model response.
 
 ## Structure review and next decisions
 
@@ -100,7 +111,7 @@ The current structures already separate ownership, execution, and conversation:
 ### Workflow Thread node
 
 The Thread node now replaces the orchestrator workflow node. It reuses
-uses durable submissions, dispatch deduplication, checkpointing, waiting, and
+durable submissions, dispatch deduplication, checkpointing, waiting, and
 output-schema repair. The API already chooses an attended origin thread or
 a thread associated with the workflow run.
 
@@ -120,10 +131,14 @@ Current behavior and future decisions:
 - Keep output delivery separate from execution context. A team home channel
   should not silently move an existing Slack conversation or broaden access.
 
-The workflow editor currently remembers its conversation in browser session
-storage. A server-side workflow-to-thread relation would let team members
-share that conversation and recover it across browsers. Reuse the existing
-thread store rather than create a separate chat-message table.
+The workflow editor opens `POST /api/workflows/:id/conversation`. The server
+checks workflow access and resolves the owner’s singleton runtime. The durable
+thread key is `workflow:<id>`. Team members share this thread across browsers.
+Concurrent opens converge through engine creation coalescing and the store’s
+unique session/key constraint. Opening the editor sends no automatic prompt.
+The server adds workflow context to each editor thread’s system prompt.
+Workflow tools still enforce access for every read and write. The client
+revalidates access on mount and offers Retry after a failed request.
 
 ### Cutover implemented in this iteration
 
@@ -134,6 +149,33 @@ Writes reject assistant overrides on subscriptions, schedules, and workflows.
 Notification links address the workspace and thread. Attention sounds compare
 both so an approval in another conversation is not silently suppressed.
 
-Internal assistant rows, runtime session IDs, and some stored routing fields
-still exist. They are not a reason to add compatibility UI. A later schema
-cleanup can remove unused columns after all internal producers stop writing them.
+The database enforces one assistant identity per workspace, including retired rows.
+The old default flag and assistant selectors on schedules and followed threads are
+removed. Profile creation, editing, avatar, deletion, and direct-open routes are
+removed. Session deletion cannot retire a workspace runtime. Team deletion remains
+the explicit lifecycle operation. Internal runtime IDs still address execution;
+they do not select ownership or expose customizable assistant profiles.
+
+This is a development cutover without backward compatibility. Existing databases
+with duplicate workspace profiles require a reset or explicit data repair. The
+cutover never silently deletes their conversation history.
+
+### Work and artifact discovery
+
+Threads includes a Work and artifacts view. It lists standalone work and child
+executions in the selected workspace. Each row opens the existing runtime detail
+view, with its original sandbox and credentials. Archived executions remain visible.
+
+Discovery requires an explicit owner. The server verifies access and returns at
+most 100 rows per request. The UI requests 25 rows and loads more on demand.
+Creation time and ID provide stable pagination. Cursors are bound to the owner.
+
+Each work row can expand its published artifacts. Thread views show artifacts
+from that transcript. Publish and memory-share tools store their session and thread
+identifiers. The server verifies the source owner, organization, and thread membership
+before it records attribution, including internal tool requests. Artifact queries
+filter by owner, session, and optional thread before
+pagination. Their cursors bind all three identifiers. The workspace gallery links
+back to originating work and its thread. Reader comments target that stored thread.
+Artifacts without source metadata remain available through the workspace gallery.
+Runtime links resolve the owner before redirecting to personal or team Threads.

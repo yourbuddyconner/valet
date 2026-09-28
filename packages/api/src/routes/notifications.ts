@@ -14,8 +14,7 @@
  * package (teams.ts) for cross-tenant access.
  *
  * Preferences mirror `isWebEnabled`'s default in `orchestrator/attention.ts`:
- * a kind with no row reports `web: true`. The table only ever needs a row
- * for someone who opted OUT.
+ * a kind with no row reports `web: true` and `teamDm: false`.
  */
 import { Hono } from "hono";
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -113,6 +112,7 @@ notificationsRouter.get("/preferences", async (c) => {
   const preferences = NOTIFICATION_KINDS.map((kind) => ({
     kind,
     web: byKind.get(kind)?.web ?? true,
+    teamDm: byKind.get(kind)?.teamDm ?? false,
   }));
 
   const body: ListNotificationPreferencesResponse = { preferences };
@@ -129,6 +129,7 @@ notificationsRouter.put("/preferences", async (c) => {
   } catch {
     return c.json({ error: "invalid JSON body" }, 400);
   }
+  if (body === null || typeof body !== "object") return c.json({ error: "body must be an object" }, 400);
   if (!NOTIFICATION_KINDS.includes(body.kind)) {
     return c.json({ error: `kind must be one of ${NOTIFICATION_KINDS.join(", ")}` }, 400);
   }
@@ -136,12 +137,16 @@ notificationsRouter.put("/preferences", async (c) => {
     return c.json({ error: "web must be a boolean" }, 400);
   }
 
+  if (body.teamDm !== undefined && typeof body.teamDm !== "boolean") {
+    return c.json({ error: "teamDm must be a boolean. Choose whether to receive team direct messages." }, 400);
+  }
+
   await db
     .insert(userNotificationPreferences)
-    .values({ userId, kind: body.kind, web: body.web })
+    .values({ userId, kind: body.kind, web: body.web, teamDm: body.teamDm ?? false })
     .onConflictDoUpdate({
       target: [userNotificationPreferences.userId, userNotificationPreferences.kind],
-      set: { web: body.web },
+      set: { web: body.web, ...(body.teamDm === undefined ? {} : { teamDm: body.teamDm }) },
     });
 
   return c.json({ ok: true });

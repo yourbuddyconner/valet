@@ -1,3 +1,4 @@
+import { workflowEditorThreadContext } from "../workflows/editor-thread-context.js";
 import type { Model } from "@earendil-works/pi-ai/compat";
 import { and, eq } from "drizzle-orm";
 import { mkdir } from "node:fs/promises";
@@ -1406,7 +1407,7 @@ export class EngineHost {
       service,
       state: "excluded_by_assistant" as const,
       reason: "this assistant's behavior excludes the service",
-      fix: `This assistant's configuration excludes ${service}; edit the assistant's Integrations settings on its editor page (/assistants/$assistantId).`,
+      fix: `The workspace configuration excludes ${service}. Ask a workspace administrator to review its integration access.`,
     }));
     const resolveServiceAvailability = async (actionService?: string): Promise<ServiceAvailability[]> => {
       const inventory = await unavailableServiceInventory({
@@ -2570,8 +2571,7 @@ export class EngineHost {
     const assistant = await loadAssistant(db, assistantId);
     if (!assistant) {
       throw new Error(
-        `EngineHost: no assistant ${assistantId}. Create one through POST /api/assistants, ` +
-          `or resolve the owner's default with resolveDefaultAssistant, before waking its session.`,
+        `EngineHost: no workspace assistant ${assistantId}. Resolve its owner with resolveDefaultAssistant before waking its session.`,
       );
     }
     // A retired/archived assistant must not wake (TKAI-296). Every
@@ -2720,6 +2720,7 @@ export class EngineHost {
       resolveModel: this.makeResolveModel(meta.orgId),
       ...(reasoning !== undefined && isReasoningLevel(reasoning) ? { sampling: { reasoning } } : {}),
       systemPrompt: personaPrefix + orchestratorPersona(principal, ownerDisplayName),
+      threadSystemContext: workflowEditorThreadContext,
       tools: [...buildMemoryTools(), ...extras.tools],
       skills: extras.skills.length ? extras.skills : undefined,
       roles: extras.roles.length ? extras.roles : undefined,

@@ -147,6 +147,27 @@ async function logUnmatchedInteraction(db: AppDb, orgId: string, raw: RawChannel
   });
 }
 
+/** Only verified envelopes reach this diagnostic; never retain message text or tokens. */
+async function logClassifierRejection(deps: FanOutDeps, raw: RawChannelUpdate): Promise<void> {
+  if (!isRecord(raw) || raw.type !== "event_callback" || !isRecord(raw.event)) return;
+  const event = raw.event;
+  const type = typeof event.type === "string" ? event.type : "unknown";
+  const botId = typeof event.bot_id === "string" ? event.bot_id : undefined;
+  const explanation = botId && botId === deps.botId || event.user === deps.botUserId && deps.botUserId !== undefined
+    ? "Ignored Valet's own message to prevent a reply loop."
+    : !raw.event_id ? "The envelope has no delivery event ID."
+    : type === "message" && event.subtype && event.subtype !== "bot_message"
+      ? "This message subtype is not a subscribable message (for example, an edit or deletion)."
+      : botId && !deps.botId ? "Bot message classification requires the connected Valet bot identity."
+      : "No enabled Slack trigger classifier accepted this event type or message shape.";
+  const key = `${deps.orgId}:classifier:${explanation}`;
+  const now = Date.now();
+  const last = interactionLoggedAt.get(key);
+  if (last !== undefined && now - last < DROPLOG_COOLDOWN_MS) return;
+  interactionLoggedAt.set(key, now);
+  await writeDropLog(deps.db, { orgId: deps.orgId, reason: "slack_classifier_rejected", detail: `A verified Slack event was received but did not enter subscription matching. ${explanation}` });
+}
+
 interface FanOutDeps {
   botUserId?: string;
   botId?: string;
@@ -198,7 +219,10 @@ async function fanOutUpdate(deps: FanOutDeps, raw: RawChannelUpdate): Promise<vo
       matchedTrigger = true;
       break;
     }
-    if (!matchedTrigger) await logUnmatchedInteraction(deps.db, deps.orgId, raw);
+    if (!matchedTrigger) {
+      await logUnmatchedInteraction(deps.db, deps.orgId, raw);
+      await logClassifierRejection(deps, raw);
+    }
   } catch (err) {
     console.error("[slack-webhook] event consumer failed", err);
   }

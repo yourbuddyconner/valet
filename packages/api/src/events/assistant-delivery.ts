@@ -55,7 +55,9 @@ export async function deliverToAssistantThread(
   args: AssistantDeliveryArgs,
 ): Promise<void> {
   // Serialize by runtime session and thread so delivery paths share one queue.
-  const session = await resolveDeliverySession(deps, args);
+  const { session } = await ensureDefaultAssistantSession(deps, args.owner, {
+    actorUserId: args.actorUserId, orgId: args.orgId,
+  });
   const key = `${session.id}:${args.threadKey}`;
   const prior = deliveryChains.get(key) ?? Promise.resolve();
   const run = prior.then(() => deliverToAssistantThreadInner(deps, args, session));
@@ -69,17 +71,6 @@ export async function deliverToAssistantThread(
     });
   deliveryChains.set(key, tail);
   return run;
-}
-
-/** Events resolve through their authenticated workspace owner. */
-async function resolveDeliverySession(
-  deps: { db: AppDb; engineHost: EngineHost },
-  args: { orgId: string; owner: Principal; actorUserId: string },
-): Promise<Session> {
-  const { session } = await ensureDefaultAssistantSession(deps, args.owner, {
-    actorUserId: args.actorUserId, orgId: args.orgId,
-  });
-  return session;
 }
 
 async function deliverToAssistantThreadInner(

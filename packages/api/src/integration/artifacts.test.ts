@@ -11,6 +11,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { bootTestApi } from "./_setup.js";
+import { agentSessions } from "../schema/index.js";
 import { internalToken } from "../lib/internal-auth.js";
 import type {
   AddArtifactCommentResponse,
@@ -111,6 +112,10 @@ describe("api integration: artifacts", () => {
   it("internal token + owner/actor headers share on behalf of a session (mem_share path)", async () => {
     const api = await bootTestApi();
     try {
+      await api.providers.db.insert(agentSessions).values({
+        id: "sess-123", userId: "local-user", orgId: "local-org", workspace: "/tmp",
+        ownerType: "user", ownerId: "local-user", createdAt: 1, updatedAt: 1,
+      });
       const headers = {
         "Content-Type": "application/json",
         "x-valet-internal": internalToken(),

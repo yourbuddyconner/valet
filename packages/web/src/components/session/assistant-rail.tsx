@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import type { TeamSummary } from "@valet/api/wire";
 import { useWorkspaceConversation } from "~/hooks/use-workspace-conversation";
 import { ThreadTree, ThreadTreeWaiting } from "./thread-tree";
@@ -8,7 +9,10 @@ export function AssistantRail() {
   if (conversation.error) return <div role="alert" className="p-4 text-sm text-danger-500">
     Could not load threads. <button className="underline" onClick={() => void conversation.refetch()}>Retry</button>
   </div>;
-  return conversation.data ? <ThreadTree sessionId={conversation.data.sessionId} /> : <ThreadTreeWaiting />;
+  return <>
+    <Link to="/chat" search={prev => ({ workspace: prev.workspace, view: "work" })} className="border-b border-line px-4 py-3 text-sm hover:bg-ink-wash">Work and artifacts</Link>
+    {conversation.data ? <ThreadTree sessionId={conversation.data.sessionId} /> : <ThreadTreeWaiting />}
+  </>;
 }
 
 /** Teams whose assistants the caller may open: the org feature gate is on,

@@ -1,3 +1,4 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 /**
  * The session-delivery seam for stored skills: a row in the `skills` table
  * must reach a real session's `skills` list and the `skill` tool's body
@@ -22,7 +23,7 @@ import type {
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
 import { createSkill } from "../services/skills.js";
 import { createTeam } from "../services/teams.js";
-import { createAssistant, ensureAssistantSession } from "../assistants/service.js";
+import { ensureDefaultAssistantSession } from "../assistants/service.js";
 import { defaultAssistantSessionFor } from "../test-helpers/assistant-session.js";
 
 const USER = "local-user";
@@ -181,13 +182,13 @@ describe("stored skills on a session", () => {
       description: "Attack a change and try to prove it wrong.",
       content: "# Adversarial code review\n",
     });
-    const assistant = await createAssistant(db, ORG, { type: "team", id: team.id }, "Restricted", {
+    const assistant = await seedWorkspaceAssistant(db, ORG, { type: "team", id: team.id }, "Restricted", {
       behavior: { skills: { mode: "allowlist", names: ["team-review-notes"] } },
     });
 
-    const { session } = await ensureAssistantSession(
+    const { session } = await ensureDefaultAssistantSession(
       { db, engineHost: api.providers.engineHost },
-      assistant,
+      { type: assistant.ownerType, id: assistant.ownerId },
       { actorUserId: USER, orgId: ORG },
     );
 

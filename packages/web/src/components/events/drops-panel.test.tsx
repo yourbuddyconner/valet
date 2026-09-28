@@ -34,7 +34,7 @@ describe("DropsPanel", () => {
     expect(screen.getByText("Slack form did not start a workflow")).toBeTruthy();
     expect(screen.getByText(/no enabled subscription names it/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
-    expect(screen.getByText(/Last event received/)).toBeTruthy();
+    expect(screen.getByText(/Last recorded event or diagnostic/)).toBeTruthy();
   });
 
   it("distinguishes a missing receipt record from proof of non-delivery", () => {
@@ -43,7 +43,7 @@ describe("DropsPanel", () => {
     expect(screen.getByText(/No event receipt is recorded yet/)).toBeTruthy();
     expect(screen.getByText(/No recorded problems in this window/)).toBeTruthy();
     expect(screen.queryByText(/Every event that arrived was handled/)).toBeNull();
-    expect(screen.getByText(/does not confirm that Slack delivered/)).toBeTruthy();
+    expect(screen.getByText(/An absent receipt does not establish/)).toBeTruthy();
   });
 
   it("shows a loading state", () => {

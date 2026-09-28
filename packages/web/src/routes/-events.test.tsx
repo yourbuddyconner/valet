@@ -220,13 +220,6 @@ vi.mock("~/api/settings", () => ({
 // `OwnerBadge` reads the assistants list to link a team badge to the team's
 // assistant; no assistant fixtures needed — an unlinked badge still names
 // the owner.
-vi.mock("~/api/assistants", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("~/api/assistants")>();
-  return {
-    ...actual,
-    useAssistants: () => ({ data: { assistants: [] }, isLoading: false, error: null }),
-  };
-});
 
 // The create dialog inherits the switcher's workspace. Mutable for the
 // team-scope case; reset in afterEach (isolate: false shares the registry).

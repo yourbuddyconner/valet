@@ -183,7 +183,6 @@ describe("PATCH /api/sessions/:id — teamId (move between workspaces)", () => {
       personality: null,
       behavior: null,
       sessionId: "orchestrator:user:local-user",
-      isDefault: true,
       createdAt: Date.now(),
       archivedAt: null,
     });

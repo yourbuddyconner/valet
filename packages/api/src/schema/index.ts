@@ -512,6 +512,7 @@ export const teams = pgTable(
     defaultModel: text("default_model"),
     /** Team default reasoning level. Null = inherit. */
     defaultReasoning: text("default_reasoning"),
+    slackHomeChannelId: text("slack_home_channel_id"),
   },
   (t) => [
     uniqueIndex("teams_org_name").on(t.orgId, t.name),
@@ -549,17 +550,9 @@ export const teamJoinEligibilities = pgTable(
 
 // ─── Assistants ─────────────────────────────────────────────────────────────
 
-/**
- * An assistant: a named agent a principal owns, with its own session.
- *
- * Replaces `orchestrator_identities`, whose `UNIQUE (org, owner_type,
- * owner_id)` was the one-assistant-per-principal rule. A principal now owns
- * any number, and is the assistant's OWNER and SCOPE rather than its
- * identity. See `docs/specs/2026-08-13-assistants-design.md`.
- *
- * `sessionId` is `assistant:{id}` for every row, the default included — one
- * address, so no consumer has to branch on which kind of assistant it holds.
- */
+/** One runtime identity per personal or team workspace. Ownership is unique,
+ * including retired identities. Threads share this identity and execution
+ * sessions retain separate sandbox lifecycles. */
 export const assistants = pgTable(
   "assistants",
   {
@@ -585,22 +578,14 @@ export const assistants = pgTable(
     /** Reasoning level. Null = inherit the cascade. */
     reasoning: text("reasoning"),
     sessionId: text("session_id").notNull(),
-    /**
-     * The one a machine picks when nobody chose. Workflow orchestrator
-     * nodes, event subscriptions and channel bindings all say "the team's
-     * assistant" and have no basis for choosing between several, so they
-     * resolve to this. Exactly one per principal, held by a partial unique
-     * index — see the migration.
-     */
-    isDefault: boolean("is_default").notNull().default(false),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
-    /** Null while live. Archiving hides an assistant without destroying the
-     * conversation it held; the default cannot be archived while default. */
+    /** Null while live. Team teardown retires the workspace identity; the
+     * owner slot remains reserved. */
     archivedAt: bigint("archived_at", { mode: "number" }),
   },
   (t) => [
     uniqueIndex("assistants_session").on(t.sessionId),
-    index("assistants_owner").on(t.orgId, t.ownerType, t.ownerId),
+    uniqueIndex("assistants_workspace").on(t.orgId, t.ownerType, t.ownerId),
   ],
 );
 
@@ -692,6 +677,7 @@ export const userNotificationPreferences = pgTable(
     userId: text("user_id").notNull(),
     kind: text("kind").notNull(),
     web: boolean("web").notNull().default(true),
+    teamDm: boolean("team_dm").notNull().default(false),
   },
   (t) => [primaryKey({ columns: [t.userId, t.kind] })],
 );
@@ -917,6 +903,7 @@ export const artifacts = pgTable(
     orgId: text("org_id").notNull(),
     actorUserId: text("actor_user_id").notNull(),
     sourceSessionId: text("source_session_id").notNull().default(""),
+    sourceThreadId: text("source_thread_id"),
     sourceMemoryPath: text("source_memory_path").notNull(),
     title: text("title").notNull().default(""),
     content: text("content").notNull(),
@@ -1959,7 +1946,6 @@ export const followedThreads = pgTable(
      * later messages in the thread reach the SAME assistant rather than the
      * owner's default. Null on rows from before the column, and on any follow
      * whose rule named no assistant — both read as "the owner's default". */
-    assistantId: text("assistant_id"),
     /** The mention rule this thread was bound from. The follow router reads
      * that row's CURRENT invocation audience, because the audience is the
      * rule's state, not the conversation's: narrowing a rule back to the team
@@ -1998,7 +1984,6 @@ export const workflowSchedules = pgTable(
      * `target_kind = 'orchestrator'`. Null on rows from before the column, and
      * on any schedule that named none — both read as "the owner's default".
      * Ignored for a `workflow` target, which has no assistant. */
-    assistantId: text("assistant_id"),
     name: text("name").notNull(),
     cron: text("cron").notNull(),
     timezone: text("timezone").notNull().default("UTC"),

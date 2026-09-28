@@ -29,6 +29,7 @@ import { PageDropTarget } from "~/components/session/page-drop-target";
 import { SandboxTabs, type SandboxTabId } from "~/components/session/sandbox-tabs";
 import { BrowserOverlay } from "~/components/session/browser/browser-overlay";
 import { useBrowserWatch } from "~/components/session/browser/use-browser-watch";
+import { WorkArtifacts } from "~/components/session/work-discovery";
 import { SessionHeader } from "~/components/session/session-header";
 import { useMe } from "~/api/settings";
 import { useInvalidateSessionOnModelSwitch } from "~/hooks/use-invalidate-session-on-model-switch";
@@ -276,6 +277,10 @@ export function SessionView({
       {tab === "chat" ? (
         <PageDropTarget>
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+            {effectiveThreadId && <div className="border-b border-line px-4 pb-2"><WorkArtifacts
+              key={`${sessionId}:${effectiveThreadId}`} sessionId={sessionId} threadId={effectiveThreadId}
+              owner={{ ownerType: session.data.owner.type, ownerId: session.data.owner.id }}
+            /></div>}
             <MessageList
               header={panel ? undefined : <>{sessionHeader}{sandboxTabs}</>}
               messages={stream.messages}

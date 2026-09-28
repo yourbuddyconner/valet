@@ -35,7 +35,7 @@ vi.mock("~/api/queries", async (importOriginal) => {
     useSession: () => ({
       isLoading: false,
       error: null,
-      data: { id: "sess-1", title: "fix-auth", workspace: "/workspace", profile: fullProfile ? "full" : "headless" },
+      data: { owner: { type: "user", id: "u1" }, id: "sess-1", title: "fix-auth", workspace: "/workspace", profile: fullProfile ? "full" : "headless" },
     }),
     useThreads: () => ({ data: { threads: [{ id: "t1", createdAt: 0 }] } }),
     useMessages: () => ({ data: undefined }),

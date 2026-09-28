@@ -1,3 +1,4 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 /**
  * Unit tests for `buildWorkflowEngineDeps`'s Task 7/Task 6 seams:
  * `invokeAction` (now a real headless `ActionInvoker` with durable dedup —
@@ -303,7 +304,7 @@ describe("buildWorkflowEngineDeps: promptOrchestrator", () => {
     // owner's default assistant — the row `resolveDefaultAssistant` created.
     const defaultAssistant = await resolveDefaultAssistant(db, "local-org", { type: "user", id: LOCAL_USER.id });
     expect(receipt.sessionId).toBe(defaultAssistant.sessionId);
-    expect(defaultAssistant.isDefault).toBe(true);
+    expect(defaultAssistant).toBeDefined();
     expect(receipt.threadId).toBeTruthy();
     expect(receipt.queueItemId).toBeTruthy();
 
@@ -417,7 +418,6 @@ describe("buildWorkflowEngineDeps: promptOrchestrator", () => {
       ownerType: "user",
       ownerId: LOCAL_USER.id,
       sessionId: legacySessionId,
-      isDefault: false,
       createdAt: Date.now(),
     });
     const session = await engineHost.assistantSessionFor(

@@ -24,7 +24,7 @@ import { eq } from "drizzle-orm";
 import type { SessionStore } from "@valet/engine";
 import type { NodeCheckpoint, OnRunSettled, WorkflowStore } from "@valet/workflow";
 import type { AppDb } from "../lib/drizzle.js";
-import { principalFromOwner, routeAttention } from "../orchestrator/attention.js";
+import { principalFromOwner, routeAttention, type AttentionChannelDeliverer } from "../orchestrator/attention.js";
 import { sessionThreads, workflowDefinitions } from "../schema/index.js";
 import { workflowRunThreadKey } from "./engine-deps.js";
 
@@ -35,6 +35,7 @@ export function workflowApprovalHref(runId: string, nodeId: string): string {
 export interface RunSettledAttentionDeps {
   db: AppDb;
   store: Pick<WorkflowStore, "getCheckpoints">;
+  channels?: AttentionChannelDeliverer[];
 }
 
 /** How many failed nodes the body names before it counts the rest. */
@@ -59,7 +60,7 @@ export function buildRunSettledAttention(deps: RunSettledAttentionDeps): OnRunSe
       const name = await workflowName(deps.db, info.workflowId);
       const checkpoints = await deps.store.getCheckpoints(info.runId);
       await routeAttention(
-        { db: deps.db },
+        { db: deps.db, channels: deps.channels },
         {
           kind: "notification",
           urgency: "high",
@@ -114,6 +115,7 @@ function truncate(text: string): string {
 export interface RunThreadArchiveDeps {
   db: AppDb;
   store: Pick<WorkflowStore, "getCheckpoints">;
+  channels?: AttentionChannelDeliverer[];
   /** The engine's own session store, for the thread's key and creation time,
    * and for the state of the submission the node dispatched onto it. */
   engineStore: Pick<SessionStore, "getThread" | "getQueueItem">;

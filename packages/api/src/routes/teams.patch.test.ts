@@ -47,6 +47,18 @@ async function patchTeam(
 }
 
 describe("PATCH /api/teams/:id", () => {
+  it("home channel is admin-only, rejects DM IDs, and can be cleared", async () => {
+    api = await bootTestApi();
+    await seedTeam(api);
+    expect((await patchTeam(api, { slackHomeChannelId: "C0123456789" }, "test-member")).status).toBe(404);
+    expect((await patchTeam(api, { slackHomeChannelId: "D0123456789" }, "test-lead")).status).toBe(400);
+    const saved = await patchTeam(api, { slackHomeChannelId: "C0123456789" }, "test-lead");
+    expect(saved.status).toBe(200);
+    expect(((await saved.json()) as PatchTeamResponse).team.slackHomeChannelId).toBe("C0123456789");
+    const cleared = await patchTeam(api, { slackHomeChannelId: null }, "test-lead");
+    expect(((await cleared.json()) as PatchTeamResponse).team.slackHomeChannelId).toBeNull();
+  });
+
   it("team admin sets the default model; GET /api/teams reflects it", async () => {
     // The catalog reports an Anthropic entry as valid only when a key
     // exists (zero-config env fallback), same as me.test.ts.

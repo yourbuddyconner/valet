@@ -38,7 +38,7 @@ import {
   type ValetPlugin,
 } from "@valet/engine";
 import type { WorkflowStore } from "@valet/workflow";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import {
   ArchivedAssistantError,
@@ -55,7 +55,7 @@ import { attentionHref } from "../orchestrator/attention-wiring.js";
 import type { AttentionChannelDeliverer, AttentionEvent } from "../orchestrator/attention.js";
 import { writeDropLog } from "../orchestrator/signals.js";
 import { canApplyAlwaysAllow, GATE_ACTION_ALWAYS_ALLOW } from "../policies/service.js";
-import { agentSessions, users, workflowDefinitions } from "../schema/index.js";
+import { teams, agentSessions, users, workflowDefinitions } from "../schema/index.js";
 import { ingestChannelFile, type IngestedChannelFile } from "../services/channel-file-ingest.js";
 import { resolveOrgCredentialRead } from "../services/credential-resolution.js";
 import { OnePasswordAuthError, type OnePasswordService } from "../services/onepassword.js";
@@ -1622,6 +1622,26 @@ export class ChannelHost {
    */
   attentionDeliverer(): AttentionChannelDeliverer {
     return {
+      deliverTeam: async (event): Promise<void> => {
+        if (event.owner.type !== "team") return;
+        const transport = this.transports.get("slack");
+        if (!transport?.sendToChannel) return;
+        const orgId = this.orgId ?? await this.deps.resolveOrgId();
+        const [team] = await this.deps.db.select().from(teams)
+          .where(and(eq(teams.id, event.owner.id), eq(teams.orgId, orgId))).limit(1);
+        if (!team?.slackHomeChannelId) return;
+        if (event.sessionId && event.threadId) {
+          const thread = await this.deps.engineStore.getThread(event.sessionId, event.threadId);
+          // Existing Slack conversations keep their origin. This is only a new-message default.
+          if (thread?.key.startsWith("slack:")) return;
+        }
+        // Channel membership can differ from team membership. Keep sensitive details and
+        // approval controls behind the authorized web route.
+        const href = event.href ?? `/chat?workspace=${encodeURIComponent(team.id)}`;
+        await transport.sendToChannel(team.slackHomeChannelId, {
+          markdown: ["A team notification is ready in Valet.", this.openInValetLink(href)].filter(Boolean).join("\n\n"),
+        });
+      },
       deliver: async (userId: string, event: AttentionEvent): Promise<void> => {
         for (const channelType of this.transports.keys()) {
           try {

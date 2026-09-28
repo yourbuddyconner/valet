@@ -40,6 +40,7 @@ import { notificationsRouter } from "./routes/notifications.js";
 import { changelogRouter } from "./routes/changelog.js";
 import { workflowPreviewRouter } from "./routes/workflow-preview.js";
 import { workflowTriggersRouter } from "./routes/workflow-triggers.js";
+import { workflowConversationRouter } from "./routes/workflow-conversation.js";
 import { workflowsRouter } from "./routes/workflows.js";
 import { pluginsRouter } from "./routes/plugins.js";
 import { templatesRouter } from "./routes/templates.js";
@@ -333,6 +334,7 @@ export function createApp(
   // Preview before the CRUD router for the same reason: `POST /:id/preview`
   // must not be read as a path under one of its routes.
   app.route("/api/workflows", workflowPreviewRouter);
+  app.route("/api/workflows", workflowConversationRouter);
   app.route("/api/workflows", workflowsRouter);
   app.route("/api/templates", templatesRouter);
   app.route("/api/plugins", pluginsRouter);

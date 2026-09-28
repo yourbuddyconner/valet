@@ -1,3 +1,4 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 /**
  * Integration test: `buildWorkflowEngineDeps` (Phase 5 plan Task 10, Task 7
  * of the node-completion plan) over a real `EngineHost` + real Anthropic

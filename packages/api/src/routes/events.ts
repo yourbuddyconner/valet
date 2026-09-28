@@ -426,7 +426,7 @@ eventsRouter.get("/events/drops", async (c) => {
   // Slack interaction diagnostics identify form activity. They are the one
   // new sensitive diagnostic class, so members keep the established drop feed
   // without seeing those rows.
-  if (!admin) dropConditions.push(ne(eventDropLog.reason, "slack_interaction_unmatched"));
+  if (!admin) dropConditions.push(ne(eventDropLog.reason, "slack_interaction_unmatched"), ne(eventDropLog.reason, "slack_classifier_rejected"));
   const visibleDropConditions = [...dropConditions];
   if (query) {
     const escapedQuery = escapeLike(query);
@@ -837,7 +837,7 @@ eventsRouter.patch("/event-subscriptions/:id", async (c) => {
     return c.json({ error: "enabled must be a boolean" }, 400);
   }
 
-  if (body.assistantId !== undefined) {
+  if ("assistantId" in body) {
     return c.json({ error: "Assistant selection is not supported. Choose the subscription workspace instead." }, 400);
   }
   let patchedTarget = row.target as EventSubscriptionTargetWire;

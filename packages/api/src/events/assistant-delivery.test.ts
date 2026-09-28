@@ -1,9 +1,10 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 import { fauxAssistantMessage, registerFauxProvider, type FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import { VirtualSandboxProvider, type MessageEntry } from "@valet/engine";
 import { PgEventStream, PgSessionStore } from "@valet/store-postgres";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAssistant } from "../assistants/service.js";
+
 import { EngineHost } from "../engine/host.js";
 import { deriveSecretKey } from "../lib/secret-crypto.js";
 import { PgCredentialStore } from "../plugins/credential-store.js";
@@ -85,7 +86,7 @@ describe("deliverToAssistantThread — thread-context hydration", () => {
 
   it("uses the current assistant default for new Slack threads after restore", async () => {
     const deps = { db: testDb.appDb, engineHost };
-    const assistant = await createAssistant(testDb.appDb, ORG, OWNER, "Channel assistant");
+    const assistant = await seedWorkspaceAssistant(testDb.appDb, ORG, OWNER, "Channel assistant");
     await testDb.appDb.update(assistants).set({ model: "claude-opus-4-5", reasoning: "high" }).where(eq(assistants.id, assistant.id));
     const session = await defaultAssistantSessionFor(deps, OWNER, { actorUserId: USER, orgId: ORG });
     const oldThread = await session.createThread("slack:C1:old", { model: "claude-sonnet-4-5", reasoning: "low" });
@@ -273,6 +274,6 @@ describe("deliverToAssistantThread — which assistant answers", () => {
     expect(await firstUserEntry(deps, "events")).toMatchObject({ content: "go", author: { id: USER } });
     const rows = await testDb.appDb.select().from(assistants);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ ownerType: OWNER.type, ownerId: OWNER.id, isDefault: true });
+    expect(rows[0]).toMatchObject({ ownerType: OWNER.type, ownerId: OWNER.id });
   });
 });

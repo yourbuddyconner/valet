@@ -1,19 +1,4 @@
-/**
- * Integration tests for the assistant-identity endpoints (assistant-centered
- * web UI Task 2, decisions 4/5/6/20):
- *
- *   - GET  /api/orchestrator/info    — resolves the caller's default
- *     assistant row (one insert on first visit) but never the engine
- *     session; presence derivation.
- *   - PATCH /api/orchestrator/info   — works before the engine session
- *     exists; name -> assistants.name; personality -> the
- *     assistant/personality.md memory file; evicts the cached engine
- *     session (cache-only, never the destructive `session.destroy()`).
- *   - GET  /api/orchestrator/children — child_watches ⋈ agent_sessions.
- *   - Persona injection (decision 5): after a PATCH rename, the next wake's
- *     `systemPrompt` contains the name and personality, AND the pre-existing
- *     transcript survives (proves eviction, not destruction).
- */
+/** Workspace runtime info, child presence, and retired identity-write coverage. */
 import { afterEach, describe, expect, it } from "vitest";
 import { agentSessions, assistants, childWatches } from "../schema/index.js";
 import { writeFile } from "../services/memory.js";
@@ -61,7 +46,7 @@ describe("GET /api/orchestrator/info", () => {
 
     const assistantRows = await api.providers.db.select().from(assistants);
     expect(assistantRows).toHaveLength(1);
-    expect(assistantRows[0]?.isDefault).toBe(true);
+    expect(assistantRows[0]).toBeDefined();
     expect(assistantRows[0]?.name).toBeNull();
 
     // Nothing that runs was created.
@@ -116,14 +101,13 @@ describe("GET /api/orchestrator/info", () => {
     const infoBody = (await infoRes.json()) as GetOrchestratorInfoResponse;
     expect(infoBody.personality).toBeNull();
 
-    // Set a name (no personal personality) and confirm the persona prefix
-    // that gets injected into systemPrompt stays neutral — no team content.
+    // Retired profile writes cannot rename the runtime or import team context.
     const patchRes = await fetch(`${api.baseUrl}/api/orchestrator/info`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "Wren" }),
     });
-    expect(patchRes.status).toBe(409);
+    expect(patchRes.status).toBe(404);
 
     const session = await defaultAssistantSessionFor(
       api.providers,

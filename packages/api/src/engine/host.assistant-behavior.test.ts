@@ -1,3 +1,4 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 /**
  * Per-assistant behavior threads all the way to a built session
  * (`docs/specs/2026-08-18-assistant-editor-design.md`).
@@ -30,7 +31,7 @@ import type {
   ValetPlugin,
 } from "@valet/engine";
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
-import { createAssistant, ensureAssistantSession } from "../assistants/service.js";
+import { ensureDefaultAssistantSession } from "../assistants/service.js";
 import { createSkill } from "../services/skills.js";
 import type { AssistantBehavior } from "../wire/types.js";
 
@@ -137,10 +138,10 @@ describe("assistant behavior on a built session", () => {
         entries: [{ service: "github", excludeActions: ["github.delete_repo"] }],
       },
     };
-    const row = await createAssistant(db, ORG, { type: "user", id: USER }, "Triage", {
+    const row = await seedWorkspaceAssistant(db, ORG, { type: "user", id: USER }, "Triage", {
       behavior,
     });
-    const { session } = await ensureAssistantSession({ db, engineHost }, row, {
+    const { session } = await ensureDefaultAssistantSession({ db, engineHost }, { type: row.ownerType, id: row.ownerId }, {
       actorUserId: USER,
       orgId: ORG,
     });
@@ -185,12 +186,12 @@ describe("assistant behavior on a built session", () => {
     api = await bootTestApi({ plugins: [fixturePlugin, workflowsPlugin] });
     const { db, engineHost } = api.providers;
 
-    const row = await createAssistant(db, ORG, { type: "user", id: USER }, "Gated", {
+    const row = await seedWorkspaceAssistant(db, ORG, { type: "user", id: USER }, "Gated", {
       behavior: {
         integrations: { mode: "allowlist", entries: [{ service: "github" }] },
       },
     });
-    const { session } = await ensureAssistantSession({ db, engineHost }, row, {
+    const { session } = await ensureDefaultAssistantSession({ db, engineHost }, { type: row.ownerType, id: row.ownerId }, {
       actorUserId: USER,
       orgId: ORG,
     });
@@ -210,10 +211,10 @@ describe("assistant behavior on a built session", () => {
     api = await bootTestApi({ plugins: [] });
     const { db, engineHost } = api.providers;
 
-    const row = await createAssistant(db, ORG, { type: "user", id: USER }, "Nova", {
+    const row = await seedWorkspaceAssistant(db, ORG, { type: "user", id: USER }, "Nova", {
       personality: "You are terse and cite sources.",
     });
-    const { session } = await ensureAssistantSession({ db, engineHost }, row, {
+    const { session } = await ensureDefaultAssistantSession({ db, engineHost }, { type: row.ownerType, id: row.ownerId }, {
       actorUserId: USER,
       orgId: ORG,
     });

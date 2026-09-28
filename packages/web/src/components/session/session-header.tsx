@@ -13,9 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useRef, useState } from "react";
-import { useAssistants } from "~/api/assistants";
 import { ApiError } from "~/api/client";
-import { useOrchestratorInfo } from "~/api/orchestrator";
 import {
   useDeleteSession,
   usePauseSession,
@@ -144,9 +142,7 @@ export function SessionHeader({
   const setProfile = useSetSessionProfile(session.id);
   const me = useMe();
   const org = useOrg();
-  const orchInfo = useOrchestratorInfo();
   const teams = useTeams();
-  const assistants = useAssistants();
   // One error slot for the header actions that fire straight from their
   // control: pause, replace, and rename. Delete and the Terminal/VS Code
   // switch confirm first, and their modal covers this row, so each reports
@@ -275,42 +271,11 @@ export function SessionHeader({
     if (!ok) console.error("copy transcript failed");
   }
 
-  // Single-row masthead. The workspace path lives in a hover tooltip on
-  // the title — for orchestrator sessions it's a long internal filesystem
-  // path (`/root/.valet/orchestrator/user-…`) that shouted at users from
-  // the subtitle before. Real sessions have friendlier workspace names,
-  // but hiding both keeps the visual language consistent and lets the
-  // action cluster on the right breathe.
-  //
-  // The orchestrator's title card carries the orchestrator's chosen name
-  // (e.g. "Aurora") — the top-nav logo stays "Valet", so this is where
-  // the assistant's identity lives.
-  // The owning team comes from the assistants list rather than from the
-  // session id: the id used to be parsed for it, which worked only while a
-  // team had exactly one assistant. Narrowing still matters — `orchInfo` is
-  // the viewer's OWN assistant, so a bare `startsWith("orchestrator:")` test
-  // titled every team assistant with the viewer's personal assistant name.
-  const assistant = assistants.data?.assistants.find((a) => a.sessionId === session.id);
-  // The row's own `owner` covers standalone sessions, which have no
-  // assistant entry: a team-owned standalone session must badge its team
-  // and gate its admin controls exactly like a team assistant does.
-  const owner = assistant?.owner ?? session.owner;
+  const owner = session.owner;
   const teamId = owner.type === "team" ? owner.id : null;
   const team = teamId !== null ? teams.data?.teams.find((t) => t.id === teamId) : undefined;
-  // Your own assistant is recognised without waiting on the list:
-  // `GET /orchestrator/info` answers with the very session id it names.
-  const isOwnOrchestrator =
-    assistant?.owner.type === "user" || orchInfo.data?.sessionId === session.id;
-  const isAssistantSession = assistant !== undefined || isOwnOrchestrator;
-  // `assistantLabel` is the SAME function the rail uses, so the row you
-  // clicked and the header you land on cannot disagree. They did: an
-  // assistant nobody has named showed as "Default assistant" in the rail and
-  // as the owning TEAM's name here, which read as two different things.
-  //
-  // The team name is no longer a fallback for a nameless assistant. It named
-  // the wrong entity — a team owns assistants, it is not one — and the badge
-  // beside this title already says which team the conversation belongs to.
-  const title = activeThread?.title || (isAssistantSession ? "New thread" : session.title || "Untitled thread");
+  const isWorkspaceRuntime = session.isWorkspaceRuntime === true;
+  const title = activeThread?.title || (isWorkspaceRuntime ? "New thread" : session.title || "Untitled thread");
 
   // Lifecycle controls (model, pause, delete) act on a session the whole
   // team shares, so they are a team-admin power — the API enforces the
@@ -329,41 +294,12 @@ export function SessionHeader({
     !sameModelSpec(activeModel, configuredModel)
       ? `${modelScopeHint} Currently using ${activeModel} for this submission. Configured as ${configuredModel}.`
       : modelScopeHint;
-  // Renaming writes `session.title`, so it is offered only where the header
-  // actually shows that field. An assistant's header shows the assistant's
-  // own name instead, which is renamed on the assistants surface — an edit
-  // box here would store a string nobody ever sees.
-  const canRename = canAdminister && !isAssistantSession;
-  // A team's assistant is the one assistant kind this header may delete —
-  // one name for the predicate the gate, the item label, and destroy()'s
-  // prompt all share.
-  const isTeamAssistant = isAssistantSession && teamId !== null;
-  // Three descriptions for three losses. A team ASSISTANT is a shared
-  // conversation, so the copy names what the team loses. A team-owned
-  // STANDALONE session (reachable since "Move to workspace…") is still a
-  // session — it keeps the sandbox/child-session warning and adds who else
-  // loses it. A personal session keeps the original warning. The user's own
-  // assistant never reaches here: `canDelete` hides the menu item
-  // (TKAI-253).
-  const teamNote = `Everyone on ${team?.name ?? "the team"} loses`;
-  const deleteTitle = isTeamAssistant ? `Delete ${title}?` : "Delete this session permanently?";
-  const deleteDescription = isTeamAssistant
-    ? `${teamNote} this conversation and its threads.`
-    : teamId !== null
-      ? `${teamNote} it. This deletes all threads, history, and child sessions, and tears down the sandbox.`
-      : "This deletes all threads, history, and child sessions, and tears down the sandbox.";
-  // Delete never renders on the user's own assistant page (TKAI-253): the
-  // v1 holdover deleted the orchestrator and every thread with it, and
-  // Replace sandbox covers the reset. Fail closed while the assistants
-  // list or the orchestrator probe is still loading — in that window every
-  // session looks like a plain session, and the one destructive action
-  // here must not flash on an assistant page. The API refuses these
-  // deletes too; hiding the item keeps the menu honest.
-  const canDelete =
-    canAdminister &&
-    assistants.data !== undefined &&
-    orchInfo.data !== undefined &&
-    (!isAssistantSession || isTeamAssistant);
+  // Runtime titles belong to threads. Standalone titles belong to the session.
+  const canRename = canAdminister && session.isWorkspaceRuntime === false;
+  const deleteTitle = "Delete this session permanently?";
+  const deleteDescription = `${teamId !== null ? `Everyone on ${team?.name ?? "the team"} loses it. ` : ""}This deletes all threads, history, and child sessions, and tears down the sandbox.`;
+  // Fail closed until the detail response identifies the runtime boundary.
+  const canDelete = canAdminister && session.isWorkspaceRuntime === false;
 
   // The edit box replaces the title cluster. The right-hand side keeps the
   // read-only signals — sandbox, connection, agent status — and the error
@@ -426,17 +362,7 @@ export function SessionHeader({
               {title}
             </span>
           )}
-          {/* Names the owning team, now that the title does not.
-
-              This badge used to read the bare word "Team", because the title
-              was the team's name and "Platform [Platform]" says one thing
-              twice. The title is the assistant's own label now — the same
-              label the rail shows — so the team name would otherwise appear
-              nowhere in this row, and "Team" alone cannot answer WHICH team
-              a person with several is reading.
-
-              Still not `OwnerBadge`: that one links to the team's assistant,
-              which is the page you are already on. */}
+          {/* The owner badge names the workspace beside the thread title. */}
           {teamId !== null && (
             // The test hook lets a test assert THIS element rather than the
             // team's name appearing anywhere in the header, which a title
@@ -445,19 +371,8 @@ export function SessionHeader({
               {team?.name ?? "Team"}
             </Badge>
           )}
-          {/* An orchestrator's workspace is a synthetic internal directory
-              (`~/.valet/orchestrator/{type}-{principalId}`), not a place
-              anyone chose or can act on. On a team assistant it rendered as
-              `team-team_99235d43-…` — the doubled prefix is the principal
-              type joined to an id that already carries it — which is an
-              internal identifier shown to a user for no reason. The file's
-              own note above says these paths "shouted at users from the
-              subtitle"; this is that intent, finally applied to the chip.
-
-              No `uppercase` on the chip when it does render — real
-              workspace names are case-sensitive paths, and shouting them in
-              caps misrepresents them. */}
-          {session.workspace && !isAssistantSession && (
+          {/* Runtime workspace paths are internal; standalone paths describe the work. */}
+          {session.workspace && !isWorkspaceRuntime && (
             <span className="hidden sm:inline text-[10px] font-mono tracking-wide text-muted truncate">
               {shortenWorkspace(session.workspace)}
             </span>
@@ -610,23 +525,13 @@ export function SessionHeader({
                   <RefreshCw className="h-3.5 w-3.5 mr-2" aria-hidden />
                   Replace sandbox
                 </DropdownMenuItem>
-                {/* Standalone sessions only: an assistant's session is
-                    addressed by its owner, so its owner is structural (the
-                    API refuses too). Gated on the assistants list having
-                    RESOLVED — while it loads, `isAssistantSession` is false
-                    for every session, and the item would flash on assistant
-                    pages. */}
-                {!isAssistantSession && assistants.data !== undefined && (
+                {/* Workspace runtime ownership is structural. */}
+                {session.isWorkspaceRuntime === false && (
                   <DropdownMenuItem onSelect={() => setMoving(true)}>
                     <FolderInput className="h-3.5 w-3.5 mr-2" aria-hidden />
                     Move to workspace…
                   </DropdownMenuItem>
                 )}
-                {/* Never on the user's own assistant page — see `canDelete`.
-                    A team admin keeps delete for the team's assistant. Note
-                    the item deletes the assistant's SESSION (threads and
-                    history); the assistant row itself is archived on the
-                    assistants surface. */}
                 {canDelete && (
                   <DropdownMenuItem
                     className="text-danger-500"
@@ -634,10 +539,7 @@ export function SessionHeader({
                     onSelect={() => setConfirmDelete(true)}
                   >
                     <Trash2 className="h-3.5 w-3.5 mr-2" aria-hidden />
-                    {/* Only an assistant session IS the team's assistant. A
-                        team-owned standalone session is a session; calling it
-                        the assistant would threaten the wrong thing. */}
-                    {isTeamAssistant ? "Delete this team's assistant…" : "Delete session…"}
+                    Delete session…
                   </DropdownMenuItem>
                 )}
               </>
@@ -681,7 +583,7 @@ export function SessionHeader({
         }}
         title={deleteTitle}
         description={deleteDescription}
-        confirmLabel={isTeamAssistant ? "Delete assistant" : "Delete session"}
+        confirmLabel="Delete session"
         pendingLabel="Deleting…"
         pending={del.isPending}
         error={deleteError ?? undefined}

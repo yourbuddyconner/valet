@@ -109,7 +109,6 @@ const PLUGIN_GLYPHS: Record<string, LucideIcon> = {
   browser: Globe,
   // Who the assistant is being; the manifest picks theatre masks too.
   assistants: Drama,
-  "assistants-actions": Drama,
   // A wire out of the sandbox to a public hostname.
   "sandbox-tunnels": Cable,
   skills: GraduationCap,

@@ -8,9 +8,12 @@ import { useWorkspaceConversation } from "~/hooks/use-workspace-conversation";
 import { errorText } from "~/lib/error-text";
 import { useWorkspaceScope } from "~/lib/workspace-scope";
 
-interface ChatSearch { thread?: string; child?: string; workspace?: string }
+import { WorkDiscovery } from "~/components/session/work-discovery";
+
+interface ChatSearch { view?: "work"; thread?: string; child?: string; workspace?: string }
 export const Route = createFileRoute("/chat")({
   validateSearch: (raw): ChatSearch => ({
+    view: raw.view === "work" ? "work" : undefined,
     thread: typeof raw.thread === "string" ? raw.thread : undefined,
     child: typeof raw.child === "string" ? raw.child : undefined,
     workspace: typeof raw.workspace === "string" ? raw.workspace : undefined,
@@ -19,7 +22,7 @@ export const Route = createFileRoute("/chat")({
 });
 
 function ChatPage() {
-  const { thread, child } = Route.useSearch();
+  const { thread, child, view } = Route.useSearch();
   const conversation = useWorkspaceConversation();
   const scope = useWorkspaceScope();
   const teams = useTeams();
@@ -27,6 +30,7 @@ function ChatPage() {
   const navigate = useNavigate({ from: Route.fullPath });
   const sessionId = conversation.data?.sessionId;
   useInvalidateMessagesOnQueueState(sessionId, thread);
+  if (view === "work") return <WorkDiscovery />;
   if (conversation.error) return <div role="alert" className="p-8 text-sm text-danger-500">
     Couldn’t open this workspace’s threads. {errorText(conversation.error)}
     <button className="ml-2 underline" onClick={() => void conversation.refetch()}>Retry</button>

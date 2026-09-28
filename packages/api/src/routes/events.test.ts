@@ -1,3 +1,4 @@
+import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 /**
  * `/api/events*` + `/api/event-subscriptions` route tests (event-system plan,
  * Task 7). Real Hono app via `bootTestApi` with the real github plugin's
@@ -13,7 +14,7 @@ import type { RunHost } from "@valet/workflow";
 import { and, eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as assistantsService from "../assistants/service.js";
-import { createAssistant, retireAssistant } from "../assistants/service.js";
+import { retireAssistant } from "../assistants/service.js";
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
 import {
   eventDeliveries,
@@ -1387,42 +1388,6 @@ describe("event subscriptions — team ownership", () => {
     }
   });
 
-  it("does not leave an orphaned subscription when its target assistant is archived before the insert", async () => {
-    const a = await bootWithTeam();
-    const assistant = await createAssistant(
-      a.providers.db,
-      "local-org",
-      { type: "team", id: "team_1" },
-      "Team assistant",
-    );
-    const original = assistantsService.checkAssistantForOwner;
-    const spy = vi
-      .spyOn(assistantsService, "checkAssistantForOwner")
-      .mockImplementationOnce(async (...args) => {
-        const result = await original(...args);
-        // `deleteTeam` retires a team's assistants under the same ownership
-        // lock (services/teams.ts). This forces that race deterministically:
-        // the check above still passes on stale data, then the assistant is
-        // archived before the (fixed) in-lock recheck runs.
-        await retireAssistant(a.providers.db, assistant.id);
-        return result;
-      });
-    try {
-      const res = await postSubscription(
-        a.baseUrl,
-        {
-          ...VALID_BODY,
-          target: { kind: "orchestrator", orchestrator: "team", teamId: "team_1", assistantId: assistant.id },
-        },
-        { "x-valet-test-user-id": "test-member" },
-      );
-      expect(res.status).toBe(400);
-      expect(await a.providers.db.select().from(eventSubscriptions)).toHaveLength(0);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
   it("404s a team id that does not exist at all — same answer as one you're not on", async () => {
     const a = await bootWithTeam();
     const res = await postSubscription(
@@ -1513,9 +1478,9 @@ describe("event-subscription assistant target", () => {
   async function seedAssistants(a: TestApi): Promise<{ mine: string; foreign: string }> {
     const db = a.providers.db;
     // The first create for a principal takes the default slot.
-    await createAssistant(db, "local-org", { type: "user", id: "local-user" }, "Primary");
-    const mine = await createAssistant(db, "local-org", { type: "user", id: "local-user" }, "Ops");
-    const foreign = await createAssistant(db, "local-org", { type: "user", id: "someone-else" }, "Theirs");
+    await seedWorkspaceAssistant(db, "local-org", { type: "user", id: "local-user" }, "Primary");
+    const mine = await seedWorkspaceAssistant(db, "local-org", { type: "user", id: "local-user" }, "Ops");
+    const foreign = await seedWorkspaceAssistant(db, "local-org", { type: "user", id: "someone-else" }, "Theirs");
     return { mine: mine.id, foreign: foreign.id };
   }
 
@@ -1596,7 +1561,7 @@ describe("event-subscription assistant target", () => {
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("only valid on an orchestrator target");
+    expect(body.error).toContain("Assistant selection is not supported");
   });
 });
 

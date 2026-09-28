@@ -15,7 +15,6 @@ vi.mock("~/api/client", () => ({ api: {
   ensureTeamOrchestrator: (...args: unknown[]) => team(...args),
   ensureAssistantSession: (...args: unknown[]) => legacy(...args),
 } }));
-vi.mock("~/api/assistants", () => ({ useAssistants: () => ({ data: { assistants: rows }, error: null }) }));
 vi.mock("~/lib/workspace-scope", () => ({ useWorkspaceScope: () => scope }));
 vi.mock("@tanstack/react-router", () => ({ useSearch: () => search }));
 function harness() {

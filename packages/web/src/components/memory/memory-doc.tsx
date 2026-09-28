@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { qkMemory, useMemoryDoc } from "~/api/memory";
-import { useScopedAssistantName } from "~/api/assistants";
+import { useWorkspaceName } from "~/lib/workspace-name";
 import { useOrg, useTeams } from "~/api/settings";
 import { api, ApiError, type OwnerFilter } from "~/api/client";
 import { Badge, Button, Spinner } from "~/components/primitives";
@@ -73,16 +73,14 @@ export function MemoryDoc(props: MemoryDocProps) {
 function ResourceMemoryDoc({ path, owner, onNavigateToChat, onDeleted, onOpenPath }: MemoryDocProps) {
   const docQ = useMemoryDoc(path, owner);
   const queryClient = useQueryClient();
-  // The active workspace's assistant — a team's default under team scope. The
-  // footer prefill below stays personal-only, so its use of this name only
-  // ever renders under personal scope.
-  const name = useScopedAssistantName(owner);
+  // Label the memory owner, not an assistant identity.
+  const name = useWorkspaceName(owner);
 
   // Team memory: reads follow membership, writes follow authority (team
   // admin or org admin — `authorizeOwner` in routes/memory.ts). Mirror that
   // split here so a plain member doesn't get write buttons the API refuses.
   // Sharing and the composer prefill stay own-scope only: `mem_share`
-  // refuses team paths in v1, and "Ask {name} to update this" writes the
+  // refuses team paths in v1, and "Ask in {name} to update this" writes the
   // caller's own corpus, not the team's.
   const isTeamScope = owner?.ownerType === "team";
   const teamsQ = useTeams({ enabled: isTeamScope });
@@ -147,7 +145,7 @@ function ResourceMemoryDoc({ path, owner, onNavigateToChat, onDeleted, onOpenPat
       <div className="flex h-full flex-col items-center justify-center gap-1 p-8 text-center text-sm text-muted">
         <p>Nothing here yet.</p>
         <p>
-          Talk to {name}, or import a bundle via the API.
+          Start a thread in {name}, or import a bundle via the API.
         </p>
       </div>
     );
@@ -317,7 +315,7 @@ function ResourceMemoryDoc({ path, owner, onNavigateToChat, onDeleted, onOpenPat
       {!editing && !isTeamScope && (
         <footer className="mt-12 border-t border-line pt-6">
           <button type="button" onClick={askToUpdate} className="min-h-11 text-sm text-moss hover:underline">
-            Ask {name} to update this
+            Ask in {name} to update this
           </button>
         </footer>
       )}

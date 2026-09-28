@@ -366,6 +366,8 @@ export interface ChannelTransport {
   /** Normalize one raw update. `null` = not something we handle. */
   parseUpdate(update: RawChannelUpdate): InboundChannelEvent | null;
   send(conversationKey: string, message: OutboundChannelMessage): Promise<SendRef>;
+  /** Start a new message in a provider channel, without changing inbound subscriptions. */
+  sendToChannel?(channelId: string, message: OutboundChannelMessage): Promise<SendRef>;
   sendMedia(conversationKey: string, attachment: OutboundChannelAttachment): Promise<SendRef>;
   sendGatePrompt(conversationKey: string, gate: ChannelGatePrompt): Promise<GatePromptRef>;
   updateGatePrompt(ref: GatePromptRef, resolution: ChannelGateResolution): Promise<void>;

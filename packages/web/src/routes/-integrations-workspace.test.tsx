@@ -15,10 +15,6 @@ vi.mock("~/lib/workspace-scope", async (importOriginal) => {
   const original = await importOriginal<typeof import("~/lib/workspace-scope")>();
   return { ...original, useWorkspaceScope: () => realWorkspace ? original.useWorkspaceScope() : { teamId, setKey } };
 });
-vi.mock("~/api/assistants", async (importOriginal) => ({
-  ...await importOriginal<typeof import("~/api/assistants")>(),
-  useAssistants: () => ({ data: { assistants: [] } }),
-}));
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (config: unknown) => config,
   useSearch: () => ({}),

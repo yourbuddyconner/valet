@@ -26,10 +26,6 @@ export interface FollowedThreadRow extends FollowedThreadKey {
    * router's gap re-hydration has a starting point before the first overheard
    * delivery. Absent → tracking starts at the first delivery. */
   lastSeenTs?: string;
-  /** The assistant that answered the binding mention. Absent → the owner's
-   * default, which is what the rule that bound this follow also resolved to.
-   * Carried so a followed thread keeps talking to the SAME assistant. */
-  assistantId?: string;
   /** The mention rule this bind came from, so the router can read that rule's
    * current invocation audience on every later message. Absent → team-only,
    * which is what every follow bound before the column means. */
@@ -53,7 +49,6 @@ export async function upsertFollowedThread(db: AppDb, row: FollowedThreadRow): P
       createdAt: now,
       lastActivityAt: now,
       lastSeenTs: row.lastSeenTs ?? null,
-      assistantId: row.assistantId ?? null,
       subscriptionId: row.subscriptionId ?? null,
     });
   const target = [followedThreads.orgId, followedThreads.channelType,
@@ -66,16 +61,13 @@ export async function upsertFollowedThread(db: AppDb, row: FollowedThreadRow): P
     target,
     // `createdBy` too: it is the actor the follow-router runs the assistant
     // session as, so a re-bind by a different owner must carry the new
-    // binder's actor, not the first one's. `assistantId` follows the same
-    // rule — a re-bind by a rule naming a different assistant re-points the
-    // thread, and a rule naming none resets it to the owner's default.
+    // binder's actor, not the first one's. The workspace owner stays fixed.
     // `lastSeenTs` is deliberately NOT in the update set: a re-mention on an
     // already-followed thread must not rewind the router's gap tracking.
     set: {
       ownerType: row.ownerType,
       ownerId: row.ownerId,
       createdBy: row.createdBy,
-      assistantId: row.assistantId ?? null,
       // `subscriptionId` follows `createdBy`: the rule that re-binds the
       // thread decides which membership the router re-checks for the new
       // actor.

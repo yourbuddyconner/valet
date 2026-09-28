@@ -115,6 +115,8 @@ export interface RepoBinding {
 }
 
 export interface SessionDetail extends SessionSummary {
+  /** Permanent owner runtime; cannot be moved or deleted. */
+  isWorkspaceRuntime?: boolean;
   messageCount: number;
   /** Session-default model id. Threads inherit when they have no override. */
   model?: string;
@@ -208,6 +210,7 @@ export interface CreateSessionRequest {
 }
 
 export interface ListSessionsResponse {
+  nextCursor?: string | null;
   sessions: SessionSummary[];
 }
 
@@ -836,12 +839,9 @@ export type OrchestratorPresence = "idle" | "thinking" | "working";
 
 // ── REST: assistants ──────────────────────────────────────────────────────
 //
-// An assistant is a named agent a principal owns, with its own session. A
-// principal — you, or a team — owns any number. See
-// `docs/specs/2026-08-13-assistants-design.md`.
+// Each workspace owns one assistant runtime and its session.
 
-/** Who owns an assistant. The owner is its scope, not its identity: two
- * assistants owned by the same team are different assistants. */
+/** The workspace that owns the singleton assistant runtime. */
 export interface AssistantOwner {
   type: "user" | "team" | "org";
   id: string;
@@ -866,35 +866,24 @@ export type AssistantIntegrationsBehavior =
   | { mode: "all" }
   | { mode: "allowlist"; entries: AssistantIntegrationEntry[] };
 
-/** Per-assistant behavior config (`docs/specs/2026-08-18-assistant-editor-design.md`).
- * A null/absent field means "everything", which is what every pre-existing
- * assistant has. */
+/** Internal runtime behavior configuration. Absent fields include all available capabilities. */
 export interface AssistantBehavior {
   skills?: AssistantSkillsBehavior;
   integrations?: AssistantIntegrationsBehavior;
 }
 
-/** Server cap on `personality` length, shared so the editor's `maxLength`
- * and the API's 400 agree (the API enforces it; `assistants/persona.ts`
- * also slices at injection time). */
+/** Maximum personality text length injected into the runtime prompt. */
 export const PERSONALITY_INJECT_CAP = 500;
 
 export interface AssistantSummary {
   id: string;
   owner: AssistantOwner;
-  /** Absent until someone names it. The UI shows a placeholder rather than
-   * inventing a name the user never chose. */
+  /** Optional internal display name. */
   name?: string;
   /** Avatar URL for outbound channel posts. Absent = the bot's own icon. */
   avatarUrl?: string;
-  /** `assistant:{id}` — every assistant, default included. Carried here so
-   * listing assistants is also how the client learns their session ids, and
-   * opening one still creates nothing until the conversation starts. */
+  /** Runtime session address; listing does not materialize the session. */
   sessionId: string;
-  /** The one machine-driven paths use when nobody chose: workflow
-   * orchestrator nodes, event subscriptions, channel bindings. Exactly one
-   * per owner. */
-  isDefault: boolean;
   createdAt: number;
   /** Absent until someone sets it. When absent the session falls back to the
    * owner's assistant/personality.md memory file. `""` means explicitly
@@ -912,49 +901,6 @@ export interface ListAssistantsResponse {
   assistants: AssistantSummary[];
 }
 
-/** `POST /api/assistants`. Omit `owner` for one of your own. Creating a
- * team's assistant follows the same rule as administering one. */
-export interface CreateAssistantRequest {
-  name?: string;
-  owner?: AssistantOwner;
-  personality?: string;
-  behavior?: AssistantBehavior;
-}
-
-export type CreateAssistantResponse = AssistantSummary;
-
-/** `PATCH /api/assistants/:id`. `isDefault: true` promotes this one and
- * demotes the previous default in the same write — a principal is never
- * left with none, which would strand every automation that targets it. */
-export interface PatchAssistantRequest {
-  /** null clears the name; the session then drops the persona prefix and
-   * the UI shows its placeholder label. */
-  name?: string | null;
-  /** https URL of the avatar shown on outbound channel posts, or null to
-   * clear it (the bot's own icon shows again). */
-  avatarUrl?: string | null;
-  isDefault?: true;
-  /** null clears the personality: the session keeps only its name ("You are
-   * {name}."). The legacy memory-file fallback applies only to assistants
-   * whose personality was never set through this API. */
-  personality?: string | null;
-  /** null clears back to "everything". */
-  behavior?: AssistantBehavior | null;
-  /** Assistant-specific model override, or null to clear. */
-  model?: string | null;
-  /** Assistant-specific reasoning/thinking level override, or null to clear. */
-  reasoning?: string | null;
-}
-
-export type PatchAssistantResponse = AssistantSummary;
-
-/** `POST /api/assistants/:id/session` — get-or-create this assistant's
- * session. Creating an assistant writes no session, so the client calls this
- * before opening the conversation. Idempotent. */
-export interface EnsureAssistantSessionResponse {
-  sessionId: string;
-}
-
 /** GET /api/orchestrator/info — assistant identity + presence (assistant-
  * centered web UI decision 4). Never creates the engine session.
  * `personality` is the EFFECTIVE value the next wake applies: the
@@ -965,20 +911,6 @@ export interface GetOrchestratorInfoResponse {
   personality: string | null;
   presence: OrchestratorPresence;
   activeChildren: number;
-}
-
-/** PATCH /api/orchestrator/info — both fields write the caller's default
- * `assistants` row (the same write path as PATCH /api/assistants/:id, so a
- * personality saved here is the one the next wake applies). `personality`
- * also refreshes the legacy `assistant/personality.md` memory file for the
- * assistant's own self-edit surface. */
-export interface PatchOrchestratorInfoRequest {
-  name?: string;
-  personality?: string;
-}
-
-export interface PatchOrchestratorInfoResponse {
-  ok: true;
 }
 
 export interface OrchestratorChildSummary {
@@ -1736,6 +1668,8 @@ export type TeamRole = "admin" | "member";
 export type TeamOrigin = "local" | "config" | "idp";
 
 export interface TeamSummary {
+  /** Default Slack destination for new team notifications. */
+  slackHomeChannelId?: string | null;
   id: string;
   orgId: string;
   name: string;
@@ -1808,6 +1742,7 @@ export interface CreateTeamResponse {
 /** `PATCH /api/teams/:id` — team settings. `defaultModel: null` clears the
  * override back to the cascade's next tier. */
 export interface PatchTeamRequest {
+  slackHomeChannelId?: string | null;
   defaultModel?: string | null;
   /** Team's default reasoning/thinking level, or null to clear. */
   defaultReasoning?: string | null;
@@ -1880,6 +1815,8 @@ export interface ListNotificationsResponse {
 }
 
 export interface NotificationPreferenceSummary {
+  /** Personal copies of team attention in linked direct messages. Default off. */
+  teamDm?: boolean;
   kind: NotificationKind;
   web: boolean;
 }
@@ -1889,6 +1826,7 @@ export interface ListNotificationPreferencesResponse {
 }
 
 export interface SetNotificationPreferenceRequest {
+  teamDm?: boolean;
   kind: NotificationKind;
   web: boolean;
 }
@@ -1952,6 +1890,8 @@ export interface ValidationErrorResponse {
 
 export type CreateWorkflowResponse = WorkflowDefinitionSummary;
 export type GetWorkflowResponse = WorkflowDefinitionSummary;
+
+export interface EnsureWorkflowConversationResponse { sessionId: string; threadId: string; }
 export type UpdateWorkflowResponse = WorkflowDefinitionSummary;
 
 export interface UpdateWorkflowRequest {
@@ -2540,16 +2480,6 @@ export interface WorkflowActionRequiredItem {
   workflowName: string;
   runCreatedAt: number;
   owner: { type: "user" | "team" | "org"; id: string };
-  /**
-   * The assistant this run executes as, read from the RUN's definition
-   * snapshot, not from the definition as it stands now. A run keeps the
-   * snapshot it started with, so re-pinning the workflow while a run waits
-   * for approval must not change the assistant the approval screen names.
-   *
-   * Absent when the snapshot pins none (the owner's default assistant runs
-   * it) or names one this API cannot read.
-   */
-  assistantId?: string;
   trigger: {
     type: "manual" | "schedule" | "webhook" | "event" | "workflow" | "unknown";
     triggerId?: string;
@@ -2619,9 +2549,6 @@ export type CreateWorkflowScheduleRequest = {
       target: {
         kind: "orchestrator";
         prompt: string;
-        /** Which of the owner's assistants the prompt goes to. Absent → the
-         * owner's default, the behavior every schedule had before the field. */
-        assistantId?: string;
       };
     }
 );
@@ -2641,9 +2568,6 @@ export interface WorkflowScheduleResponse {
     targetKind: "workflow" | "orchestrator";
     workflowId?: string;
     prompt?: string;
-    /** Which of the owner's assistants an orchestrator schedule prompts.
-     * Absent → the owner's default. */
-    assistantId?: string;
     name: string;
     cron: string;
     timezone: string;
@@ -3255,7 +3179,7 @@ export const PROFILE_PICTURE_MAX_BYTES = 5 * 1024 * 1024;
 export const PROFILE_PICTURE_MAX_DIMENSION = 4096;
 export const PROFILE_PICTURE_OUTPUT_MAX_DIMENSION = 512;
 
-/** Returned by POST /api/me/avatar and /api/assistants/:id/avatar. */
+/** Returned by POST /api/me/avatar. */
 export interface ProfilePictureUploadResponse {
   avatarUrl: string;
 }
@@ -3389,6 +3313,8 @@ export interface GetArtifactResponse {
 }
 
 export interface ArtifactListItem {
+  sourceThreadId?: string | null;
+  sourceSessionId?: string | null;
   /** Team ownership restricts the audience regardless of stored visibility. */
   ownerType: string;
   id: string;
@@ -4506,17 +4432,6 @@ export type EventSubscriptionTargetWire =
       kind: "orchestrator";
       orchestrator?: "user" | "team" | "org";
       teamId?: string;
-      /**
-       * WHICH of the owner's assistants answers. Absent means the owner's
-       * default, which is what every rule written before this field did — so
-       * an absent value is the compatible reading, not an unset one.
-       *
-       * The assistant must belong to the principal the `orchestrator` and
-       * `teamId` fields resolve to. It names an assistant, never an owner:
-       * pointing a user-owned rule at a team's assistant is a change of owner,
-       * and the validator refuses it.
-       */
-      assistantId?: string;
       /** Follow the thread: after this rule delivers a channel mention, later
        * messages in that thread route to the assistant without a re-mention. */
       follow?: boolean;
@@ -4678,7 +4593,6 @@ export interface PatchEventSubscriptionRequest {
    * field edit — it decides the row's mutation ACL and its collision peers —
    * so a rule that should belong elsewhere is rewritten, not patched.
    */
-  assistantId?: string | null;
   /**
    * Rewrite this orchestrator rule's prompt templates. `null` clears the
    * field, so the rule delivers the default body again. Absent leaves it

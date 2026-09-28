@@ -80,19 +80,11 @@ interface SelectedChannel {
 /** The outcome the reader picks first. It decides the steps and the store. */
 type Outcome = "reply" | "workflow" | "notify" | "advanced" | "schedule";
 
-/**
- * `assistantId` names WHICH of the owner's assistants answers. Absent means
- * the owner's default, so a reader who never opens the picker gets exactly
- * the behavior the wizard had before it existed.
- *
- * The org branch carries no id: an org-owned assistant is not listable
- * (`canViewSession` admits nobody to an org-owned session), so the org choice
- * can only mean its default.
- */
+/** The workspace that owns the event rule or scheduled prompt. */
 type OrchestratorChoice =
-  | { kind: "orchestrator"; orchestrator: "user"; assistantId?: string }
+  | { kind: "orchestrator"; orchestrator: "user" }
   | { kind: "orchestrator"; orchestrator: "org" }
-  | { kind: "orchestrator"; orchestrator: "team"; teamId: string; assistantId?: string };
+  | { kind: "orchestrator"; orchestrator: "team"; teamId: string };
 
 type TargetChoice = OrchestratorChoice | { kind: "workflow"; workflowId: string };
 
@@ -418,8 +410,6 @@ export function AutomationWizard({
       // not the workspace. It used to follow the workspace, which quietly
       // overrode a reader who picked "your assistant" inside a team; the
       // wizard opens on the team radio there, so the default is unchanged.
-      // Sending both a team and a personal assistant is worse than quiet: the
-      // server resolves the owner to the team and refuses the assistant.
       // (The workflow target above needs no team: it follows the workflow's
       // own owner.)
       createSchedule.mutate(
@@ -428,10 +418,6 @@ export function AutomationWizard({
           target: {
             kind: "orchestrator",
             prompt: prompt.trim(),
-            // Only when the reader chose one; absent keeps the owner's default.
-            ...(target.orchestrator !== "org" && target.assistantId !== undefined
-              ? { assistantId: target.assistantId }
-              : {}),
           },
           ...(target.orchestrator === "team" ? { teamId: target.teamId } : {}),
         },

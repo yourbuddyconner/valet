@@ -247,7 +247,7 @@ export function toFlow(definition: WorkflowDefinition): WorkflowFlowState {
 
 export function fromFlow(
   flow: WorkflowFlowState,
-  previous?: Pick<WorkflowDefinition, 'policy' | 'assistantId' | 'ui'>,
+  previous?: Pick<WorkflowDefinition, 'policy' | 'ui'>,
 ): WorkflowDefinition {
   const ui: WorkflowEditorState = {
     nodes: Object.fromEntries(flow.nodes.map((node) => [node.id, { position: node.position }])),
@@ -260,7 +260,6 @@ export function fromFlow(
     nodes: flow.nodes.map((node) => node.data.node),
     edges: flow.edges.map(flowEdgeToWorkflowEdge),
     ...(previous?.policy ? { policy: previous.policy } : {}),
-    ...(previous?.assistantId ? { assistantId: previous.assistantId } : {}),
     ui,
   };
 }
@@ -300,7 +299,6 @@ export function graphSignature(definition: WorkflowDefinition): string {
     nodes: definition.nodes,
     edges: definition.edges,
     policy: definition.policy ?? null,
-    assistantId: definition.assistantId ?? null,
   });
 }
 

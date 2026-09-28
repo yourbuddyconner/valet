@@ -21,7 +21,6 @@ import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { assistantOwner, canViewAssistantOwner } from "../assistants/access.js";
 import {
-  WORKSPACE_ASSISTANT_MESSAGE,
   ensureDefaultAssistantSession,
   findDefaultAssistant,
   loadAssistant,
@@ -176,8 +175,6 @@ orchestratorRouter.get("/info", async (c) => {
   const body: GetOrchestratorInfoResponse = { sessionId, name, personality, presence, activeChildren };
   return c.json(body);
 });
-
-orchestratorRouter.patch("/info", (c) => c.json({ error: WORKSPACE_ASSISTANT_MESSAGE }, 409));
 
 // ── Children ─────────────────────────────────────────────────────────────
 
