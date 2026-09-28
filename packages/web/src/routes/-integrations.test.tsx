@@ -463,6 +463,7 @@ describe("IntegrationsPage", () => {
     render(<IntegrationsPage />);
 
     expect(screen.queryByRole("link", { name: "Connect Linear" })).toBeNull();
+    screen.getByText("Optional MCP tools").closest("details")!.open = true;
     fireEvent.click(screen.getByRole("button", { name: "Connect via MCP" }));
 
     expect(screen.getByText("Set up your Linear via MCP connection")).toBeTruthy();
@@ -474,6 +475,7 @@ describe("IntegrationsPage", () => {
   it("oauth services still offer manual token entry, behind the disclosure", () => {
     currentPluginsData = oauthPluginsData;
     render(<IntegrationsPage />);
+    screen.getByText("Optional MCP tools").closest("details")!.open = true;
     fireEvent.click(screen.getByRole("button", { name: "Connect via MCP" }));
     fireEvent.click(screen.getByRole("button", { name: "Enter a token instead" }));
     expect(screen.getByLabelText("Access token")).toBeTruthy();
@@ -644,7 +646,7 @@ describe("connected dynamic service tool count", () => {
       ],
     };
     render(<IntegrationsPage />);
-    expect(screen.getByText(/Optional MCP tools.*52 tools/)).toBeTruthy();
+    expect(screen.getByText(/^52 tools$/)).toBeTruthy();
     expect(screen.queryByText("tools load on connect")).toBeNull();
   });
 
@@ -671,7 +673,7 @@ describe("connected dynamic service tool count", () => {
       ],
     };
     render(<IntegrationsPage />);
-    expect(screen.getByText(/Optional MCP tools.*tools load on connect/)).toBeTruthy();
+    expect(screen.getByText(/^tools load on connect$/)).toBeTruthy();
   });
 });
 

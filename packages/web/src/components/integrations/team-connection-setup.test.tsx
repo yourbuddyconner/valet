@@ -14,6 +14,8 @@ it("keeps native organization setup separate from explicit team MCP authorizatio
   render(<TeamConnectionSetup teamId="team" canManage orgAdmin />);
   expect(screen.getByRole("link", { name: "Connect Linear" }).getAttribute("href")).toBe("/settings/organization/linear");
   expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByText("Optional MCP tools").closest("details")!.open).toBe(false);
+  screen.getByText("Optional MCP tools").closest("details")!.open = true;
   fireEvent.click(screen.getByRole("button", { name: "Connect via MCP" }));
   expect(screen.getByRole("dialog").textContent).toContain("Connect Linear via MCP to this team");
 });

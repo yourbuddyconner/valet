@@ -12,11 +12,11 @@ beforeEach(() => { admin = true; ready = false; failed = false; retry.mockClear(
 it("routes native setup to the existing organization page", () => {
   render(<LinearEventsConnection />);
   expect(screen.getByRole("link", { name: "Connect Linear" }).getAttribute("href")).toBe("/settings/organization/linear");
-  expect(screen.getByText("Events not connected")).toBeTruthy();
+  expect(screen.getByText("Not connected")).toBeTruthy();
 });
 it("names the native connection separately from tools and provides management once ready", () => {
   ready = true; render(<LinearEventsConnection />);
-  expect(screen.getByText("Events connected")).toBeTruthy();
+  expect(screen.getByText("Connected by your organization")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Manage Linear" })).toBeTruthy();
   expect(screen.queryByText(/MCP/)).toBeNull();
 });
@@ -27,7 +27,14 @@ it("explains the admin requirement to members without offering an inaccessible s
 });
 it("does not present cached readiness as current after an error", () => {
   ready = true; failed = true; render(<LinearEventsConnection />);
-  expect(screen.queryByText("Events connected")).toBeNull();
+  expect(screen.queryByText("Connected by your organization")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(retry).toHaveBeenCalledOnce();
+});
+
+it("shows members that their organization is connected without asking them to connect", () => {
+  admin = false; ready = true; render(<LinearEventsConnection />);
+  expect(screen.getByText("Connected by your organization")).toBeTruthy();
+  expect(screen.queryByRole("link")).toBeNull();
+  expect(screen.queryByText(/Ask an organization admin/)).toBeNull();
 });

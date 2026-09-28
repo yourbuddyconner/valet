@@ -323,14 +323,7 @@ function ServiceBlock({
       </p>
     ) : undefined;
 
-  return (
-    <>
-      <CardHeading
-        title={title}
-        slug={slug}
-        description={description}
-        state={badge ? <Badge variant={badge.variant}>{linear ? `MCP · ${badge.label}` : badge.label}</Badge> : undefined}
-      />
+  const connectionDetails = <>
       {/* The org note reads on a disconnected card too — "your organisation
           has no GitHub App" is the reason Connect is about to fail — so the
           stack no longer hangs off `service.connected` alone. */}
@@ -355,8 +348,28 @@ function ServiceBlock({
           {orgNote}
         </div>
       )}
-      {linear && <div className="mt-4"><LinearEventsConnection /></div>}
-      <CardFooter meta={linear ? `Optional MCP tools${meta ? ` · ${meta}` : ""}` : meta} right={controls} />
+  </>;
+
+  return (
+    <>
+      <CardHeading
+        title={title}
+        slug={slug}
+        description={linear ? undefined : description}
+        state={!linear && badge ? <Badge variant={badge.variant}>{badge.label}</Badge> : undefined}
+      />
+      {linear ? <>
+        <div className="mt-4"><LinearEventsConnection /></div>
+        <details className="mt-4 border-t border-line pt-3">
+          <summary className="cursor-pointer text-xs text-muted">Optional MCP tools</summary>
+          <div className="mt-3 space-y-2">
+            <p className="text-xs text-muted">Tool access only. Does not enable workflow events.</p>
+            {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
+            {connectionDetails}
+            <CardFooter meta={meta} right={controls} />
+          </div>
+        </details>
+      </> : <>{connectionDetails}<CardFooter meta={meta} right={controls} /></>}
       <ConnectDialog
         service={service}
         title={linear ? `${title} via MCP` : title}

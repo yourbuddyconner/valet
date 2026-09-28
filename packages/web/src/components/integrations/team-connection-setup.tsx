@@ -71,12 +71,16 @@ export function TeamConnectionSetup({ teamId, canManage, orgAdmin }: {
       <div className="grid gap-3 pt-4 sm:grid-cols-2">
         {available.map((service) => {
           const blocked = service.connect === "unconfigured" && service.connectBlockedBy !== "org";
-          return <IntegrationCard key={service.service}>
+          const card = <IntegrationCard key={service.service}>
             <CardHeading title={service.service === "linear" ? "Linear MCP" : displayName(service.service)} slug={service.iconSlug ?? service.service}
               description={blocked ? "Ask an organization admin to configure OAuth for this service." : service.service === "linear" ? "Optional tools for this team. Native events use the organization connection." : "Connect an account this team can use."} />
             <CardFooter meta={blocked ? undefined : canManage ? "Team connection" : "Team admin required"}
               right={<Button size="sm" variant="secondary" disabled={blocked || !canConnect} onClick={() => setSelected(service)}>{service.service === "linear" ? "Connect via MCP" : `Connect ${displayName(service.service)}`}</Button>} />
           </IntegrationCard>;
+          return service.service === "linear" ? <details key={service.service} className="text-sm text-muted">
+            <summary className="cursor-pointer">Optional MCP tools</summary>
+            <div className="mt-3">{card}</div>
+          </details> : card;
         })}
       </div>
       {canConnect && selected && <TeamConnectionDialog key={selected.service} teamId={teamId} service={selected} onClose={() => setSelected(null)} />}

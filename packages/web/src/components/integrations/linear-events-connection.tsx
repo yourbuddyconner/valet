@@ -10,11 +10,11 @@ export function LinearEventsConnection() {
   const admin = !org.error && org.data?.features.organizations && org.data.callerRole === "admin";
   return <div className="space-y-2 text-sm">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <span>Native Linear · workflow events</span>
-      {!catalog.error && readiness && <Badge variant={readiness.ready ? "success" : "neutral"}>{readiness.ready ? "Events connected" : "Events not connected"}</Badge>}
+      <span>Linear workflow events</span>
+      {!catalog.error && readiness && <Badge variant={readiness.ready ? "success" : "neutral"}>{readiness.ready ? "Connected by your organization" : "Not connected"}</Badge>}
     </div>
     {catalog.error && <p className="text-xs text-muted">Could not check event setup. <button className="underline" onClick={() => void catalog.refetch()}>Retry</button></p>}
     {admin ? <Button asChild size="sm"><a href="/settings/organization/linear">{readiness?.ready && !catalog.error ? "Manage Linear" : "Connect Linear"}</a></Button>
-      : <p className="text-xs text-muted">An organization admin manages the native connection.</p>}
+      : !readiness?.ready && <p className="text-xs text-muted">Ask an organization admin to connect Linear.</p>}
   </div>;
 }
