@@ -88,8 +88,67 @@ if (mode === 'bootstrap') {
     manifest.editorThreadId = editor.threadId;
   }
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
-  console.log(`Work and artifacts: http://localhost:5173/chat?workspace=${encodeURIComponent(manifest.teamId)}&view=work`);
+  console.log(`Results: http://localhost:5173/chat?workspace=${encodeURIComponent(manifest.teamId)}&view=work`);
   console.log(`Thread artifact: http://localhost:5173/chat?workspace=${encodeURIComponent(manifest.teamId)}&thread=${encodeURIComponent(origin.threadId)}`);
+} else if (mode === 'catch-up') {
+  const me = await request('/me');
+  if (me.id !== 'local-user' || me.orgId !== 'local-org') throw new Error('Seed requires the local stub identity.');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const origin = manifest.records.find(record => record.scope === 'team');
+  if (!origin || !manifest.workSessionId) throw new Error('Run bootstrap and review before catch-up seeding.');
+  const teams = await request('/teams');
+  const team = teams.teams.find(row => row.id === manifest.teamId);
+  if (!team || team.slackHomeChannelId) throw new Error('Use a demo team without a Slack home channel.');
+  manifest.catchUp ??= {};
+  const examples = [
+    { key: 'approval', name: '[Demo] TKAI-559 · Review Threads rollout', node: { id: 'review', type: 'approval', prompt: '[Demo] Review the Threads rollout checklist. Approving only completes this local fixture.', summary: 'Remaining: review the seeded PR and rollout checklist.', timeout: '7d' } },
+    { key: 'waiting', name: '[Demo] TKAI-557 · Wait for intake window', node: { id: 'wait', type: 'wait', mode: 'duration', duration: '24h' } },
+    { key: 'completed', name: '[Demo] TKAI-558 · Publish routing report' },
+  ];
+  const existing = await request(`/workflows?ownerType=team&ownerId=${encodeURIComponent(manifest.teamId)}`);
+  for (const example of examples) {
+    const middle = example.node ? [example.node] : [];
+    const nodes = [{ id: 'start', type: 'trigger' }, ...middle, { id: 'done', type: 'stop' }];
+    const edges = nodes.slice(1).map((node, index) => ({ from: nodes[index].id, to: node.id }));
+    const workflow = existing.workflows.find(row => row.name === example.name)
+      ?? await request('/workflows', 'POST', { name: example.name, teamId: manifest.teamId, definition: { version: 'dag/v1', nodes, edges } });
+    const previous = manifest.catchUp[example.key];
+    const run = previous?.runId ? { runId: previous.runId } : await request(`/workflows/${workflow.id}/runs`, 'POST', {});
+    manifest.catchUp[example.key] = { workflowId: workflow.id, runId: run.runId };
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+  const artifact = await request(`/artifacts/share?ownerType=team&ownerId=${encodeURIComponent(manifest.teamId)}`, 'POST', {
+    key: 'threads-demo/rollout-checklist.md', title: '[Demo] TKAI-559 · Threads rollout checklist', format: 'markdown',
+    content: '# Threads rollout checklist\n\nLocal demo fixture. No PR or external change was made.\n\n## Recorded results\n\n- PR example: workspace-owned Threads and Events.\n- Routing report published.\n\n## Remaining\n\n- Review the seeded PR example.\n- Verify live Slack ingress in a connected environment.\n- Check team home-channel delivery and DM preferences.\n',
+  }, { 'x-valet-session-id': manifest.workSessionId });
+  manifest.catchUp.artifactId = artifact.id;
+  await request(`/artifacts/share?ownerType=team&ownerId=${encodeURIComponent(manifest.teamId)}`, 'POST', {
+    key: 'threads-demo/nda-review.md', title: '[Demo] Kushki NDA · Review findings', format: 'markdown',
+    content: '# Kushki NDA review findings\n\nLocal demo fixture, not an actual legal review.\n\nThe example review flags changes to affiliate scope, AI restrictions, permitted recipients, compelled disclosure, retention, liability, and indemnification. The document appears already signed.\n\nThe review step is finished. The request remains blocked on legal assessment of those changes and the signing status before sending. The requester is preparing for a customer meeting.\n',
+  }, { 'x-valet-session-id': origin.sessionId, 'x-valet-thread-id': origin.threadId });
+  manifest.briefingThreads ??= [];
+  const briefs = [
+    { key: 'threads-build', sessionId: manifest.workSessionId, title: '[Demo] TKAI-559 · Threads implementation',
+      question: '[Local demo] Goal: make Threads the single place for team work. TKAI-559 removes assistant customization and gives each personal or team workspace one runtime. Conner needs to review the resulting change before rollout.',
+      answer: '[Local demo] Workspace ownership now drives routing, and singleton runtime resolution prevents duplicate assistants. The PR example and rollout checklist cover this change. The implementation is ready for review; it has not been merged or deployed. Remaining: review the PR, then verify live Slack ingress and team notification routing before rollout.' },
+    { key: 'threads-validation', sessionId: origin.sessionId, title: '[Demo] TKAI-559 · Rollout verification',
+      question: '[Local demo] Continuing the Threads rollout goal from the implementation conversation. What still blocks rolling out TKAI-559? The checklist and PR example belong to that same effort.',
+      answer: '[Local demo] The local workspace and routing checks passed. The rollout is still waiting on Conner’s review and live Slack verification by someone with integration access. Xiangan cannot reconnect the organization’s Slack integration. Next: Conner reviews the PR and checklist; an organization administrator verifies a workflow-authored Slack message and team notification delivery. Do not treat local checks as proof that Slack delivery works.' },
+    { key: 'nda-decision', sessionId: origin.sessionId, title: '[Demo] Kushki NDA · Legal follow-up',
+      question: '[Local demo] Continue the Kushki NDA review started in the NDA request conversation. The request is for the upcoming customer meeting. What did the review conclude and what decision is still needed?',
+      answer: '[Local demo] The NDA review flagged changes to affiliate scope, AI restrictions, permitted recipients, compelled disclosure, retention, liability, and indemnification. The document also appears already signed. The review is complete, but the request is not cleared for sending. Legal needs to assess the flagged changes and signing status before the requester can proceed. The NDA review artifact contains the findings. No actual legal decision was made in this demo.' },
+    { key: 'intake-results', sessionId: origin.sessionId, title: '[Demo] Intake reliability · Findings',
+      question: '[Local demo] Goal: understand why automated NDA intake sometimes misses a Slack form. TKAI-557 waits for an intake window; TKAI-558 produces the routing report. These are parts of one investigation, not separate user goals.',
+      answer: '[Local demo] The routing report now distinguishes messages that reached Valet but were filtered from those without a receipt. That improves the next investigation, but it does not explain the original missing message. We are waiting for the next intake window to capture a real example. No decision is needed from the team right now. Next: compare the next workflow-authored message against the recorded receipt and subscription decision.' },
+  ];
+  for (const brief of briefs) {
+    if (manifest.briefingThreads.some(row => row.key === brief.key)) continue;
+    const thread = await request(`/sessions/${encodeURIComponent(brief.sessionId)}/threads`, 'POST', { title: brief.title });
+    manifest.briefingThreads.push({ ...brief, threadId: thread.id });
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  console.log('Created local approval, timer, completed workflow, and checklist fixtures. Stop the API, then run offline for labeled outcome records.');
 } else if (mode === 'child-work') {
   const me = await request('/me');
   if (me.id !== 'local-user' || me.orgId !== 'local-org') throw new Error('Seed requires the local stub identity.');
@@ -118,9 +177,9 @@ if (mode === 'bootstrap') {
   try {
     const now = Date.now();
     await db.transaction(async tx => {
-      for (const [index, record] of manifest.records.entries()) {
-        const created = now - (index + 1) * 60_000;
-        await tx.query('INSERT INTO session_threads (id,session_id,title,created_at,last_user_activity_at) VALUES ($1,$2,$3,$4,$4) ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title', [record.threadId,record.sessionId,record.title,created]);
+      for (const [index, record] of [...manifest.records, ...(manifest.briefingThreads ?? [])].entries()) {
+        const created = now - (manifest.records.length + (manifest.briefingThreads?.length ?? 0) - index) * 60_000;
+        await tx.query('INSERT INTO session_threads (id,session_id,title,created_at,last_user_activity_at) VALUES ($1,$2,$3,$4,$4) ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,last_user_activity_at=EXCLUDED.last_user_activity_at', [record.threadId,record.sessionId,record.title,created]);
         const userId = `threads-demo-${record.threadId}-user`;
         const replyId = `threads-demo-${record.threadId}-reply`;
         for (const [id,parent,role,content,time] of [[userId,null,'user',record.question,created],[replyId,userId,'assistant',record.answer,created+1000]]) {
@@ -131,6 +190,20 @@ if (mode === 'bootstrap') {
       const origin = manifest.records.find(record => record.scope === 'team');
       for (const [index, childId] of (manifest.childWorkSessionIds ?? []).entries()) {
         await tx.query('INSERT INTO child_watches (child_session_id,queue_item_id,parent_session_id,parent_thread_id,actor_user_id,org_id,settled,created_at,settled_at) VALUES ($1,$2,$3,$4,$5,$6,true,$7,$7) ON CONFLICT (child_session_id) DO NOTHING', [childId,`demo-child-${childId}`,origin.sessionId,origin.threadId,'local-user','local-org',now-index*1000]);
+      }
+      if (manifest.catchUp && manifest.workSessionId) {
+        await tx.query('UPDATE agent_sessions SET title=$1, updated_at=$2 WHERE id=$3 AND org_id=$4', ['[Demo] TKAI-559 · Threads and Events', now, manifest.workSessionId, 'local-org']);
+        const examples = [
+          ['pr','github','github.create_pull_request',{ title: '[Demo] TKAI-559 · Workspace-owned Threads', html_url: 'https://example.com/demo/pull/482' },manifest.workSessionId,null],
+          ['review','github','github.create_review',{ state: 'COMMENTED', html_url: 'https://example.com/demo/pull/482#review', title: '[Demo] Threads rollout review' },manifest.workSessionId,null],
+          ['message','slack','slack.send_message',{ channel: 'C_DEMO_CONTRACT_REVIEW', permalink: 'https://example.com/demo/slack/routing-report' },null,manifest.catchUp.completed.runId],
+        ];
+        for (const [index, [key, service, action, data, session, run]] of examples.entries()) {
+          await tx.query(`INSERT INTO action_invocations (invocation_id,org_id,session_id,workflow_execution_id,user_id,service,action_id,status,result,params,duration_ms,created_at,started_at)
+            VALUES ($1,'local-org',$2,$3,'local-user',$4,$5,'completed',$6::jsonb,'{}'::jsonb,1,$7,$7)
+            ON CONFLICT (invocation_id) DO UPDATE SET result=EXCLUDED.result,created_at=EXCLUDED.created_at,started_at=EXCLUDED.started_at`,
+            [`threads-demo-outcome-${key}`,session,run,service,action,JSON.stringify({ success: true, data }),now-(index+1)*60000]);
+        }
       }
       const receiptExamples = [
         ['no-subscription','slack.bot_message','subscription_match','no_subscription','[Demo fixture] No enabled subscription names slack.bot_message.'],
@@ -155,9 +228,9 @@ if (mode === 'bootstrap') {
         await tx.query('INSERT INTO event_drop_log (id,org_id,reason,detail,created_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO UPDATE SET detail=EXCLUDED.detail', [`threads-demo-problem-${index}`,'local-org',reason,detail,now-index*120000]);
       }
     });
-    console.log('Seeded transcripts, child-work records, and labeled receipt/problem examples.');
+    console.log('Seeded transcripts, child work, outcome fixtures, and receipt/problem examples.');
     for (const row of manifest.records) console.log(`${row.title}: http://localhost:5173/chat?workspace=${encodeURIComponent(row.scope === 'team' ? manifest.teamId : 'user')}&thread=${encodeURIComponent(row.threadId)}`);
   } finally { await db.close(); }
 } else {
-  throw new Error('Use bootstrap, workflow, review, or child-work with the API running, or offline after stopping it.');
+  throw new Error('Use bootstrap, workflow, review, catch-up, or child-work with the API running, or offline after stopping it.');
 }

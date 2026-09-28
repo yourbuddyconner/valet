@@ -5252,3 +5252,62 @@ export interface ListEventReceiptsResponse {
   /** Latest retained receipt in this organization, independent of search/page. */
   lastReceiptAt: number | null; retentionDays: 7;
 }
+
+/** Confirmed external changes in one personal or team workspace. */
+export interface WorkspaceOutcome {
+  id: string;
+  kind: "pull_request" | "review" | "message";
+  title: string;
+  occurredAt: number;
+  sessionId?: string;
+  threadId?: string;
+  workflowRunId?: string;
+  url?: string;
+  summary?: string;
+}
+export interface WorkspaceOutcomesResponse {
+  items: WorkspaceOutcome[];
+  nextCursor: string | null;
+}
+
+export interface WorkspaceActiveWorkItem {
+  id: string;
+  sessionId: string;
+  threadId: string;
+  title: string;
+  state: "needs_you" | "working" | "failed";
+  updatedAt: number;
+}
+export interface WorkspaceActiveWorkResponse {
+  items: WorkspaceActiveWorkItem[];
+  nextCursor: string | null;
+}
+
+export interface WorkspaceBriefingSource {
+  id: string;
+  kind: "thread" | "workflow" | "artifact" | "pull_request" | "review" | "message";
+  title: string;
+  updatedAt: number;
+  sessionId?: string;
+  threadId?: string;
+  runId?: string;
+  token?: string;
+  url?: string;
+}
+export interface WorkspaceBriefing {
+  id: string;
+  title: string;
+  context: string;
+  summary: string;
+  nextStep?: string;
+  status: "needs_attention" | "in_progress" | "updated";
+  updatedAt: number;
+  latestThread: { sessionId: string; threadId: string; title?: string } | null;
+  sources: WorkspaceBriefingSource[];
+}
+export interface WorkspaceBriefingsResponse {
+  briefings: WorkspaceBriefing[];
+  generatedAt: number | null;
+  coverage: "recent";
+  unavailable?: boolean;
+}

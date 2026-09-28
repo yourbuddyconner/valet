@@ -265,3 +265,55 @@ An absent receipt does not prove that Slack failed to deliver the event.
 The Delivery log shows a one-line summary. Its collapsed About section explains
 retention, metadata limits, and missing receipts. It reuses shared search, query,
 access, pagination, and UI primitives.
+
+### Workspace catch-up
+
+Home and Briefing share a workspace-scoped catch-up view. Briefing replaces the
+Work and artifacts execution list. Activity details remain collapsed below the
+briefs. Source pages retain creation and artifact-management controls.
+
+Needs attention uses recorded approvals and failures. A separate paged read of
+unsettled submissions includes workspace runtime threads and older child work.
+Newer idle sessions cannot hide them. In progress includes active work and waiting workflows. A timer wait does not imply that a person must act.
+Idle sessions do not imply completed tasks. Recent results group confirmed PRs,
+reviews, messages, and published artifacts with their originating work when known.
+Workflow completion remains separate from evidence of an external change.
+
+The outcome API reuses usage facts to locate confirmed action invocations and
+terminal outcome markers. It returns bounded labels, source identities, dates,
+and safe web links. It adds no event pipeline or persistence table. Existing
+workspace authorization and cursor helpers apply to every page. Artifact,
+workflow, and session discovery use their existing APIs.
+
+Ticket references appear where the source records them. The view does not infer
+that a ticket is resolved from its mention, a successful run, or a created PR.
+External PR state and unrecorded follow-up work are outside this first pass.
+
+Run `node scripts/seed-threads-demo.mjs catch-up` against the local API after the
+review seed. It creates an approval, a timer wait, a completed workflow, and a
+checklist. Stop the API before running `offline` to add labeled outcome fixtures.
+These fixtures make no GitHub or Slack changes. Example outcome links use
+`example.com`; source and artifact links open real local records.
+
+### Contextual briefings
+
+The primary view groups recent evidence by the underlying goal across conversations and workflow runs.
+Each brief explains the goal, current findings, and outstanding decision or next
+step. PRs, artifacts, and runs support that explanation rather than form the page.
+
+The server gathers bounded, authorized conversation and run context, then requests
+a short synthesis through the existing model client. A bounded content-hash cache
+and concurrent-request coalescing avoid repeated generation for unchanged evidence.
+The context budget reserves space for workflows, artifacts, and confirmed effects
+so conversations cannot exclude all outputs. Model calls have a timeout. Failed generation shows an unavailable state with Retry.
+It does not replace a briefing with an invented summary based on titles.
+
+The model references source IDs. The server validates those references and selects
+the latest conversation from their recorded timestamps. Every brief with a known
+conversation links directly to that thread. A run without a linked conversation
+shows that limitation; it never links to an unrelated or newest workspace thread.
+
+Coverage is recent workspace evidence, not complete ticket history. Narrative
+claims remain grounded in source records. Local fixtures retain their demo label.
+The seed spans two Threads rollout conversations, an NDA request and legal follow-up,
+and an intake investigation with two workflow runs.

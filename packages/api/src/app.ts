@@ -34,6 +34,9 @@ import { teamsRouter } from "./routes/teams.js";
 import { teamApiKeysRouter } from "./routes/team-api-keys.js";
 import { memoryRouter } from "./routes/memory.js";
 import { securityRouter } from "./routes/security.js";
+import { workspaceBriefingsRouter } from "./routes/workspace-briefings.js";
+import { workspaceActiveWorkRouter } from "./routes/workspace-active-work.js";
+import { workspaceOutcomesRouter } from "./routes/workspace-outcomes.js";
 import { workspaceRuntimeRouter } from "./routes/workspace-runtime.js";
 import { childWorkRouter } from "./routes/child-work.js";
 import { notificationsRouter } from "./routes/notifications.js";
@@ -324,6 +327,9 @@ export function createApp(
   // half is mounted pre-auth above.
   app.route("/api/artifacts", artifactsRouter);
   app.route("/api/workspaces", workspaceRuntimeRouter);
+  app.route("/api/workspaces", workspaceOutcomesRouter);
+  app.route("/api/workspaces", workspaceActiveWorkRouter);
+  app.route("/api/workspaces", workspaceBriefingsRouter);
 
   app.route("/api", profilePicturesRouter);
   app.route("/api/notifications", notificationsRouter);

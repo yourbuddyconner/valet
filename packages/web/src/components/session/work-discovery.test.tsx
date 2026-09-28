@@ -11,15 +11,24 @@ vi.mock("~/lib/use-list-owner", () => ({ useListOwner: () => owner }));
 vi.mock("~/api/settings", () => ({ useMe: () => ({ error: null }) }));
 vi.mock("~/components/new-session-dialog", () => ({ NewSessionDialog: () => null }));
 vi.mock("@tanstack/react-router", () => ({ Link: ({ children }: { children: ReactNode }) => <a>{children}</a> }));
-vi.mock("~/api/client", () => ({ api: { listWork: vi.fn(), listArtifacts: vi.fn() } }));
+vi.mock("~/api/client", () => ({ api: { getWorkspaceBriefings: vi.fn(), listWork: vi.fn(), listArtifacts: vi.fn(), listWorkspaceOutcomes: vi.fn(), listWorkspaceActiveWork: vi.fn(), listWorkflows: vi.fn(), listRuns: vi.fn(), listWorkflowActionRequired: vi.fn() } }));
 function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{children}</QueryClientProvider>;
 }
-beforeEach(() => { vi.clearAllMocks(); owner = undefined; });
+beforeEach(() => {
+  vi.clearAllMocks(); owner = undefined;
+  vi.mocked(api.getWorkspaceBriefings).mockResolvedValue({ briefings: [], generatedAt: 1, coverage: "recent" });
+  vi.mocked(api.listWorkspaceOutcomes).mockResolvedValue({ items: [], nextCursor: null });
+  vi.mocked(api.listWorkspaceActiveWork).mockResolvedValue({ items: [], nextCursor: null });
+  vi.mocked(api.listWorkflowActionRequired).mockResolvedValue({ items: [], count: 0 });
+  vi.mocked(api.listWorkflows).mockResolvedValue({ workflows: [] });
+  vi.mocked(api.listRuns).mockResolvedValue({ runs: [] });
+  vi.mocked(api.listArtifacts).mockResolvedValue({ artifacts: [], nextCursor: null });
+});
 it("does not fetch an unscoped list while identity loads", () => {
   render(<WorkDiscovery />, { wrapper });
   expect(api.listWork).not.toHaveBeenCalled();
-  expect(screen.getByText("Loading work…")).toBeTruthy();
+  expect(screen.getByText("Preparing your briefing…")).toBeTruthy();
 });
 it("resets paged work when the workspace changes", async () => {
   owner = { ownerType: "user", ownerId: "u" };
@@ -27,17 +36,21 @@ it("resets paged work when the workspace changes", async () => {
     .mockResolvedValueOnce({ sessions: [], nextCursor: null })
     .mockResolvedValue({ sessions: [], nextCursor: null });
   const view = render(<WorkDiscovery />, { wrapper });
+  fireEvent.click(screen.getByText("Activity details"));
+  fireEvent.click(await screen.findByText("Recent work · 0 loaded"));
   fireEvent.click(await screen.findByRole("button", { name: "Load more work" }));
   await waitFor(() => expect(api.listWork).toHaveBeenCalledWith(owner, "next"));
   owner = { ownerType: "team", ownerId: "t" };
   view.rerender(<WorkDiscovery />);
+  fireEvent.click(screen.getByText("Activity details"));
   await waitFor(() => expect(api.listWork).toHaveBeenCalledWith(owner, undefined));
-  expect(await screen.findByText("No work yet. Select New work to start.")).toBeTruthy();
+  expect(await screen.findByText("No attention items in the loaded work.")).toBeTruthy();
 });
 it("shows retry on failed discovery", async () => {
   owner = { ownerType: "team", ownerId: "t" };
   vi.mocked(api.listWork).mockRejectedValue(new Error("denied"));
   render(<WorkDiscovery />, { wrapper });
+  fireEvent.click(screen.getByText("Activity details"));
   expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
   expect(screen.queryByText("No work yet. Select New work to start.")).toBeNull();
 });
@@ -67,6 +80,8 @@ it("hides cached work and pagination when a refresh loses workspace access", asy
     createdAt: 1, updatedAt: 1, lastActivityAt: 1, owner: { type: "team", id: "t" },
   }], nextCursor: "next" });
   render(<QueryClientProvider client={client}><WorkDiscovery /></QueryClientProvider>);
+  fireEvent.click(screen.getByText("Activity details"));
+  fireEvent.click(await screen.findByText("Recent work · 1 loaded"));
   expect(await screen.findByText("Private work")).toBeTruthy();
   vi.mocked(api.listWork).mockRejectedValue(new Error("404: workspace not found"));
   await act(async () => { await client.refetchQueries({ queryKey: ["workspace-work"] }); });
@@ -91,18 +106,14 @@ it("hides cached artifacts and pagination when a refresh loses workspace access"
   expect(screen.queryByRole("button", { name: "Load more artifacts" })).toBeNull();
 });
 
-it("opens the workspace gallery inside Threads and resets it on a workspace change", async () => {
+it("shows results without creation or artifact management controls", async () => {
   owner = { ownerType: "team", ownerId: "t" };
   vi.mocked(api.listWork).mockResolvedValue({ sessions: [], nextCursor: null });
-  vi.mocked(api.listArtifacts).mockResolvedValue({ artifacts: [], nextCursor: null });
-  const view = render(<WorkDiscovery />, { wrapper });
-  fireEvent.click(screen.getByRole("button", { name: "All workspace artifacts" }));
-  expect(await screen.findByRole("heading", { name: "Workspace artifacts" })).toBeTruthy();
-  await waitFor(() => expect(api.listArtifacts).toHaveBeenCalledWith(owner, { mine: undefined, limit: 50, cursor: undefined }));
-  expect(screen.getByRole("heading", { name: "Work and artifacts" })).toBeTruthy();
-  owner = { ownerType: "team", ownerId: "other-team" };
-  view.rerender(<WorkDiscovery />);
-  expect(screen.queryByRole("heading", { name: "Workspace artifacts" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "All workspace artifacts" }));
-  await waitFor(() => expect(api.listArtifacts).toHaveBeenCalledWith(owner, { mine: undefined, limit: 50, cursor: undefined }));
+  render(<WorkDiscovery />, { wrapper });
+  expect(await screen.findByText("No recent work to brief yet. Your goals and results will appear here as you work.")).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Recent results" })).toBeNull();
+  expect(api.listWork).not.toHaveBeenCalled();
+  expect(screen.getByRole("heading", { name: "Briefing" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "New work" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "All workspace artifacts" })).toBeNull();
 });

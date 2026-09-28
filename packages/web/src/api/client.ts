@@ -8,6 +8,9 @@ import type { ListTeamDeletionRequestsParams, ListTeamDeletionRequestsResponse, 
  * auth lands we'll wire token storage here.
  */
 import type {
+  WorkspaceOutcomesResponse,
+  WorkspaceBriefingsResponse,
+  WorkspaceActiveWorkResponse,
   AbortThreadRequest,
   AddTeamMemberRequest,
   AuthConfigResponse,
@@ -559,6 +562,12 @@ export const api = {
     ),
   listWork: (owner: OwnerFilter, cursor?: string) =>
     request<ListSessionsResponse>("GET", `/sessions?discovery=true&limit=25${ownerSuffix(owner)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
+  listWorkspaceActiveWork: (owner: OwnerFilter, cursor?: string) =>
+    request<WorkspaceActiveWorkResponse>("GET", `/workspaces/${encodeURIComponent(owner.ownerType === "team" ? owner.ownerId : "user")}/active-work?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
+  getWorkspaceBriefings: (owner: OwnerFilter) =>
+    request<WorkspaceBriefingsResponse>("GET", `/workspaces/${encodeURIComponent(owner.ownerType === "team" ? owner.ownerId : "user")}/briefings`),
+  listWorkspaceOutcomes: (owner: OwnerFilter, cursor?: string) =>
+    request<WorkspaceOutcomesResponse>("GET", `/workspaces/${encodeURIComponent(owner.ownerType === "team" ? owner.ownerId : "user")}/outcomes?limit=25${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
   getSession: (id: string) =>
     request<GetSessionResponse>("GET", `/sessions/${encodeURIComponent(id)}`),
   /** GET /sessions/:id/security — the session's engagement + cells

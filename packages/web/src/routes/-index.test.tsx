@@ -33,8 +33,8 @@ vi.mock("~/api/queries", async (importOriginal) => {
   };
 });
 
-vi.mock("~/components/assistant/threads-card", () => ({
-  ThreadsCard: () => <div data-testid="threads-card" />,
+vi.mock("~/components/dashboard/workspace-catch-up", () => ({
+  WorkspaceCatchUp: () => <div data-testid="catch-up" />,
 }));
 vi.mock("~/components/assistant/memory-card", () => ({
   MemoryCard: () => <div data-testid="memory-card" />,
@@ -74,7 +74,7 @@ function renderDashboard() {
 }
 
 describe("Dashboard", () => {
-  it("shows threads without a profile setup step", () => {
+  it("shows catch-up without a profile setup step", () => {
     infoMock.mockReturnValue({
       data: {
         sessionId: "orchestrator:user-1",
@@ -89,7 +89,7 @@ describe("Dashboard", () => {
     renderDashboard();
 
     expect(screen.queryByText("Meet your assistant")).toBeNull();
-    expect(screen.getByTestId("threads-card")).toBeTruthy();
+    expect(screen.getByTestId("catch-up")).toBeTruthy();
   });
 
   it("shows the personal workspace header and cards", () => {
@@ -107,7 +107,7 @@ describe("Dashboard", () => {
     renderDashboard();
 
     expect(screen.getByText("Personal")).toBeTruthy();
-    expect(screen.getByTestId("threads-card")).toBeTruthy();
+    expect(screen.getByTestId("catch-up")).toBeTruthy();
     expect(screen.getByTestId("memory-card")).toBeTruthy();
     expect(screen.getByTestId("usage-card")).toBeTruthy();
     expect(screen.queryByText("Meet your assistant")).toBeNull();
@@ -116,7 +116,7 @@ describe("Dashboard", () => {
   it("shows a loading state while the info query is in flight", () => {
     infoMock.mockReturnValue({ data: undefined, isLoading: true, error: null, refetch: vi.fn() });
     renderDashboard();
-    expect(screen.queryByTestId("threads-card")).toBeNull();
+    expect(screen.queryByTestId("catch-up")).toBeNull();
     expect(screen.queryByText("Meet your assistant")).toBeNull();
   });
 });

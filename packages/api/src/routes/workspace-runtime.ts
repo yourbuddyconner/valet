@@ -10,7 +10,7 @@ import type { WorkspaceRuntimeInfoResponse, WorkspaceRuntimeResponse, EnsureWork
 
 export const workspaceRuntimeRouter = new Hono<AppEnv>();
 
-async function authorizedOwner(c: Context<AppEnv>): Promise<Principal | null> {
+export async function authorizedWorkspaceOwner(c: Context<AppEnv>): Promise<Principal | null> {
   const workspace = c.req.param("workspace");
   const principal = c.var.principal;
   const { db } = c.var.providers;
@@ -21,7 +21,7 @@ async function authorizedOwner(c: Context<AppEnv>): Promise<Principal | null> {
 }
 
 workspaceRuntimeRouter.get("/:workspace/runtime", async (c) => {
-  const owner = await authorizedOwner(c);
+  const owner = await authorizedWorkspaceOwner(c);
   if (!owner) return c.json({ error: "Workspace not found." }, 404);
   const row = await findDefaultAssistant(c.var.providers.db, c.var.user.orgId, owner);
   const body: WorkspaceRuntimeResponse = { sessionId: row?.sessionId ?? null, exists: row !== undefined };
@@ -29,7 +29,7 @@ workspaceRuntimeRouter.get("/:workspace/runtime", async (c) => {
 });
 
 workspaceRuntimeRouter.post("/:workspace/runtime", async (c) => {
-  const owner = await authorizedOwner(c);
+  const owner = await authorizedWorkspaceOwner(c);
   if (!owner) return c.json({ error: "Workspace not found." }, 404);
   const { sessionId } = await ensureDefaultAssistantSession(c.var.providers, owner, { actorUserId: c.var.user.id, orgId: c.var.user.orgId });
   const body: EnsureWorkspaceRuntimeResponse = { sessionId };
@@ -37,7 +37,7 @@ workspaceRuntimeRouter.post("/:workspace/runtime", async (c) => {
 });
 
 workspaceRuntimeRouter.get("/:workspace/runtime/info", async (c) => {
-  const owner = await authorizedOwner(c);
+  const owner = await authorizedWorkspaceOwner(c);
   if (!owner) return c.json({ error: "Workspace not found." }, 404);
   const { db, engineHost } = c.var.providers;
   // Resolve the identity only: presence reads never start the runtime or a sandbox.

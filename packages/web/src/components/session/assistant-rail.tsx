@@ -10,7 +10,7 @@ export function AssistantRail() {
     Could not load threads. <button className="underline" onClick={() => void conversation.refetch()}>Retry</button>
   </div>;
   return <>
-    <Link to="/chat" search={prev => ({ workspace: prev.workspace, view: "work" })} className="border-b border-line px-4 py-3 text-sm hover:bg-ink-wash">Work and artifacts</Link>
+    <Link to="/chat" search={prev => ({ workspace: prev.workspace, view: "work" })} className="border-b border-line px-4 py-3 text-sm hover:bg-ink-wash">Briefing</Link>
     {conversation.data ? <ThreadTree sessionId={conversation.data.sessionId} /> : <ThreadTreeWaiting />}
   </>;
 }
