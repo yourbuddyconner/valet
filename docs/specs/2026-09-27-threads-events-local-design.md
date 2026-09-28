@@ -261,3 +261,7 @@ blocks, credential headers, signing secrets, or exception payloads. Legacy filte
 Problems also stop retaining message text. Invalid signatures and unconfigured
 connections remain in Problems; unverified bodies never enter the receipt log.
 An absent receipt does not prove that Slack failed to deliver the event.
+
+The Delivery log shows a one-line summary. Its collapsed About section explains
+retention, metadata limits, and missing receipts. It reuses shared search, query,
+access, pagination, and UI primitives.

@@ -24,7 +24,7 @@ beforeEach(() => { role = "admin"; pending = false; error = null; data = fixture
 
 it("shows readable receipt details, ordered stages, decisions, and matched-event link", () => {
   render(<ReceiptsPanel />);
-  expect(screen.getByText(/kept for up to 7 days or 10,000 receipts/)).toBeTruthy();
+  expect(screen.getByText(/Retained for up to 7 days or 10,000 receipts/)).toBeTruthy();
   const details = screen.getByText(/Slack ·/).closest("details")!;
   fireEvent.click(within(details).getByText(/Slack ·/));
   expect(within(details).getByText("Channel")).toBeTruthy();
@@ -92,5 +92,6 @@ it("shows unfinished processing without declaring failure", () => {
   data = { ...fixture, receipts: [{ ...fixture.receipts[0]!, stages: [{ stage: "classification", outcome: "started", detail: "Classification started", at: 2000 }] }] };
   render(<ReceiptsPanel />);
   expect(screen.getByText("Started · no completion recorded")).toBeTruthy();
+  fireEvent.click(screen.getByText("About this log"));
   expect(screen.getByRole("link", { name: "Problems" }).getAttribute("href")).toBe("/events?tab=problems");
 });

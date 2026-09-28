@@ -53,10 +53,16 @@ export function ReceiptsPanel() {
   // Cached metadata must not survive an access error or a failed current-page request.
   const data = receiptsQ.error ? undefined : receiptsQ.data;
   return <div className="space-y-4">
-    <p className="text-sm text-muted">Organization-wide delivery receipts are kept for up to 7 days or 10,000 receipts, whichever limit is reached first. This log stores metadata, not message bodies.</p>
-    <p className="text-sm text-muted">A receipt records what reached Valet and how it was processed. Open the matched event for delivery attempts and outcomes. Missing receipts do not prove whether a provider delivered an event.</p>
-    <p className="text-sm text-muted">Failed verification or missing credentials can prevent a receipt from being recorded. Check <Link to="/events" search={{ tab: "problems" }} className="text-moss underline">Problems</Link> for recorded verification diagnostics.</p>
-    {data && <p className="text-xs text-muted">{data.lastReceiptAt !== null ? <>Last recorded receipt: <Timestamp value={data.lastReceiptAt} /></> : "No receipt has been recorded in this retention window."}</p>}
+    <p className="text-sm text-muted">Incoming events and how Valet processed them.</p>
+    <details className="text-xs text-muted">
+      <summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-moss">About this log</summary>
+      <div className="mt-2 space-y-2">
+        <p>Organization-wide metadata only. No message bodies. Retained for up to 7 days or 10,000 receipts, whichever comes first.</p>
+        <p>Open a matched event for delivery attempts and outcomes.</p>
+        <p>Missing an event? Check <Link to="/events" search={{ tab: "problems" }} className="text-moss underline">Problems</Link> for verification or credential errors, then the provider’s delivery logs. A missing receipt does not confirm a delivery failure.</p>
+      </div>
+    </details>
+    {data && <p className="text-xs text-muted">{data.lastReceiptAt !== null ? <>Last recorded receipt: <Timestamp value={data.lastReceiptAt} /></> : "No recent receipts."}</p>}
     <SearchInput aria-label="Search delivery log" placeholder="Search provider ID, channel, event key, or reference" value={query} maxLength={200} onSettled={next => { setQuery(next.trim()); setCursors([]); }} />
     {receiptsQ.isPending && <LoadingRow label="Loading delivery log…" />}
     {receiptsQ.error && <ErrorRow>Could not load delivery receipts. <button className="underline" onClick={() => void receiptsQ.refetch()}>Retry</button>{cursor && <> or <button className="underline" onClick={() => setCursors([])}>Return to the first page</button>.</>}</ErrorRow>}
@@ -87,7 +93,7 @@ function ReceiptRow({ receipt }: { receipt: Receipt }) {
         <span className="mt-1 block break-all text-xs text-muted">Reference: {receipt.id}{receipt.externalId ? ` · Provider ID: ${receipt.externalId}` : ""}</span>
       </summary>
       <div className="mt-3 space-y-4 pl-3">
-        {receipt.eventId && <Link to="/events/$eventId" params={{ eventId: receipt.eventId }} className="text-sm text-moss underline">Open matched event and delivery attempts</Link>}
+        {receipt.eventId && <Link to="/events/$eventId" params={{ eventId: receipt.eventId }} className="text-sm text-moss underline">View delivery attempts</Link>}
         <section aria-label="Receipt metadata">
           <h3 className="text-sm font-medium">Delivery metadata</h3>
           <dl className="mt-2 grid gap-x-4 gap-y-1 text-xs sm:grid-cols-[max-content_1fr]">
@@ -96,11 +102,11 @@ function ReceiptRow({ receipt }: { receipt: Receipt }) {
         </section>
         <section aria-label="Processing timeline">
           <h3 className="text-sm font-medium">Processing timeline</h3>
-          {stages.length === 0 ? <p className="text-xs text-muted">No processing stages have been recorded yet.</p> : <ol className="mt-2 space-y-3 border-l border-line pl-3">{stages.map(stage => <li key={stage.index} className="text-sm"><span className="font-medium">{label(stage.stage)}: {label(stage.outcome)}</span>{stage.at !== undefined && <div><Timestamp value={stage.at} /></div>}<p className="text-muted">{stage.detail}</p></li>)}</ol>}
+          {stages.length === 0 ? <p className="text-xs text-muted">No stages recorded.</p> : <ol className="mt-2 space-y-3 border-l border-line pl-3">{stages.map(stage => <li key={stage.index} className="text-sm"><span className="font-medium">{label(stage.stage)}: {label(stage.outcome)}</span>{stage.at !== undefined && <div><Timestamp value={stage.at} /></div>}<p className="text-muted">{stage.detail}</p></li>)}</ol>}
         </section>
         <section aria-label="Subscription decisions">
           <h3 className="text-sm font-medium">Subscription decisions</h3>
-          {receipt.subscriptions.length === 0 ? <p className="text-xs text-muted">No subscription decisions were recorded for this receipt.</p> : <ul className="mt-2 space-y-2">{receipt.subscriptions.map(subscription => <li key={subscription.id} className="text-sm"><p className="font-medium">{subscription.name || subscription.id}: {label(subscription.outcome)}</p>{subscription.failedFilters?.length ? <p className="text-xs text-muted">Filters that did not match: {subscription.failedFilters.map(filter => `${filter.field} (${filter.op})`).join(", ")}</p> : null}<p className="break-all text-xs text-muted">{label(subscription.ownerType)} {subscription.ownerId} · Target: {label(subscription.target)}{subscription.targetId ? ` (${subscription.targetId})` : ""} · {subscription.id}</p></li>)}</ul>}
+          {receipt.subscriptions.length === 0 ? <p className="text-xs text-muted">No decisions recorded.</p> : <ul className="mt-2 space-y-2">{receipt.subscriptions.map(subscription => <li key={subscription.id} className="text-sm"><p className="font-medium">{subscription.name || subscription.id}: {label(subscription.outcome)}</p>{subscription.failedFilters?.length ? <p className="text-xs text-muted">Filters that did not match: {subscription.failedFilters.map(filter => `${filter.field} (${filter.op})`).join(", ")}</p> : null}<p className="break-all text-xs text-muted">{label(subscription.ownerType)} {subscription.ownerId} · Target: {label(subscription.target)}{subscription.targetId ? ` (${subscription.targetId})` : ""} · {subscription.id}</p></li>)}</ul>}
         </section>
       </div>
     </details>
