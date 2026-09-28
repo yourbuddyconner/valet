@@ -49,6 +49,8 @@ vi.mock("~/api/queries", () => ({
   useLinkMembers: () => ({ data: undefined, isLoading: false }),
 }));
 
+vi.mock("~/api/workflows", () => ({ useTriggerCatalog: () => ({ data: { catalog: [] } }) }));
+
 import { IntegrationRow } from "./integration-row";
 
 const SERVICE: PluginServiceSummary = {
@@ -106,19 +108,19 @@ describe("IntegrationRow disconnect", () => {
     const confirmSpy = nativeConfirm();
     render(<IntegrationRow plugin={PLUGIN} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear" }));
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear MCP" }));
 
     const dialog = screen.getByRole("dialog");
-    expect(screen.getByText("Disconnect Linear?")).toBeTruthy();
-    expect(dialog.textContent).toContain("deletes the saved Linear credential");
-    expect(dialog.textContent).toContain("until you connect it again");
+    expect(screen.getByText("Disconnect Linear MCP?")).toBeTruthy();
+    expect(dialog.textContent).toContain("removes MCP tool access");
+    expect(dialog.textContent).toContain("Native Linear events stay connected");
     expect(disconnectMutate).not.toHaveBeenCalled();
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it("deletes the credential when the dialog is confirmed", async () => {
     render(<IntegrationRow plugin={PLUGIN} />);
-    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear" }));
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear MCP" }));
     fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
     await waitFor(() => expect(disconnectMutate).toHaveBeenCalledTimes(1));
@@ -129,7 +131,7 @@ describe("IntegrationRow disconnect", () => {
 
   it("deletes nothing when the dialog is cancelled", async () => {
     render(<IntegrationRow plugin={PLUGIN} />);
-    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear" }));
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear MCP" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -138,7 +140,7 @@ describe("IntegrationRow disconnect", () => {
 
   it("shows the server's error instead of swallowing it", async () => {
     const { rerender } = render(<IntegrationRow plugin={PLUGIN} />);
-    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear" }));
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear MCP" }));
     fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
     await waitFor(() => expect(disconnectMutate).toHaveBeenCalledTimes(1));
 
@@ -156,7 +158,7 @@ describe("IntegrationRow disconnect", () => {
     disconnectError = new Error("Linear rejected the request");
     render(<IntegrationRow plugin={PLUGIN} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear" }));
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear MCP" }));
 
     expect(screen.getByRole("dialog").textContent).not.toContain("Linear rejected the request");
     expect(disconnectReset).toHaveBeenCalledTimes(1);
@@ -164,7 +166,7 @@ describe("IntegrationRow disconnect", () => {
 
   it("reports the request in flight inside the dialog", () => {
     const { rerender } = render(<IntegrationRow plugin={PLUGIN} />);
-    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear" }));
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect Linear MCP" }));
 
     disconnectPending = true;
     rerender(<IntegrationRow plugin={PLUGIN} />);
@@ -176,8 +178,15 @@ describe("IntegrationRow disconnect", () => {
     disconnectPending = true;
     render(<IntegrationRow plugin={PLUGIN} />);
 
-    const control = screen.getByRole("button", { name: "Disconnect Linear" });
+    const control = screen.getByRole("button", { name: "Disconnect Linear MCP" });
     expect(control.hasAttribute("disabled")).toBe(true);
     expect(control.textContent).toContain("Disconnecting…");
   });
+});
+
+it("requires an explicit MCP button before opening tool authorization", () => {
+  render(<IntegrationRow plugin={{ ...PLUGIN, services: [{ ...SERVICE, connected: false }] }} />);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Connect via MCP" }));
+  expect(screen.getByRole("dialog").textContent).toContain("Linear via MCP");
 });

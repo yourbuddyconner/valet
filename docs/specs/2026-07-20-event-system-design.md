@@ -505,3 +505,9 @@ that cannot receive events. Template installation uses the same check. Repositor
 imports keep workflow definitions but leave missing-ingress triggers unarmed with
 a setup warning. Existing rules can still be disabled. Non-admins get
 an instruction to ask an organization admin; credentials remain admin-only.
+
+Linear's Integrations entry presents native organization events first. The
+optional tool connection has a separate Connect via MCP button in personal and
+team views. MCP connection state and disconnect controls name MCP explicitly.
+Removing MCP credentials does not disconnect the organization's native webhook.
+Native event authorization does not currently replace MCP-backed action tools.

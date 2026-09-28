@@ -99,7 +99,7 @@ export function IntegrationsPage() {
   if (teamId) {
     const notice = connectResult?.teamId === teamId
       ? connectResult.kind === "connected"
-        ? `Connected ${connectResult.value}.`
+        ? `Connected ${connectResult.value === "linear" ? "Linear via MCP" : connectResult.value}.`
         : connectResult.detail ?? ERROR_MESSAGES[connectResult.value] ?? "Connection failed. Select Connect to try again."
       : undefined;
     return <TeamIntegrations key={teamId} teamId={teamId} notice={notice} />;
@@ -142,7 +142,7 @@ function PersonalIntegrationsPage({ connectResult }: { connectResult: ConnectRes
         <div role="status">
           {connectResult?.kind === "connected" && (
             <div className="mt-4 rounded border border-line bg-moss-wash px-3 py-2 text-sm text-ink">
-              Connected {connectResult.value}.
+              Connected {connectResult.value === "linear" ? "Linear via MCP" : connectResult.value}.
             </div>
           )}
           {connectResult?.kind === "error" && (

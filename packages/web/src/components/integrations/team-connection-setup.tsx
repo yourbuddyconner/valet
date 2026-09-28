@@ -6,6 +6,7 @@ import { Button, Dialog, DialogContent, ErrorRow, LoadingRow, Textarea } from "~
 import { SearchInput } from "~/components/search-input";
 import { CardHeading, CardFooter, IntegrationCard } from "./integration-card";
 import { errorText } from "~/lib/error-text";
+import { LinearEventsConnection } from "./linear-events-connection";
 import { displayName } from "./display-name";
 import { githubOrgAppState } from "./github-org-app";
 
@@ -46,7 +47,7 @@ export function TeamConnectionSetup({ teamId, canManage, orgAdmin }: {
     <section aria-label="Organization connections">
       <h3 className="text-sm font-medium text-ink">Organization access</h3>
       <p className="mt-1 text-sm text-muted">
-        Slack and the GitHub App are managed in Organization settings.
+        Native event connections are managed in Organization settings.
       </p>
       {plugins.error && <ErrorRow>Could not load organization access. Reload the page.</ErrorRow>}
       {github.error && <ErrorRow>Could not load GitHub App status. Reload the page.</ErrorRow>}
@@ -57,6 +58,7 @@ export function TeamConnectionSetup({ teamId, canManage, orgAdmin }: {
         {!github.error && !github.isFetching && githubState && <span>GitHub App{githubState === "installed" ? " · Installed" : githubState === "suspended" ? " · Suspended" : ""}</span>}
         {orgAdmin && <a className="text-ink underline" href="/settings/organization">Organization settings</a>}
       </div>
+      {services.some(s => s.service === "linear") && <div className="mt-4"><LinearEventsConnection /></div>}
     </section>
     <section aria-label="Dedicated team connection">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -70,10 +72,10 @@ export function TeamConnectionSetup({ teamId, canManage, orgAdmin }: {
         {available.map((service) => {
           const blocked = service.connect === "unconfigured" && service.connectBlockedBy !== "org";
           return <IntegrationCard key={service.service}>
-            <CardHeading title={displayName(service.service)} slug={service.iconSlug ?? service.service}
-              description={blocked ? "Ask an organization admin to configure OAuth for this service." : "Connect an account this team can use."} />
+            <CardHeading title={service.service === "linear" ? "Linear MCP" : displayName(service.service)} slug={service.iconSlug ?? service.service}
+              description={blocked ? "Ask an organization admin to configure OAuth for this service." : service.service === "linear" ? "Optional tools for this team. Native events use the organization connection." : "Connect an account this team can use."} />
             <CardFooter meta={blocked ? undefined : canManage ? "Team connection" : "Team admin required"}
-              right={<Button size="sm" variant="secondary" disabled={blocked || !canConnect} onClick={() => setSelected(service)}>Connect {displayName(service.service)}</Button>} />
+              right={<Button size="sm" variant="secondary" disabled={blocked || !canConnect} onClick={() => setSelected(service)}>{service.service === "linear" ? "Connect via MCP" : `Connect ${displayName(service.service)}`}</Button>} />
           </IntegrationCard>;
         })}
       </div>
@@ -90,7 +92,7 @@ function TeamConnectionDialog({ teamId, service, onClose }: {
   const [confirmed, setConfirmed] = useState(false);
   const oauth = service.connect === "oauth" && service.service !== "github";
   return <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
-    <DialogContent title={`Connect ${displayName(service.service)} to this team`}
+    <DialogContent title={`Connect ${displayName(service.service)}${service.service === "linear" ? " via MCP" : ""} to this team`}
       description={oauth ? "Sign in to the account intended for this team. Everyone on the team can use the permissions you grant." : "Paste a token for the account intended for this team. Everyone on this team can use its permissions."}>
       {!oauth && <label className="text-sm">Team account token
         <Textarea value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" spellCheck={false} />

@@ -91,7 +91,7 @@ export function TeamCredentials({
             <li key={row.service}>
               <div className={cards ? "flex h-full flex-col rounded-lg border border-line bg-paper p-4" : "flex items-center justify-between gap-4 py-2"}>
               <div className="min-w-0">
-                {cards ? <CardHeading title={displayName(row.service)} slug={row.service} /> : <p className="truncate text-sm text-ink">{displayName(row.service)}</p>}
+                {cards ? <CardHeading title={row.service === "linear" ? "Linear MCP" : displayName(row.service)} slug={row.service} /> : <p className="truncate text-sm text-ink">{row.service === "linear" ? "Linear MCP" : displayName(row.service)}</p>}
                 <p className="text-xs text-muted">
                   {row.delegatedFrom
                     ? `Shared by ${nameFor(row.delegatedFrom)}`
