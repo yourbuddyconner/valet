@@ -1,3 +1,4 @@
+import { visibleWorkOrigin } from "../services/work-origin.js";
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, lt, notExists, or, sql } from "drizzle-orm";
 import { mkdir, stat } from "node:fs/promises";
@@ -162,17 +163,8 @@ function runStateRow(row: typeof agentSessions.$inferSelect): RunStateRow {
 
 // ── List ──────────────────────────────────────────────────────────────────
 
-// Standalone-only (assistant-centered web UI decision 8): excludes
-// ASSISTANT ids and child ids, server-side, so the client just renders what
-// it gets. Every assistant is excluded, not only a principal's default —
-// assistants are listed by `GET /api/assistants`, and a principal that owns
-// several would otherwise fill this list with them. Assistant-derived
-// children nest inline in the assistant's chat page (via
-// GET /api/orchestrator/children) instead.
-//
-// Exported so other mounts needing the same "this user's standalone
-// sessions" view (e.g. the MCP `list_sessions` tool, Task 9) reuse the exact
-// query instead of re-deriving it.
+// Standalone work excludes workspace runtimes and spawned children. Threads
+// discovers child work through the parent-scoped children endpoint.
 export async function listStandaloneSessions(db: AppDb, userId: string, owner?: Principal) {
   // Own rows plus every team you are on — the same union `listWorkflowDefinitions`
   // and `listSkills` use, so one workspace's sessions read like its workflows.
@@ -950,6 +942,7 @@ sessionsRouter.get("/:id", async (c) => {
   const detail: GetSessionResponse = {
     isWorkspaceRuntime: (await loadAssistantBySessionId(db, id)) !== undefined,
     ...rowToSummary(row, deriveRunFields(runStateRow(row), unsettled)),
+    parentWork: await visibleWorkOrigin(db, row),
     messageCount: Number(n ?? 0),
     model,
     reasoning,
@@ -1256,6 +1249,7 @@ sessionsRouter.patch("/:id", async (c) => {
   const detail: GetSessionResponse = {
     isWorkspaceRuntime: (await loadAssistantBySessionId(db, id)) !== undefined,
     ...rowToSummary(effectiveRow, deriveRunFields(runStateRow(effectiveRow), unsettled)),
+    parentWork: await visibleWorkOrigin(db, effectiveRow),
     messageCount: Number(n ?? 0),
     model,
     reasoning,

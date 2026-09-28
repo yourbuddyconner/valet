@@ -1,7 +1,8 @@
+import { useWorkspaceRuntimeInfo } from "~/api/workspace-runtime";
+import { useChildWork, flattenChildWork } from "~/api/child-work";
 import { Link } from "@tanstack/react-router";
-import type { OrchestratorChildSummary, ThreadSummary } from "@valet/api/wire";
+import type { ChildWorkSummary, ThreadSummary } from "@valet/api/wire";
 import { Spinner } from "~/components/primitives";
-import { useOrchestratorChildren, useWorkspaceRuntimeInfo } from "~/api/orchestrator";
 import { useThreads } from "~/api/queries";
 import { relativeTime } from "~/lib/relative-time";
 import { threadOriginBucket, type ThreadOriginBucket } from "~/lib/thread-origin";
@@ -34,7 +35,7 @@ export interface ThreadActivity {
  */
 export function threadActivity(
   threads: ThreadSummary[],
-  children: OrchestratorChildSummary[],
+  children: ChildWorkSummary[],
   limit = RECENT_LIMIT,
 ): ThreadActivity[] {
   const byThread = new Map<string, { running: number; settled: number }>();
@@ -80,8 +81,8 @@ export function ThreadsCard() {
   const sessionId = info.data?.sessionId;
 
   const threadsQ = useThreads(sessionId ?? "");
-  const childrenQ = useOrchestratorChildren();
-  const rows = threadActivity(threadsQ.data?.threads ?? [], childrenQ.data?.children ?? []);
+  const childrenQ = useChildWork(sessionId);
+  const rows = threadActivity(threadsQ.data?.threads ?? [], childrenQ.error ? [] : flattenChildWork(childrenQ.data));
 
   return (
     <section className="min-w-0 rounded-lg border border-line bg-paper flex flex-col min-h-0">
@@ -97,6 +98,9 @@ export function ThreadsCard() {
       </header>
 
       <div className="flex-1 overflow-y-auto max-h-64">
+        {childrenQ.isLoading && <p className="px-4 py-2 text-xs text-muted">Loading work…</p>}
+        {childrenQ.error && <p className="px-4 py-2 text-xs text-danger-500">Could not load work. <button className="underline" onClick={() => void childrenQ.refetch()}>Retry</button></p>}
+        {!childrenQ.error && childrenQ.data && <Link to="/chat" search={{ workspace: "user", view: "work" }} className="block px-4 py-2 text-xs text-moss">{childrenQ.data.pages[0]?.runningCount ?? 0} running · View all work</Link>}
         {threadsQ.isLoading && (
           <div className="px-4 py-3 flex items-center gap-2 text-xs text-muted">
             <Spinner size={14} /> Loading…
@@ -116,37 +120,17 @@ export function ThreadsCard() {
           </p>
         )}
         <ul>
-          {rows.map(({ thread, running, settled }) => (
+          {rows.map(({ thread }) => (
             <li key={thread.id}>
               <Link
                 to="/chat"
                 search={{ thread: thread.id }}
                 className="flex min-h-11 flex-wrap items-center gap-x-2.5 gap-y-1 px-4 py-3 sm:flex-nowrap sm:py-2 hover:bg-ink-wash transition-colors"
               >
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 shrink-0 rounded-full",
-                    // `bg-muted-wash`, not `bg-muted/40` — the slash modifier
-                    // on a `var()` token emits no rule (theme.css trap note),
-                    // so the idle dot rendered invisible. Same trap killed the
-                    // row hover above: `hover:bg-ink-wash/60` emitted nothing;
-                    // the wash token carries its own alpha, so it is used bare.
-                    running > 0 ? "bg-moss animate-pulse motion-reduce:animate-none" : "bg-muted-wash",
-                  )}
-                  aria-label={running > 0 ? `${running} running` : "idle"}
-                />
                 <span className="min-w-0 basis-4/5 grow break-words text-sm text-ink sm:basis-auto sm:truncate">
                   {thread.title || "Untitled thread"}
                 </span>
                 <OriginPill thread={thread} />
-                {running > 0 && (
-                  <span className="shrink-0 text-[10px] font-medium text-moss">
-                    {running} running
-                  </span>
-                )}
-                {running === 0 && settled > 0 && (
-                  <span className="shrink-0 text-[10px] text-muted">{settled} done</span>
-                )}
                 <span className="shrink-0 text-xs text-muted">{relativeTime(thread.createdAt)}</span>
               </Link>
             </li>

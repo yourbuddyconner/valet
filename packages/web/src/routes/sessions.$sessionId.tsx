@@ -1,9 +1,6 @@
 import { WorkflowAgentApprovals } from "~/components/workflows/agent-approvals";
 import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
-import type { OrchestratorChildSummary } from "@valet/api/wire";
-import { useOrchestratorChildren } from "~/api/orchestrator";
-import { useOwnerConversation } from "~/hooks/use-workspace-conversation";
 import { useSession } from "~/api/queries";
 import { useAdoptWorkspaceScope } from "~/lib/workspace-scope";
 import { SecuritySessionLayout } from "~/components/security/engagement-panel";
@@ -40,14 +37,6 @@ export const Route = createFileRoute("/sessions/$sessionId")({
   component: SessionPage,
 });
 
-/** Pure: does this session id appear in the assistant's children list? */
-export function findChild(
-  children: OrchestratorChildSummary[],
-  sessionId: string,
-): OrchestratorChildSummary | undefined {
-  return children.find((c) => c.sessionId === sessionId);
-}
-
 function SessionPage() {
   const { sessionId } = Route.useParams();
   return sessionId.startsWith("wf:") ? <WorkflowAgentApprovals sessionId={sessionId} /> : <AppSessionPage />;
@@ -71,13 +60,10 @@ export function AppSessionPage() {
 
   const workspace = session.data?.owner.type === "team" ? session.data.owner.id
     : session.data?.owner.type === "user" ? "user" : undefined;
-  const conversation = useOwnerConversation(workspace);
-  const childrenQ = useOrchestratorChildren(conversation.data?.sessionId, { enabled: !!conversation.data?.sessionId });
-  if (conversation.data?.sessionId === sessionId) {
+  if (!session.error && session.data?.isWorkspaceRuntime) {
     return <Navigate to="/chat" replace search={{ workspace, thread, child: childPanelId }} />;
   }
-
-  const child = findChild(childrenQ.data?.children ?? [], sessionId);
+  const parent = session.error ? undefined : session.data?.parentWork;
 
   const sessionView = (
     <SessionView
@@ -90,7 +76,7 @@ export function AppSessionPage() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {child && <ChildBreadcrumb workspace={workspace} threadId={child.parentThreadId} />}
+      {parent && <ChildBreadcrumb sessionId={parent.sessionId} threadId={parent.threadId} />}
       {/* Standalone page (decision 14): no thread sidebar, full header —
           the root layout hides the sidebar for this route (see
           `__root.tsx`). Children opened full-page render the same way, with
@@ -113,11 +99,12 @@ export function AppSessionPage() {
   );
 }
 
-function ChildBreadcrumb({ workspace, threadId }: { workspace?: string; threadId: string }) {
+function ChildBreadcrumb({ sessionId, threadId }: { sessionId: string; threadId: string }) {
   return (
     <Link
-      to="/chat"
-      search={{ workspace, thread: threadId }}
+      to="/sessions/$sessionId"
+      params={{ sessionId }}
+      search={{ thread: threadId }}
       className="flex items-center gap-1.5 border-b border-line bg-neutral-50 px-4 py-2 text-xs text-muted hover:text-moss dark:bg-neutral-900/40"
     >
       <ArrowLeft className="h-3 w-3" aria-hidden />

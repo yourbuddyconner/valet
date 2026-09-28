@@ -11,7 +11,7 @@ import { render, screen } from "@testing-library/react";
 import type {
   GlobalWorkflowRunSummary,
   ListTeamsResponse,
-  TeamChildSummary,
+  ChildWorkSummary,
 } from "@valet/api/wire";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -34,11 +34,11 @@ vi.mock("~/api/settings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/api/settings")>();
   return { ...actual, useTeams: () => ({ data: teamsData, isLoading: false, error: null }) };
 });
-vi.mock("~/api/orchestrator", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("~/api/orchestrator")>();
+vi.mock("~/api/workspace-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/api/workspace-runtime")>();
   return {
     ...actual,
-    useTeamChildren: () => ({ data: { children: [] }, error: null, refetch: vi.fn() }),
+    useWorkspaceRuntimeInfo: () => ({ data: { sessionId: "team-runtime" }, error: null, refetch: vi.fn() }),
   };
 });
 vi.mock("~/api/workflows", async (importOriginal) => {
@@ -64,7 +64,7 @@ vi.mock("~/api/memory", async (importOriginal) => {
 
 import { TeamDashboard, mergeTeamFeed } from "./team-dashboard";
 
-function child(overrides: Partial<TeamChildSummary> = {}): TeamChildSummary {
+function child(overrides: Partial<ChildWorkSummary> = {}): ChildWorkSummary {
   return {
     sessionId: "child-1",
     title: "Audit PR",
@@ -128,4 +128,9 @@ describe("TeamDashboard header", () => {
     expect(screen.queryByRole("link", { name: "Edit assistant" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Sentinel" })).toBeNull();
   });
+});
+
+vi.mock("~/api/child-work", async (importOriginal) => {
+ const actual = await importOriginal<typeof import("~/api/child-work")>();
+ return { ...actual, useChildWork: () => ({ data: { pages: [{ children: [], runningCount: 0, nextCursor: null }] }, error: null, refetch: vi.fn() }) };
 });

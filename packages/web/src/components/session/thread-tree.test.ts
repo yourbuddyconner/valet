@@ -6,7 +6,7 @@
  * precisely so they're testable without mounting all of that.
  */
 import { describe, expect, it } from "vitest";
-import type { DecisionGate, OrchestratorChildSummary, ThreadSummary } from "@valet/api/wire";
+import type { DecisionGate, ChildWorkSummary, ThreadSummary } from "@valet/api/wire";
 import { defaultThreadId } from "~/lib/thread-default";
 import {
   childStatusDotClassName,
@@ -18,7 +18,7 @@ import {
   visibleThreads,
 } from "./thread-tree";
 
-function child(overrides: Partial<OrchestratorChildSummary> = {}): OrchestratorChildSummary {
+function child(overrides: Partial<ChildWorkSummary> = {}): ChildWorkSummary {
   return {
     sessionId: "child-1",
     title: "fix-auth",

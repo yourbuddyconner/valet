@@ -117,6 +117,8 @@ export interface RepoBinding {
 export interface SessionDetail extends SessionSummary {
   /** Permanent owner runtime; cannot be moved or deleted. */
   isWorkspaceRuntime?: boolean;
+  /** Originating work in the same workspace, including dismissed children. */
+  parentWork?: { sessionId: string; threadId: string };
   messageCount: number;
   /** Session-default model id. Threads inherit when they have no override. */
   model?: string;
@@ -846,7 +848,7 @@ export interface WorkspaceRuntimeResponse {
 }
 export interface EnsureWorkspaceRuntimeResponse { sessionId: string; }
 
-export interface OrchestratorChildSummary {
+export interface ChildWorkSummary {
   sessionId: string;
   title: string;
   parentThreadId: string;
@@ -855,19 +857,11 @@ export interface OrchestratorChildSummary {
   createdAt: number;
 }
 
-/** GET /api/orchestrator/children — child_watches ⋈ agent_sessions for the
- * caller's orchestrator (decision 6). */
-export interface GetOrchestratorChildrenResponse {
-  children: OrchestratorChildSummary[];
-}
-
-/** Work spawned from a team's singleton runtime. */
-export type TeamChildSummary = OrchestratorChildSummary;
-
-/** GET /api/teams/:id/children — newest first, capped at 20. Team members
- * and org admins only; non-members get 404. */
-export interface GetTeamChildrenResponse {
-  children: TeamChildSummary[];
+/** GET /api/sessions/:sessionId/children. Running children precede settled work. */
+export interface ChildWorkResponse {
+  children: ChildWorkSummary[];
+  nextCursor?: string | null;
+  runningCount: number;
 }
 
 // ── REST: threads ─────────────────────────────────────────────────────────

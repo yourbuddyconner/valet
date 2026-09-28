@@ -35,7 +35,7 @@ import { teamApiKeysRouter } from "./routes/team-api-keys.js";
 import { memoryRouter } from "./routes/memory.js";
 import { securityRouter } from "./routes/security.js";
 import { workspaceRuntimeRouter } from "./routes/workspace-runtime.js";
-import { orchestratorRouter } from "./routes/orchestrator.js";
+import { childWorkRouter } from "./routes/child-work.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { changelogRouter } from "./routes/changelog.js";
 import { workflowPreviewRouter } from "./routes/workflow-preview.js";
@@ -305,6 +305,7 @@ export function createApp(
   app.use("/api/*", buildAuthMiddleware({ auth: auth ?? null, db: providers.db }));
   app.use("/api/*", refuseTeamKeyOutsideScope());
 
+  app.route("/api/sessions", childWorkRouter);
   app.route("/api/sessions", sessionsRouter);
   // Messages + threads + file uploads + security + ratings share /api/sessions/:id/* — mounted under same prefix.
   app.route("/api/sessions", messagesRouter);
@@ -322,7 +323,7 @@ export function createApp(
   // half is mounted pre-auth above.
   app.route("/api/artifacts", artifactsRouter);
   app.route("/api/workspaces", workspaceRuntimeRouter);
-  app.route("/api/orchestrator", orchestratorRouter);
+
   app.route("/api", profilePicturesRouter);
   app.route("/api/notifications", notificationsRouter);
   app.route("/api/changelog", changelogRouter);

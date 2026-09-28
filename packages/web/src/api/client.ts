@@ -63,7 +63,7 @@ import type {
   ShareArtifactResponse,
   OrgSettingsResponse,
   PatchOrgSettingsRequest,
-  GetOrchestratorChildrenResponse,
+  ChildWorkResponse,
   GetPrebuildForRepoResponse,
   GetReposResponse,
   GetSlackAppResponse,
@@ -137,7 +137,6 @@ import type {
   ListTeamsResponse,
   ListThreadsResponse,
   ListWorkflowRunsResponse,
-  GetTeamChildrenResponse,
   ListWorkflowTriggersResponse,
   WorkflowRunOutcome,
   WorkflowRunStatus,
@@ -718,21 +717,14 @@ export const api = {
     request<WorkspaceRuntimeResponse>("GET", `/workspaces/${encodeURIComponent(workspace)}/runtime`),
   getWorkspaceRuntimeInfo: (workspace: string) =>
     request<WorkspaceRuntimeInfoResponse>("GET", `/workspaces/${encodeURIComponent(workspace)}/runtime/info`),
-  /** `sessionId` scopes the list to one assistant's children — the open
-   * assistant in the chat thread tree, so a team assistant's runs nest under
-   * it. Omitted = your own default assistant. */
-  getOrchestratorChildren: (sessionId?: string) =>
-    request<GetOrchestratorChildrenResponse>(
-      "GET",
-      sessionId
-        ? `/orchestrator/children?sessionId=${encodeURIComponent(sessionId)}`
-        : "/orchestrator/children",
-    ),
-  dismissChild: (childSessionId: string) =>
-    request<{ ok: true }>(
-      "POST",
-      `/orchestrator/children/${encodeURIComponent(childSessionId)}/dismiss`,
-    ),
+  getChildWork: (sessionId: string, opts?: { cursor?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (opts?.cursor) qs.set("cursor", opts.cursor);
+    if (opts?.limit !== undefined) qs.set("limit", String(opts.limit));
+    return request<ChildWorkResponse>("GET", `/sessions/${encodeURIComponent(sessionId)}/children?${qs}`);
+  },
+  dismissChild: (sessionId: string, childSessionId: string) =>
+    request<{ ok: true }>("POST", `/sessions/${encodeURIComponent(sessionId)}/children/${encodeURIComponent(childSessionId)}/dismiss`),
 
   // assistants (`docs/specs/2026-08-13-assistants-design.md`). The list is
   // also how the client learns each assistant's session id, so it replaces
@@ -752,8 +744,6 @@ export const api = {
     request<GetArtifactResponse>("GET", `/artifacts/${encodeURIComponent(token)}`),
   shareArtifact: (body: ShareArtifactRequest) =>
     request<ShareArtifactResponse>("POST", "/artifacts/share", body),
-  getTeamChildren: (teamId: string) =>
-    request<GetTeamChildrenResponse>("GET", `/teams/${encodeURIComponent(teamId)}/children`),
   // `mine=1` is the caller-scoped gallery view (server-filtered — see the
   // route's comment on why this replaced a client-side `actorUserId` match)
   // and composes with nothing, so it is a separate option, not `OwnerFilter`.

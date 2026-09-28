@@ -1,5 +1,6 @@
+import { useWorkspaceRuntimeInfo } from "~/api/workspace-runtime";
+import { useChildWork, flattenChildWork } from "~/api/child-work";
 import { createFileRoute } from "@tanstack/react-router";
-import { useOrchestratorChildren, useWorkspaceRuntimeInfo } from "~/api/orchestrator";
 import { useNotifications } from "~/api/queries";
 import { ActivityStrip, mergeActivity } from "~/components/assistant/activity-strip";
 import { MemoryCard } from "~/components/assistant/memory-card";
@@ -49,14 +50,14 @@ export function Dashboard() {
     );
   }
 
-  return <DashboardBody />;
+  return <DashboardBody sessionId={info.data.sessionId} />;
 }
 
-function DashboardBody() {
-  const childrenQ = useOrchestratorChildren();
+function DashboardBody({ sessionId }: { sessionId: string }) {
+  const childrenQ = useChildWork(sessionId);
   const notificationsQ = useNotifications();
 
-  const events = mergeActivity(notificationsQ.data?.notifications ?? [], childrenQ.data?.children ?? []);
+  const events = mergeActivity(notificationsQ.data?.notifications ?? [], childrenQ.error ? [] : flattenChildWork(childrenQ.data));
 
   return (
     <div className="min-w-0 flex-1 overflow-y-auto">

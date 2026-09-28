@@ -3,8 +3,7 @@ import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
  * The three reads behind the team dashboard
  * (`docs/specs/2026-08-27-team-dashboard-design.md`):
  *
- *   - GET /api/teams/:id/children       — assistant runs across every team
- *     assistant, newest first, attributed to the spawning assistant.
+ *   - GET /api/sessions/:sessionId/children       — child work from the team runtime.
  *   - GET /api/usage/breakdown?scope=team:<id> — team-owned spend,
  *     member-gated.
  *   - GET /api/artifacts?ownerType=team&ownerId=<id> — team artifacts,
@@ -17,7 +16,7 @@ import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentSessions, artifacts, childWatches, teamMembers, teams } from "../schema/index.js";
 import type {
-  GetTeamChildrenResponse,
+  ChildWorkResponse,
   ListArtifactsResponse,
   UsageBreakdownResponse,
 } from "../wire/types.js";
@@ -41,8 +40,7 @@ async function seedTeam(target: TestApi): Promise<void> {
     .values({ teamId: "team_1", userId: "local-user", role: "admin" });
 }
 
-async function createTeamAssistant(target: TestApi, name: string) {
-  // Historical multiple profiles remain readable after the public creation path is retired.
+async function createTeamRuntime(target: TestApi) {
   return await seedWorkspaceAssistant(target.providers.db, "local-org", { type: "team", id: "team_1" });
 }
 
@@ -75,20 +73,19 @@ async function seedChild(
   });
 }
 
-describe("GET /api/teams/:id/children", () => {
+describe("GET /api/sessions/:sessionId/children", () => {
   it("lists runs from the singleton team runtime, newest first", async () => {
     api = await bootTestApi();
     await seedTeam(api);
-    const sentinel = await createTeamAssistant(api, "Sentinel");
-    const triage = sentinel;
+    const sentinel = await createTeamRuntime(api);
 
     const now = Date.now();
     await seedChild(api, { childId: "child-a", parentSessionId: sentinel.sessionId, title: "Audit PR", settled: true, createdAt: now });
-    await seedChild(api, { childId: "child-b", parentSessionId: triage.sessionId, title: "Rotate creds", settled: false, createdAt: now + 1 });
+    await seedChild(api, { childId: "child-b", parentSessionId: sentinel.sessionId, title: "Rotate creds", settled: false, createdAt: now + 1 });
 
-    const res = await fetch(`${api.baseUrl}/api/teams/team_1/children`);
+    const res = await fetch(`${api.baseUrl}/api/sessions/${encodeURIComponent((await createTeamRuntime(api)).sessionId)}/children`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as GetTeamChildrenResponse;
+    const body = (await res.json()) as ChildWorkResponse;
 
     expect(body.children).toHaveLength(2);
     expect(body.children[0]).toMatchObject({
@@ -105,7 +102,7 @@ describe("GET /api/teams/:id/children", () => {
   it("keeps a running child visible past the 20-newest window", async () => {
     api = await bootTestApi();
     await seedTeam(api);
-    const sentinel = await createTeamAssistant(api, "Sentinel");
+    const sentinel = await createTeamRuntime(api);
 
     const base = Date.now() - 60_000;
     // The long-running child starts FIRST...
@@ -115,24 +112,27 @@ describe("GET /api/teams/:id/children", () => {
       await seedChild(api, { childId: `child-q${i}`, parentSessionId: sentinel.sessionId, title: `Quick ${i}`, settled: true, createdAt: base + 1000 + i });
     }
 
-    const res = await fetch(`${api.baseUrl}/api/teams/team_1/children`);
-    const body = (await res.json()) as GetTeamChildrenResponse;
+    const res = await fetch(`${api.baseUrl}/api/sessions/${encodeURIComponent((await createTeamRuntime(api)).sessionId)}/children?limit=5`);
+    const body = (await res.json()) as ChildWorkResponse;
     const running = body.children.filter((c) => c.status === "running");
     expect(running.map((c) => c.sessionId)).toContain("child-old-running");
+    expect(body.children).toHaveLength(5);
+    expect(body.runningCount).toBe(1);
+    expect(body.nextCursor).toBeTruthy();
   });
 
-  it("404s a non-member, and answers an assistant-less team with an empty list", async () => {
+  it("404s a non-member, and answers an empty runtime without materializing its session", async () => {
     api = await bootTestApi();
     await seedTeam(api);
 
-    const nonMember = await fetch(`${api.baseUrl}/api/teams/team_1/children`, {
+    const nonMember = await fetch(`${api.baseUrl}/api/sessions/${encodeURIComponent((await createTeamRuntime(api)).sessionId)}/children`, {
       headers: NON_MEMBER_HEADERS,
     });
     expect(nonMember.status).toBe(404);
 
-    const empty = await fetch(`${api.baseUrl}/api/teams/team_1/children`);
+    const empty = await fetch(`${api.baseUrl}/api/sessions/${encodeURIComponent((await createTeamRuntime(api)).sessionId)}/children`);
     expect(empty.status).toBe(200);
-    const body = (await empty.json()) as GetTeamChildrenResponse;
+    const body = (await empty.json()) as ChildWorkResponse;
     expect(body.children).toEqual([]);
   });
 });

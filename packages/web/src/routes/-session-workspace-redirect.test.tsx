@@ -6,7 +6,7 @@ import { AppSessionPage, Route } from "./sessions.$sessionId";
 let owner: { type: "user" | "team"; id: string } = { type: "team", id: "team-a" };
 let runtime = "runtime-team";
 let sessionId = "runtime-team";
-const resolveOwner = vi.fn();
+
 vi.mock("@tanstack/react-router", async importOriginal => {
   const actual = await importOriginal<typeof import("@tanstack/react-router")>();
   return { ...actual,
@@ -14,11 +14,7 @@ vi.mock("@tanstack/react-router", async importOriginal => {
     Link: ({ children, search }: { children: ReactNode; search: Record<string, string> }) => <a data-testid="origin" data-search={JSON.stringify(search)}>{children}</a>,
   };
 });
-vi.mock("~/api/queries", () => ({ useSession: () => ({ data: { owner } }) }));
-vi.mock("~/hooks/use-workspace-conversation", () => ({ useOwnerConversation: (workspace: string) => {
-  resolveOwner(workspace); return { data: { sessionId: runtime } };
-} }));
-vi.mock("~/api/orchestrator", () => ({ useOrchestratorChildren: () => ({ data: { children: [{ sessionId: "child", parentThreadId: "parent-thread" }] } }) }));
+vi.mock("~/api/queries", () => ({ useSession: () => ({ data: { owner, isWorkspaceRuntime: sessionId === runtime, parentWork: sessionId === "child" ? { sessionId: runtime, threadId: "parent-thread" } : undefined } }) }));
 vi.mock("~/lib/workspace-scope", () => ({ useAdoptWorkspaceScope: () => undefined }));
 vi.mock("~/components/session/session-view", () => ({ SessionView: () => <div>Work history</div> }));
 vi.mock("~/components/session/child-panel", () => ({ ChildPanel: () => null }));
@@ -33,13 +29,11 @@ beforeEach(() => {
 });
 it("redirects a team runtime to its workspace and preserves the source thread", () => {
   render(<AppSessionPage />);
-  expect(resolveOwner).toHaveBeenCalledWith("team-a");
   expect(JSON.parse(screen.getByTestId("redirect").textContent ?? "{}")).toEqual({ workspace: "team-a", thread: "source-thread" });
 });
 it("resolves personal runtime links through the personal workspace", () => {
   owner = { type: "user", id: "u1" };
   render(<AppSessionPage />);
-  expect(resolveOwner).toHaveBeenCalledWith("user");
   expect(JSON.parse(screen.getByTestId("redirect").textContent ?? "{}").workspace).toBe("user");
 });
 it("keeps child history in its own runtime and points back to the team origin", () => {
@@ -47,5 +41,5 @@ it("keeps child history in its own runtime and points back to the team origin", 
   render(<AppSessionPage />);
   expect(screen.getByText("Work history")).toBeTruthy();
   expect(screen.queryByTestId("redirect")).toBeNull();
-  expect(JSON.parse(screen.getByTestId("origin").getAttribute("data-search") ?? "{}")).toEqual({ workspace: "team-a", thread: "parent-thread" });
+  expect(JSON.parse(screen.getByTestId("origin").getAttribute("data-search") ?? "{}")).toEqual({ thread: "parent-thread" });
 });

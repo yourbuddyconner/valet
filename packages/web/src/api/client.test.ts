@@ -136,3 +136,18 @@ describe("api client: usage period URLs", () => {
     );
   });
 });
+
+it("scopes child work and pagination to an encoded parent session", async () => {
+  const fetchMock = stubFetchOk({ children: [], nextCursor: null, runningCount: 0 });
+  await api.getChildWork("parent:team", { cursor: "cursor+/=", limit: 25 });
+  const url = new URL(fetchMock.mock.calls[0]?.[0] as string, "https://example.test");
+  expect(url.pathname).toBe("/api/sessions/parent%3Ateam/children");
+  expect(url.searchParams.get("cursor")).toBe("cursor+/=");
+  expect(url.searchParams.get("limit")).toBe("25");
+});
+
+it("dismisses a child under an explicit encoded parent", async () => {
+  const fetchMock = stubFetchOk({ ok: true });
+  await api.dismissChild("parent:team", "child:one");
+  expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/sessions/parent%3Ateam/children/child%3Aone/dismiss");
+});

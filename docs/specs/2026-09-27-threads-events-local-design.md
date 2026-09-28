@@ -211,3 +211,24 @@ tiers, reasoning caps, credentials, and action policy still apply. Owner memory
 Team and organization outbound messages use the workspace name. Personal messages
 use the integration's default bot identity. No per-assistant capability filter or
 profile override remains.
+
+### Parent-scoped child work
+
+Home and Threads share `/api/sessions/:sessionId/children`. The parent is always
+explicit. The old personal orchestrator and team children routes are removed.
+Authorization checks the parent's workspace and organization. Moved child sessions
+are excluded from the old parent's list, counts, and dismissal operations.
+
+Child work uses cursor pagination: running first, then creation time and ID in
+descending order. Pages default to 25 rows and never exceed 100. The cursor binds
+the parent and ordering. Running counts cover the full visible result set.
+Threads offers Load more work and deduplicates rows during live status changes.
+Dashboard summaries must not infer total running counts from a partial page.
+
+Dismissal requires the explicit parent, a settled child, and current ownership.
+It preserves the execution and transcript. Session details provide the parent
+session and thread directly, including dismissed work. A workspace move removes
+that link unless both sides still have the same owner and organization.
+
+The local child-work seed creates 27 empty execution fixtures. Offline seeding
+attaches settled watch records so pagination can be reviewed without running tasks.

@@ -13,14 +13,9 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
 }));
 
-vi.mock("~/api/orchestrator", () => ({
+vi.mock("~/api/workspace-runtime", () => ({
   useWorkspaceRuntimeInfo: () => infoMock(),
-  useOrchestratorChildren: () => ({
-    data: { children: [] },
-    isLoading: false,
-    error: null,
-    refetch: vi.fn(),
-  }),
+
 }));
 
 // importOriginal: see -new-session-dialog.test.tsx for why a bare
@@ -155,4 +150,16 @@ describe("Home (workspace branch)", () => {
     const dash = screen.getByTestId("team-dashboard");
     expect(dash.getAttribute("data-team")).toBe("team_1");
   });
+});
+
+vi.mock("~/api/child-work", async (importOriginal) => {
+ const actual = await importOriginal<typeof import("~/api/child-work")>();
+ return { ...actual,
+  useChildWork: () => ({
+    data: { pages: [{ children: [], runningCount: 0, nextCursor: null }] },
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+ };
 });

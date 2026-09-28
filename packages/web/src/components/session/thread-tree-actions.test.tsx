@@ -16,7 +16,7 @@ import type {
   DecisionGate,
   GetModelTiersResponse,
   ModelInfo,
-  OrchestratorChildSummary,
+  ChildWorkSummary,
   ThreadSummary,
 } from "@valet/api/wire";
 
@@ -28,7 +28,9 @@ const renameMutateAsync = vi.fn().mockResolvedValue({ id: "thread-1" });
 
 let threads: ThreadSummary[] = [];
 let archivedThreads: ThreadSummary[] = [];
-let children: OrchestratorChildSummary[] = [];
+let children: ChildWorkSummary[] = [];
+let hasNextPage = false;
+const fetchNextPage = vi.fn();
 let pendingGates: Record<string, DecisionGate> = {};
 let sessionModel: string | undefined;
 let models: ModelInfo[] = [];
@@ -78,10 +80,9 @@ vi.mock("~/api/settings", async (importOriginal) => {
   };
 });
 
-vi.mock("~/api/orchestrator", () => ({
+vi.mock("~/api/workspace-runtime", () => ({
   useWorkspaceRuntimeInfo: () => ({ data: { sessionId: "orchestrator:user-1" } }),
-  useOrchestratorChildren: () => ({ data: { children }, refetch: vi.fn() }),
-  useDismissChild: () => ({ mutateAsync: dismissMutateAsync, isPending: false }),
+
 }));
 
 // Applies the component's real selectors against a minimal store shape:
@@ -115,7 +116,7 @@ function thread(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
   };
 }
 
-function child(overrides: Partial<OrchestratorChildSummary> = {}): OrchestratorChildSummary {
+function child(overrides: Partial<ChildWorkSummary> = {}): ChildWorkSummary {
   return {
     sessionId: "child-1",
     title: "fix-auth",
@@ -158,6 +159,7 @@ beforeEach(() => {
   threads = [thread()];
   archivedThreads = [];
   children = [];
+  hasNextPage = false;
   pendingGates = {};
   sessionModel = undefined;
   models = [];
@@ -564,4 +566,19 @@ describe("ThreadTree — sort preference", () => {
     const restoredOlder = screen.getByText("Older");
     expect(restoredNewer.compareDocumentPosition(restoredOlder) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
+});
+
+vi.mock("~/api/child-work", async (importOriginal) => {
+ const actual = await importOriginal<typeof import("~/api/child-work")>();
+ return { ...actual,
+  useChildWork: () => ({ hasNextPage, fetchNextPage, data: { pages: [{ children, runningCount: 0, nextCursor: null }] }, refetch: vi.fn() }),
+  useDismissChild: () => ({ mutateAsync: dismissMutateAsync, isPending: false }),
+ };
+});
+
+it("loads the next page of child work from the thread tree", async () => {
+  hasNextPage = true;
+  renderTree();
+  await userEvent.setup().click(screen.getByRole("button", { name: "Load more work" }));
+  expect(fetchNextPage).toHaveBeenCalledOnce();
 });

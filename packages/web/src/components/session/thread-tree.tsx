@@ -1,3 +1,5 @@
+import { useWorkspaceRuntimeInfo } from "~/api/workspace-runtime";
+import { useChildWork, flattenChildWork, useDismissChild } from "~/api/child-work";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import {
@@ -19,7 +21,7 @@ import type {
   DecisionGate,
   GetModelTiersResponse,
   ModelInfo,
-  OrchestratorChildSummary,
+  ChildWorkSummary,
   ThreadSummary,
 } from "@valet/api/wire";
 import {
@@ -33,7 +35,6 @@ import {
 } from "~/api/queries";
 import { useComposerPrefillStore } from "~/stores/composer-prefill";
 import { useChatHotkeysStore } from "~/stores/chat-hotkeys";
-import { useDismissChild, useOrchestratorChildren, useWorkspaceRuntimeInfo } from "~/api/orchestrator";
 import { useModels, useModelTiers } from "~/api/settings";
 import { usePendingGatesSeed } from "~/hooks/use-pending-gates-seed";
 import { useStreamStore } from "~/stores/stream";
@@ -114,9 +115,9 @@ const NO_REFETCH = () => {};
 
 /** Pure: groups children by the thread that spawned them. */
 export function groupChildrenByThread(
-  children: OrchestratorChildSummary[],
-): Map<string, OrchestratorChildSummary[]> {
-  const map = new Map<string, OrchestratorChildSummary[]>();
+  children: ChildWorkSummary[],
+): Map<string, ChildWorkSummary[]> {
+  const map = new Map<string, ChildWorkSummary[]>();
   for (const c of children) {
     const list = map.get(c.parentThreadId);
     if (list) list.push(c);
@@ -175,7 +176,7 @@ export function hasGateOutsideList(
 
 /** Pure: status-dot class for a child row. Calm-companion visual language —
  * running is moss with a subtle pulse, settled is a muted checkmark. */
-export function childStatusDotClassName(status: OrchestratorChildSummary["status"]): string {
+export function childStatusDotClassName(status: ChildWorkSummary["status"]): string {
   return status === "running"
     ? "bg-moss animate-pulse motion-reduce:animate-none"
     : "bg-muted";
@@ -221,7 +222,7 @@ export interface ThreadTreeProps {
   sessionId?: string;
   /**
    * Nest child sessions under the thread that spawned them. Safe for any
-   * assistant the caller can view: `GET /api/orchestrator/children?sessionId=`
+   * assistant the caller can view: `GET /api/sessions/:sessionId/children`
    * scopes the list to THIS `sessionId` (access-checked), so a team
    * assistant's runs nest under its own threads rather than borrowing the
    * caller's personal children.
@@ -238,7 +239,7 @@ function ThreadTreeInner({ sessionId, showChildren }: { sessionId: string; showC
   const sessionModel = sessionQ.data?.model;
   const modelsQ = useModels();
   const tierMapQ = useModelTiers();
-  const childrenQ = useOrchestratorChildren(sessionId, {
+  const childrenQ = useChildWork(sessionId, {
     refetchInterval: CHILDREN_POLL_MS,
     enabled: showChildren,
   });
@@ -263,7 +264,7 @@ function ThreadTreeInner({ sessionId, showChildren }: { sessionId: string; showC
   // Both the sidebar and SessionView use this creation-order default. Sort only changes row order.
   const defaultId = defaultThreadId(threads);
   const activeThreadId = search.thread ?? defaultId;
-  const grouped = groupChildrenByThread(showChildren ? (childrenQ.data?.children ?? []) : []);
+  const grouped = groupChildrenByThread(showChildren ? (childrenQ.error ? [] : flattenChildWork(childrenQ.data)) : []);
 
   // Seed pending gates from REST for ourselves — the tree must not depend
   // on a SessionView being mounted for the same session. Live updates
@@ -484,6 +485,9 @@ function ThreadTreeInner({ sessionId, showChildren }: { sessionId: string; showC
             />
           ))}
         </nav>
+        {showChildren && childrenQ.isLoading && <p className="px-4 py-2 text-xs text-muted">Loading work…</p>}
+        {showChildren && childrenQ.error && <p className="px-4 py-2 text-xs text-danger-500">Could not load work. <button onClick={() => void childrenQ.refetch()} className="underline">Retry</button></p>}
+        {showChildren && !childrenQ.error && childrenQ.hasNextPage && <button className="px-4 py-2 text-xs text-moss" disabled={childrenQ.isFetchingNextPage} onClick={() => void childrenQ.fetchNextPage()}>{childrenQ.isFetchingNextPage ? "Loading…" : "Load more work"}</button>}
         <div className="border-t border-line/60 px-2 py-1.5">
           <button
             type="button"
@@ -554,7 +558,7 @@ function ThreadNode({
   active: boolean;
   /** The thread holds a pending decision gate — show the response-required bell. */
   hasPendingGate: boolean;
-  childSessions: OrchestratorChildSummary[];
+  childSessions: ChildWorkSummary[];
   activeChildId?: string;
   onArchive: (threadId: string) => void;
   onReplaceSandbox: () => void;
@@ -827,7 +831,7 @@ function ThreadNode({
  * Live-updates the children query (decision 12): refetch on any
  * `queue.state` frame for the assistant session, debounced so a burst of
  * frames only triggers one refetch. The 30s poll (`refetchInterval` on
- * `useOrchestratorChildren`) is the fallback for when no WS frames arrive.
+ * `useChildWork`) is the fallback for when no WS frames arrive.
  */
 function useInvalidateChildrenOnQueueState(sessionId: string, refetch: () => void) {
   const queueByThread = useStreamStore((s) => s.bySession[sessionId]?.queueByThread);

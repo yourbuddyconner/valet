@@ -1,4 +1,4 @@
-import type { NotificationSummary, OrchestratorChildSummary } from "@valet/api/wire";
+import type { NotificationSummary, ChildWorkSummary } from "@valet/api/wire";
 import { Spinner } from "~/components/primitives";
 import { relativeTime } from "~/lib/relative-time";
 import { cn } from "~/lib/cn";
@@ -28,7 +28,7 @@ export interface ActivityEvent {
  */
 export function mergeActivity(
   notifications: NotificationSummary[],
-  children: OrchestratorChildSummary[],
+  children: ChildWorkSummary[],
   limit = ACTIVITY_LIMIT,
 ): ActivityEvent[] {
   const fromNotifications: ActivityEvent[] = notifications.map((n) => ({

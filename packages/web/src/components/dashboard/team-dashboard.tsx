@@ -1,3 +1,5 @@
+import { useWorkspaceRuntimeInfo } from "~/api/workspace-runtime";
+import { useChildWork, flattenChildWork } from "~/api/child-work";
 /**
  * The team workspace home (team dashboard design, 2026-08-27): what the
  * team's agents did, newest first, with workflows/usage/artifacts/memory
@@ -10,11 +12,10 @@
 import { Link } from "@tanstack/react-router";
 import type {
   GlobalWorkflowRunSummary,
-  TeamChildSummary,
+  ChildWorkSummary,
 } from "@valet/api/wire";
 import { useArtifacts } from "~/api/artifacts";
 import { useMemoryTree } from "~/api/memory";
-import { useTeamChildren } from "~/api/orchestrator";
 import { useTeams } from "~/api/settings";
 import { useUsageBreakdown } from "~/api/usage";
 import { useRuns, useWorkflows } from "~/api/workflows";
@@ -43,7 +44,7 @@ export interface TeamFeedItem {
 /** Merge the team's assistant runs and workflow runs into one newest-first
  * feed, capped — a dashboard shows the latest activity, not history. */
 export function mergeTeamFeed(
-  children: readonly TeamChildSummary[],
+  children: readonly ChildWorkSummary[],
   runs: readonly GlobalWorkflowRunSummary[],
   cap = 15,
 ): TeamFeedItem[] {
@@ -91,7 +92,8 @@ const TONE_CLASS: Record<TeamFeedItem["tone"], string> = {
 
 export function TeamDashboard({ teamId }: { teamId: string }) {
   const teamsQ = useTeams();
-  const childrenQ = useTeamChildren(teamId);
+  const runtime = useWorkspaceRuntimeInfo(teamId);
+  const childrenQ = useChildWork(runtime.error ? undefined : runtime.data?.sessionId);
   const workflowsQ = useWorkflows({ ownerType: "team", ownerId: teamId });
 
   const team = teamsQ.data?.teams.find((t) => t.id === teamId);
@@ -109,7 +111,7 @@ export function TeamDashboard({ teamId }: { teamId: string }) {
     { enabled: workflowIds !== undefined, refetchInterval: 30_000 },
   );
 
-  const children = childrenQ.data?.children ?? [];
+  const children = childrenQ.error ? [] : flattenChildWork(childrenQ.data);
   const feed = mergeTeamFeed(children, runsQ.data?.runs ?? []);
 
   // The workflows query gates the runs query, so "still loading" includes
@@ -119,7 +121,7 @@ export function TeamDashboard({ teamId }: { teamId: string }) {
     childrenQ.data === undefined ||
     workflowsQ.data === undefined ||
     (workflowIds !== undefined && workflowIds.length > 0 && runsQ.data === undefined);
-  const feedError = childrenQ.error ?? workflowsQ.error ?? runsQ.error;
+  const feedError = runtime.error ?? childrenQ.error ?? workflowsQ.error ?? runsQ.error;
 
   return (
     <div className="min-w-0 flex-1 overflow-y-auto">
@@ -142,6 +144,8 @@ export function TeamDashboard({ teamId }: { teamId: string }) {
         {/* Activity feed */}
         <section aria-label="Team activity" className="space-y-3">
           <h2 className="font-display text-base text-ink">Activity</h2>
+          {!feedError && childrenQ.data && <p className="text-sm text-muted">{childrenQ.data.pages[0]?.runningCount ?? 0} running</p>}
+          <Link to="/chat" search={{ workspace: teamId, view: "work" }} className="text-sm text-moss">View all work</Link>
           {feedError != null ? (
             <div className="space-y-2">
               <ErrorRow>Could not load team activity: {errorText(feedError)}</ErrorRow>
@@ -149,7 +153,8 @@ export function TeamDashboard({ teamId }: { teamId: string }) {
                 type="button"
                 variant="secondary"
                 onClick={() => {
-                  void childrenQ.refetch?.();
+                  void runtime.refetch();
+                  if (runtime.data) void childrenQ.refetch?.();
                   void workflowsQ.refetch?.();
                   void runsQ.refetch?.();
                 }}

@@ -41,14 +41,12 @@ import { deleteTeamResources } from "../services/team-resource-deletion.js";
  * rename orphans the row and the next boot creates a second team beside it.
  */
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { NotFoundError, ValetError } from "@valet/shared";
 import type { AppEnv } from "../env.js";
 import { requirePrincipal } from "../middleware/auth.js";
 import {
-  agentSessions,
   assistants,
-  childWatches,
   contentSources,
   teams,
   type ContentSourceRow,
@@ -61,9 +59,6 @@ import { isOrgAdmin } from "../services/org.js";
 import { validateDefaultModelId } from "../services/model-catalog.js";
 import { assertModelSelectable } from "../services/approved-models.js";
 import { assertReasoningSelectable } from "../services/reasoning.js";
-import {
-  findDefaultAssistant,
-} from "../assistants/service.js";
 import {
   addMember,
   canAdministerTeam,
@@ -91,8 +86,6 @@ import type {
   AddTeamMemberRequest,
   CreateTeamRequest,
   CreateTeamResponse,
-  GetTeamChildrenResponse,
-  TeamChildSummary,
   JoinSuggestedTeamResponse,
   ListSuggestedTeamsResponse,
   ListTeamMembersResponse,
@@ -262,73 +255,6 @@ teamsRouter.post("/:id/join", async (c) => {
   });
   if (!joined) return c.json({ error: "team not found" }, 404);
   return c.json({ joined: true } satisfies JoinSuggestedTeamResponse);
-});
-
-// ── Children (team dashboard) ───────────────────────────────────────────
-
-/** Recent child runs from the team runtime. Threads provides the full work history. */
-teamsRouter.get("/:id/children", async (c) => {
-  const { db } = c.var.providers;
-  const user = c.var.user;
-  const id = c.req.param("id");
-
-  const team = await loadTeamInOrg(db, id, user.orgId);
-  if (!team) return c.json({ error: "team not found" }, 404);
-  if (!(await canViewTeam(db, id, user.id))) return c.json({ error: "team not found" }, 404);
-
-  const runtime = await findDefaultAssistant(db, user.orgId, { type: "team", id });
-  if (!runtime || runtime.archivedAt !== null) return c.json({ children: [] });
-
-  const selection = {
-    sessionId: childWatches.childSessionId,
-    parentSessionId: childWatches.parentSessionId,
-    parentThreadId: childWatches.parentThreadId,
-    settled: childWatches.settled,
-    createdAt: childWatches.createdAt,
-    title: agentSessions.title,
-    lastActivityAt: agentSessions.lastActivityAt,
-  };
-  const parentFilter = and(
-    eq(childWatches.parentSessionId, runtime.sessionId),
-    isNull(childWatches.dismissedAt),
-  );
-  // Two reads, merged: the newest window feeds the dashboard, and RUNNING
-  // rows ride along unconditionally — a still-running child older than the
-  // window must not read as idle just because 20 quick runs settled after
-  // it started. Both are bounded; running rows cap at the same 20.
-  const [newest, running] = await Promise.all([
-    db
-      .select(selection)
-      .from(childWatches)
-      .innerJoin(agentSessions, eq(agentSessions.id, childWatches.childSessionId))
-      .where(parentFilter)
-      .orderBy(desc(sql`COALESCE(${agentSessions.lastActivityAt}, ${childWatches.createdAt})`))
-      .limit(20),
-    db
-      .select(selection)
-      .from(childWatches)
-      .innerJoin(agentSessions, eq(agentSessions.id, childWatches.childSessionId))
-      .where(and(parentFilter, eq(childWatches.settled, false)))
-      .orderBy(desc(sql`COALESCE(${agentSessions.lastActivityAt}, ${childWatches.createdAt})`))
-      .limit(20),
-  ]);
-  const seen = new Set<string>();
-  const rows = [...newest, ...running]
-    .filter((r) => (seen.has(r.sessionId) ? false : (seen.add(r.sessionId), true)))
-    .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt));
-
-  const children: TeamChildSummary[] = rows.map((r) => {
-    return {
-      sessionId: r.sessionId,
-      title: r.title ?? r.sessionId,
-      parentThreadId: r.parentThreadId,
-      status: r.settled ? "settled" : "running",
-      createdAt: r.createdAt,
-    };
-  });
-
-  const body: GetTeamChildrenResponse = { children };
-  return c.json(body);
 });
 
 // ── Members: list ────────────────────────────────────────────────────────

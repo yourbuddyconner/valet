@@ -1,7 +1,7 @@
 /**
  * Workflows queries (engine v2 Phase 5 decision 19 — deliberately spartan
  * web surface). House pattern: a query-key factory per resource file,
- * mirroring `~/api/memory` / `~/api/orchestrator`.
+ * mirroring `~/api/memory` / `~/api/workspace-runtime`.
  */
 import {
   useMutation,

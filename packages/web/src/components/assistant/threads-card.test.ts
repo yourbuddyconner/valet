@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { OrchestratorChildSummary, ThreadSummary } from "@valet/api/wire";
+import type { ChildWorkSummary, ThreadSummary } from "@valet/api/wire";
 import { threadActivity } from "./threads-card";
 
 function thread(id: string, createdAt: number, title?: string): ThreadSummary {
   return { id, sessionId: "s1", title, createdAt, lastUserActivityAt: createdAt };
 }
 
-function child(parentThreadId: string, status: OrchestratorChildSummary["status"]): OrchestratorChildSummary {
+function child(parentThreadId: string, status: ChildWorkSummary["status"]): ChildWorkSummary {
   return {
     sessionId: `c-${Math.abs(parentThreadId.length * 7)}-${status}`,
     parentThreadId,
     title: "child",
     status,
-  } as OrchestratorChildSummary;
+  } as ChildWorkSummary;
 }
 
 describe("threadActivity", () => {

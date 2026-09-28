@@ -4,7 +4,7 @@
  * default-model typeahead's filter/select/clear, the enable-organizations
  * card's gate visibility + PATCH-then-navigate, appearance's theme
  * radio-cards, and the notifications toggle. Mocks `~/api/settings` /
- * `~/api/orchestrator` / `~/api/queries` / `@tanstack/react-router` the same
+ * `~/api/workspace-runtime` / `~/api/queries` / `@tanstack/react-router` the same
  * way `-integrations.test.tsx` mocks `~/api/integrations` — these tests
  * only care what each section renders and which mutation it fires, not that
  * TanStack Query or the router themselves resolve anything.
@@ -94,7 +94,7 @@ vi.mock("~/api/settings", async (importOriginal) => {
   };
 });
 
-vi.mock("~/api/orchestrator", () => ({
+vi.mock("~/api/workspace-runtime", () => ({
   useOrchestratorInfo: () => ({
     data: { sessionId: "s1", name: "Valet", personality: null, presence: "idle", activeChildren: 0 },
     isLoading: false,

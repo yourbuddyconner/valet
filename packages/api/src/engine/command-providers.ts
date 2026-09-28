@@ -150,7 +150,7 @@ export function makeWorkspaceSkillsProvider(
  * serves — filtered to the picker-visible (active) set, mapped to `{ id, name }`.
  *
  * `listChildSessions` joins `child_watches` to `agent_sessions` for this
- * session's children (the same source `GET /api/orchestrator/children` reads),
+ * session's children (the same source `GET /api/sessions/:sessionId/children` reads),
  * newest first. `status` is `"settled"` or `"running"`, mirroring that route.
  */
 export function makeCommandContext(

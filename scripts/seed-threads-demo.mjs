@@ -90,6 +90,21 @@ if (mode === 'bootstrap') {
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   console.log(`Work and artifacts: http://localhost:5173/chat?workspace=${encodeURIComponent(manifest.teamId)}&view=work`);
   console.log(`Thread artifact: http://localhost:5173/chat?workspace=${encodeURIComponent(manifest.teamId)}&thread=${encodeURIComponent(origin.threadId)}`);
+} else if (mode === 'child-work') {
+  const me = await request('/me');
+  if (me.id !== 'local-user' || me.orgId !== 'local-org') throw new Error('Seed requires the local stub identity.');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.childWorkSessionIds ??= [];
+  while (manifest.childWorkSessionIds.length < 27) {
+    const number = manifest.childWorkSessionIds.length + 1;
+    const child = await request('/sessions', 'POST', {
+      workspace: `${dataDir}/demo-child-${number}`, teamId: manifest.teamId,
+      title: `[Demo fixture] Child work ${number} — no task executed`,
+    });
+    manifest.childWorkSessionIds.push(child.id);
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+  console.log('Created 27 empty execution fixtures. Stop the API, then run offline to attach their child-work records.');
 } else if (mode === 'offline') {
   // PGlite permits one owner. Do not open the data directory while the API runs.
   try {
@@ -113,6 +128,10 @@ if (mode === 'bootstrap') {
         }
         await tx.query('UPDATE engine_threads SET active_leaf_entry_id=$1 WHERE id=$2 AND session_id=$3 AND (active_leaf_entry_id IS NULL OR active_leaf_entry_id=$4)', [replyId,record.threadId,record.sessionId,userId]);
       }
+      const origin = manifest.records.find(record => record.scope === 'team');
+      for (const [index, childId] of (manifest.childWorkSessionIds ?? []).entries()) {
+        await tx.query('INSERT INTO child_watches (child_session_id,queue_item_id,parent_session_id,parent_thread_id,actor_user_id,org_id,settled,created_at,settled_at) VALUES ($1,$2,$3,$4,$5,$6,true,$7,$7) ON CONFLICT (child_session_id) DO NOTHING', [childId,`demo-child-${childId}`,origin.sessionId,origin.threadId,'local-user','local-org',now-index*1000]);
+      }
       const problems = [
         ['filter_excluded', '[Demo] An NDA form event arrived, but its text did not match the subscription. Compare the raw message text with the configured filter, including leading emoji.'],
         ['unknown_org', '[Demo] The Slack connection is unavailable. Ask an organization administrator to inspect the integration settings.'],
@@ -126,5 +145,5 @@ if (mode === 'bootstrap') {
     for (const row of manifest.records) console.log(`${row.title}: http://localhost:5173/chat?workspace=${encodeURIComponent(row.scope === 'team' ? manifest.teamId : 'user')}&thread=${encodeURIComponent(row.threadId)}`);
   } finally { await db.close(); }
 } else {
-  throw new Error('Use bootstrap, workflow, or review with the API running, or offline after stopping it.');
+  throw new Error('Use bootstrap, workflow, review, or child-work with the API running, or offline after stopping it.');
 }

@@ -1,5 +1,5 @@
 /**
- * Integration test: `GET /api/orchestrator/children?sessionId=` scopes the
+ * Integration test: `GET /api/sessions/:sessionId/children` scopes the
  * children list to ONE assistant session, so a team assistant's runs nest
  * under it in the chat thread tree instead of borrowing the caller's personal
  * children (or vanishing). Authority is the assistant's owner, checked without
@@ -9,7 +9,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { bootTestApi, type TestApi } from "./_setup.js";
 import { agentSessions, childWatches } from "../schema/index.js";
 import type {
-  GetOrchestratorChildrenResponse,
+  ChildWorkResponse,
   WorkspaceRuntimeInfoResponse,
 } from "../wire/types.js";
 
@@ -56,38 +56,33 @@ async function seedChild(parentSessionId: string, id: string): Promise<void> {
   });
 }
 
-describe("GET /api/orchestrator/children?sessionId=", () => {
+describe("GET /api/sessions/:sessionId/children", () => {
   it("lists the named assistant's children, scoped to that parent", async () => {
     api = await bootTestApi();
     const parent = await assistantSessionIdFor(api);
     await seedChild(parent, "child-scoped");
 
     const res = await fetch(
-      `${api.baseUrl}/api/orchestrator/children?sessionId=${encodeURIComponent(parent)}`,
+      `${api.baseUrl}/api/sessions/${encodeURIComponent(parent)}/children`,
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as GetOrchestratorChildrenResponse;
+    const body = (await res.json()) as ChildWorkResponse;
     expect(body.children.map((ch) => ch.sessionId)).toContain("child-scoped");
   });
 
   it("404s for a session the caller cannot view", async () => {
     api = await bootTestApi();
     const res = await fetch(
-      `${api.baseUrl}/api/orchestrator/children?sessionId=assistant:asst_not_mine`,
+      `${api.baseUrl}/api/sessions/assistant:asst_not_mine/children`,
     );
     // Existence-hiding: an unknown or unreachable parent is "not found", not
     // an empty list — an empty list would confirm the id is real.
     expect(res.status).toBe(404);
   });
 
-  it("without the param still reads the caller's own default assistant", async () => {
+  it("removes the implicit personal runtime endpoint", async () => {
     api = await bootTestApi();
-    const parent = await assistantSessionIdFor(api);
-    await seedChild(parent, "child-default");
-
     const res = await fetch(`${api.baseUrl}/api/orchestrator/children`);
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as GetOrchestratorChildrenResponse;
-    expect(body.children.map((ch) => ch.sessionId)).toContain("child-default");
+    expect(res.status).toBe(404);
   });
 });

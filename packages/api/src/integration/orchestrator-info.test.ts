@@ -5,7 +5,7 @@ import { writeFile } from "../services/memory.js";
 import { addMember, createTeam } from "../services/teams.js";
 import { defaultAssistantSessionFor } from "../test-helpers/assistant-session.js";
 import type {
-  GetOrchestratorChildrenResponse,
+  ChildWorkResponse,
   WorkspaceRuntimeInfoResponse
 } from "../wire/types.js";
 import { bootTestApi, type TestApi } from "./_setup.js";
@@ -109,7 +109,7 @@ describe("GET /api/workspaces/user/runtime/info", () => {
   });
 });
 
-describe("GET /api/orchestrator/children", () => {
+describe("GET /api/sessions/:sessionId/children", () => {
   it("lists child_watches rows joined to their agent_sessions title, newest first", async () => {
     api = await bootTestApi();
     const { db } = api.providers;
@@ -170,9 +170,9 @@ describe("GET /api/orchestrator/children", () => {
         },
       ]);
 
-    const res = await fetch(`${api.baseUrl}/api/orchestrator/children`);
+    const res = await fetch(`${api.baseUrl}/api/sessions/${encodeURIComponent(await assistantSessionIdFor(api))}/children`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as GetOrchestratorChildrenResponse;
+    const body = (await res.json()) as ChildWorkResponse;
 
     expect(body.children).toHaveLength(2);
     // Newest first.
@@ -222,8 +222,8 @@ describe("GET /api/orchestrator/children", () => {
         createdAt: now,
       });
 
-    const res = await fetch(`${api.baseUrl}/api/orchestrator/children`);
-    const body = (await res.json()) as GetOrchestratorChildrenResponse;
+    const res = await fetch(`${api.baseUrl}/api/sessions/${encodeURIComponent(await assistantSessionIdFor(api))}/children`);
+    const body = (await res.json()) as ChildWorkResponse;
     expect(body.children).toHaveLength(0);
   });
 });

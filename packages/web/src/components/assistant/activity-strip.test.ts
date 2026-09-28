@@ -3,7 +3,7 @@
  * into one feed, newest first, capped at 8. Pure — no queries mounted.
  */
 import { describe, expect, it } from "vitest";
-import type { NotificationSummary, OrchestratorChildSummary } from "@valet/api/wire";
+import type { NotificationSummary, ChildWorkSummary } from "@valet/api/wire";
 import { mergeActivity } from "./activity-strip";
 
 function notification(id: string, createdAt: number): NotificationSummary {
@@ -13,8 +13,8 @@ function notification(id: string, createdAt: number): NotificationSummary {
 function child(
   id: string,
   createdAt: number,
-  status: OrchestratorChildSummary["status"] = "settled",
-): OrchestratorChildSummary {
+  status: ChildWorkSummary["status"] = "settled",
+): ChildWorkSummary {
   return { sessionId: id, title: `child-${id}`, parentThreadId: "thread-1", status, createdAt };
 }
 

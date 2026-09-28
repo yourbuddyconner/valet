@@ -25,7 +25,7 @@ vi.mock("~/api/memory", async (importOriginal) => {
   };
 });
 
-vi.mock("~/api/orchestrator", () => ({
+vi.mock("~/api/workspace-runtime", () => ({
   useOrchestratorInfo: () => ({ data: { name: "Nova" } }),
 }));
 

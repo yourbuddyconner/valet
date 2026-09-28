@@ -46,7 +46,7 @@ vi.mock("~/api/settings", async (importOriginal) => {
   };
 });
 
-vi.mock("~/api/orchestrator", () => ({
+vi.mock("~/api/workspace-runtime", () => ({
   useWorkspaceRuntimeInfo: (workspace: string) => (infoWorkspace(workspace), {
     data: {
       sessionId: "orchestrator:user-1",

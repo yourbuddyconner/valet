@@ -2,8 +2,8 @@
  * Integration test: dismiss a settled child from the orchestrator tree.
  *
  * Dismiss is app-side display state (`child_watches.dismissed_at`): a
- * dismissed watch leaves GET /api/orchestrator/children, but the child
- * session row and its history stay reachable from the Sessions page.
+ * dismissed watch leaves GET /api/sessions/:sessionId/children, but the child
+ * session row and its history stay reachable from the Threads work view.
  * Only settled children can be dismissed. Ungated — no Anthropic key.
  */
 import { describe, it, expect, afterEach } from "vitest";
@@ -11,7 +11,8 @@ import { eq } from "drizzle-orm";
 import { bootTestApi, type TestApi } from "./_setup.js";
 import { agentSessions, childWatches } from "../schema/index.js";
 import type {
-  GetOrchestratorChildrenResponse,
+  ChildWorkResponse,
+  GetSessionResponse,
   WorkspaceRuntimeInfoResponse,
 } from "../wire/types.js";
 
@@ -60,25 +61,25 @@ async function insertChild(opts: { id: string; settled: boolean }): Promise<void
   });
 }
 
-describe("POST /api/orchestrator/children/:childSessionId/dismiss", () => {
+describe("POST /api/sessions/:sessionId/children/:childSessionId/dismiss", () => {
   it("hides a settled child from the list; the session row survives", async () => {
     api = await bootTestApi();
     await insertChild({ id: "child-a", settled: true });
 
     const before = (await (
-      await fetch(`${api.baseUrl}/api/orchestrator/children`)
-    ).json()) as GetOrchestratorChildrenResponse;
+      await fetch(`${api.baseUrl}/api/sessions/${encodeURIComponent(await assistantSessionIdFor(api))}/children`)
+    ).json()) as ChildWorkResponse;
     expect(before.children.map((ch) => ch.sessionId)).toContain("child-a");
 
     const dismiss = await fetch(
-      `${api.baseUrl}/api/orchestrator/children/child-a/dismiss`,
+      `${api.baseUrl}/api/sessions/${encodeURIComponent(await assistantSessionIdFor(api))}/children/child-a/dismiss`,
       { method: "POST" },
     );
     expect(dismiss.status).toBe(200);
 
     const after = (await (
-      await fetch(`${api.baseUrl}/api/orchestrator/children`)
-    ).json()) as GetOrchestratorChildrenResponse;
+      await fetch(`${api.baseUrl}/api/sessions/${encodeURIComponent(await assistantSessionIdFor(api))}/children`)
+    ).json()) as ChildWorkResponse;
     expect(after.children.map((ch) => ch.sessionId)).not.toContain("child-a");
 
     // The watch row is marked dismissed, not deleted, and the child's
@@ -93,6 +94,12 @@ describe("POST /api/orchestrator/children/:childSessionId/dismiss", () => {
       .from(agentSessions)
       .where(eq(agentSessions.id, "child-a"));
     expect(sessionRows[0]?.status).toBe("active");
+    const detail = await (await fetch(`${api.baseUrl}/api/sessions/child-a`)).json() as GetSessionResponse;
+    expect(detail.parentWork).toEqual({ sessionId: await assistantSessionIdFor(api), threadId: "th-1" });
+    await api.providers.db.update(agentSessions).set({ ownerId: "test-member", userId: "test-member" }).where(eq(agentSessions.id, "child-a"));
+    const moved = await fetch(`${api.baseUrl}/api/sessions/child-a`, { headers: { "x-valet-test-user-id": "test-member" } });
+    expect(moved.status).toBe(200);
+    expect(await moved.json()).not.toHaveProperty("parentWork");
   });
 
   it("a second dismiss is idempotent: the first dismissedAt timestamp survives", async () => {
@@ -100,7 +107,7 @@ describe("POST /api/orchestrator/children/:childSessionId/dismiss", () => {
     await insertChild({ id: "child-twice", settled: true });
 
     const first = await fetch(
-      `${api.baseUrl}/api/orchestrator/children/child-twice/dismiss`,
+      `${api.baseUrl}/api/sessions/${encodeURIComponent(await assistantSessionIdFor(api))}/children/child-twice/dismiss`,
       { method: "POST" },
     );
     expect(first.status).toBe(200);
@@ -113,7 +120,7 @@ describe("POST /api/orchestrator/children/:childSessionId/dismiss", () => {
 
     await new Promise((r) => setTimeout(r, 10));
     const second = await fetch(
-      `${api.baseUrl}/api/orchestrator/children/child-twice/dismiss`,
+      `${api.baseUrl}/api/sessions/${encodeURIComponent(await assistantSessionIdFor(api))}/children/child-twice/dismiss`,
       { method: "POST" },
     );
     expect(second.status).toBe(200);
@@ -129,7 +136,7 @@ describe("POST /api/orchestrator/children/:childSessionId/dismiss", () => {
     await insertChild({ id: "child-b", settled: false });
 
     const dismiss = await fetch(
-      `${api.baseUrl}/api/orchestrator/children/child-b/dismiss`,
+      `${api.baseUrl}/api/sessions/${encodeURIComponent(await assistantSessionIdFor(api))}/children/child-b/dismiss`,
       { method: "POST" },
     );
     expect(dismiss.status).toBe(409);
@@ -144,7 +151,7 @@ describe("POST /api/orchestrator/children/:childSessionId/dismiss", () => {
   it("404s for a child that belongs to no watch of this orchestrator", async () => {
     api = await bootTestApi();
     const dismiss = await fetch(
-      `${api.baseUrl}/api/orchestrator/children/nope/dismiss`,
+      `${api.baseUrl}/api/sessions/${encodeURIComponent(await assistantSessionIdFor(api))}/children/nope/dismiss`,
       { method: "POST" },
     );
     expect(dismiss.status).toBe(404);

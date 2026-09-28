@@ -1,7 +1,7 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Menu, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
 import { useChangelog } from "~/api/changelog";
-import { useWorkspaceRuntimeInfo } from "~/api/orchestrator";
+import { useWorkspaceRuntimeInfo } from "~/api/workspace-runtime";
 import { useSession } from "~/api/queries";
 import { pluginEnabledForCaller, useMe, useOrg, useTeams } from "~/api/settings";
 import { PresenceMark } from "~/components/assistant/presence-mark";

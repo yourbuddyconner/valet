@@ -1,7 +1,7 @@
 /**
  * Plugins + credentials queries (plugin-system-v2 plan Task 15 — connect
  * surface, manual token entry only). House pattern: a query-key factory per
- * resource file, mirroring `~/api/workflows` / `~/api/orchestrator`.
+ * resource file, mirroring `~/api/workflows` / `~/api/workspace-runtime`.
  */
 import {
   useMutation,

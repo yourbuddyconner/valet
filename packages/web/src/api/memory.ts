@@ -1,7 +1,7 @@
 /**
  * Memory queries (assistant-centered web UI, decision 7). House pattern: a
  * query-key factory per resource file, mirroring `~/api/queries` and
- * `~/api/orchestrator`. The dashboard memory card uses `tree` + `doc`; the
+ * `~/api/workspace-runtime`. The dashboard memory card uses `tree` + `doc`; the
  * Task 6 explorer adds `search` on top of the same factory.
  */
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";

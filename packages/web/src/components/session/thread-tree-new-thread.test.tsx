@@ -67,10 +67,9 @@ vi.mock("~/api/settings", async (importOriginal) => {
 });
 
 const runtimeInfo = vi.fn((_workspace?: string) => ({ data: { sessionId: "orchestrator:user-1" } }));
-vi.mock("~/api/orchestrator", () => ({
+vi.mock("~/api/workspace-runtime", () => ({
   useWorkspaceRuntimeInfo: (workspace: string | undefined) => runtimeInfo(workspace),
-  useOrchestratorChildren: () => ({ data: { children: [] }, refetch: vi.fn() }),
-  useDismissChild: () => ({ mutateAsync: vi.fn(), isPending: false }),
+
 }));
 
 vi.mock("~/stores/stream", () => ({
@@ -109,4 +108,12 @@ describe("ThreadTree — new thread affordance", () => {
       child: undefined,
     });
   });
+});
+
+vi.mock("~/api/child-work", async (importOriginal) => {
+ const actual = await importOriginal<typeof import("~/api/child-work")>();
+ return { ...actual,
+  useChildWork: () => ({ data: { pages: [{ children: [], runningCount: 0, nextCursor: null }] }, refetch: vi.fn() }),
+  useDismissChild: () => ({ mutateAsync: vi.fn(), isPending: false }),
+ };
 });
