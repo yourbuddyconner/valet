@@ -250,6 +250,13 @@ END $cost_view$`;
  */
 
 const SCHEMA_REPAIRS: SchemaRepair[] = [
+  { describe: "workspace briefing cache", probe: { kind: "table", table: "workspace_briefing_cache" }, sql: `CREATE TABLE IF NOT EXISTS "workspace_briefing_cache" (
+    "org_id" text NOT NULL, "owner_type" text NOT NULL, "owner_id" text NOT NULL,
+    "version" text NOT NULL, "evidence_hash" text, "response" jsonb,
+    "checked_at" bigint, "next_check_at" bigint NOT NULL DEFAULT 0,
+    "lease_token" text, "lease_until" bigint NOT NULL DEFAULT 0,
+    PRIMARY KEY ("org_id", "owner_type", "owner_id")
+  )` },
   { describe: "event receipts table", probe: { kind: "table", table: "event_receipts" }, sql: `CREATE TABLE IF NOT EXISTS "event_receipts" (
   "id" text PRIMARY KEY, "org_id" text NOT NULL, "service" text NOT NULL,
   "external_id" text, "metadata" jsonb NOT NULL DEFAULT '{}',

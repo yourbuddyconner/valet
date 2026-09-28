@@ -29,6 +29,8 @@ function ScopedBriefings({ owner }: { owner: OwnerFilter }) {
       <ErrorRow>Could not prepare your briefing. <button className="underline" onClick={() => void briefings.refetch()}>Retry</button></ErrorRow>
     ) : briefings.isPending ? (
       <LoadingRow label="Preparing your briefing…" />
+    ) : briefings.data.refreshing && briefings.data.briefings.length === 0 ? (
+      <LoadingRow label="Updating your briefing…" />
     ) : briefings.data.unavailable ? (
       <div className="space-y-3 rounded-lg border border-line p-5">
         <p className="text-sm text-muted">Your briefing is unavailable. Retry to prepare it from your recent work.</p>
@@ -39,7 +41,7 @@ function ScopedBriefings({ owner }: { owner: OwnerFilter }) {
     ) : (
       <div className="space-y-4">
         {briefings.data.briefings.map(briefing => <BriefingCard key={briefing.id} briefing={briefing} />)}
-        <p className="text-xs text-muted">Based on recent work{briefings.data.generatedAt ? ` · Prepared ${relativeTime(briefings.data.generatedAt)}` : ""}</p>
+        <p className="text-xs text-muted">Based on recent work{briefings.data.checkedAt ? ` · Checked ${relativeTime(briefings.data.checkedAt)}` : ""}{briefings.data.refreshing ? " · Updating…" : ""}</p>
       </div>
     )}
     <details onToggle={event => setShowActivity(event.currentTarget.open)}>
@@ -58,27 +60,22 @@ const STATUS: Record<WorkspaceBriefing["status"], { label: string; variant: "war
 function BriefingCard({ briefing }: { briefing: WorkspaceBriefing }) {
   const headingId = useId();
   const status = STATUS[briefing.status];
-  const sources = briefing.sources;
+  const sources = [...briefing.sources].sort((a, b) => Number(b.kind === "pull_request") - Number(a.kind === "pull_request"));
   return <article aria-labelledby={headingId} className="rounded-xl border border-line bg-paper p-5 sm:p-6">
     <header className="mb-4 space-y-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h2 id={headingId} className="min-w-0 flex-1 break-words font-display text-xl text-ink">{briefing.title}</h2>
         <Badge variant={status.variant}>{status.label}</Badge>
       </div>
-      <p className="text-sm leading-relaxed text-muted">{briefing.context}</p>
     </header>
     <p className="whitespace-pre-line text-base leading-relaxed text-ink">{briefing.summary}</p>
-    {briefing.nextStep && <div className="mt-4 rounded-lg bg-ink-wash px-4 py-3">
-      <p className="mb-1 text-xs font-semibold text-ink">Next step</p>
-      <p className="text-sm leading-relaxed text-ink">{briefing.nextStep}</p>
-    </div>}
     <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
       {briefing.latestThread ? <Link
         to="/sessions/$sessionId"
         params={{ sessionId: briefing.latestThread.sessionId }}
         search={{ thread: briefing.latestThread.threadId }}
         className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-moss underline-offset-4 hover:underline sm:min-h-0"
-      >Continue in latest thread <ArrowRight aria-hidden className="h-4 w-4" /></Link> : <span className="text-sm text-muted">No linked conversation</span>}
+      >Latest thread <ArrowRight aria-hidden className="h-4 w-4" /></Link> : <span className="text-sm text-muted">No linked conversation</span>}
       <span className="text-xs text-muted">Updated {relativeTime(briefing.updatedAt)}</span>
     </div>
     {sources.length > 0 && <div className="mt-4 border-t border-line pt-3">

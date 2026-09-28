@@ -5297,15 +5297,15 @@ export interface WorkspaceBriefingSource {
 export interface WorkspaceBriefing {
   id: string;
   title: string;
-  context: string;
   summary: string;
-  nextStep?: string;
   status: "needs_attention" | "in_progress" | "updated";
   updatedAt: number;
   latestThread: { sessionId: string; threadId: string; title?: string } | null;
   sources: WorkspaceBriefingSource[];
 }
 export interface WorkspaceBriefingsResponse {
+  checkedAt?: number | null;
+  refreshing?: boolean;
   briefings: WorkspaceBriefing[];
   generatedAt: number | null;
   coverage: "recent";

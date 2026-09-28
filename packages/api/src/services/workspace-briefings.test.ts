@@ -12,8 +12,8 @@ const evidence: BriefingEvidence[] = [
   { source: { id: "run", kind: "workflow", title: "Check TKAI-559", updatedAt: 25, runId: "run" }, content: "Sequential check passed. Concurrent deliveries remain untested.", state: "updated" },
   { source: { id: "artifact", kind: "artifact", title: "Notes", updatedAt: 30, sessionId: "work", threadId: "request", token: "token" }, content: "Published notes on TKAI-559.", state: "updated" },
 ];
-const answer = JSON.stringify({ briefings: [{ title: "Intake deduplication", context: "Prevent duplicate work for TKAI-559.",
-  summary: "Sequential deliveries pass, but concurrent delivery remains unverified.", nextStep: "Approve the concurrent check before release.", sourceIds: ["first","latest","run","artifact"] }] });
+const answer = JSON.stringify({ briefings: [{ title: "Intake deduplication",
+  summary: "Sequential deliveries pass. Approve the concurrent check before release.", sourceIds: ["first","latest","run","artifact"] }] });
 
 describe("workspace briefing synthesis", () => {
   it("groups evidence from two conversations and a run while the server chooses the latest conversation", () => {
@@ -26,7 +26,7 @@ describe("workspace briefing synthesis", () => {
   it("rejects invented source IDs and prose links, and never invents a thread for run-only evidence", () => {
     expect(() => parseWorkspaceBriefings(answer.replace('"first"','"made-up"'),evidence)).toThrow("Unknown briefing source");
     expect(() => parseWorkspaceBriefings(answer.replace("Intake deduplication","https://evil.example"),evidence)).toThrow();
-    const runOnly = JSON.stringify({ briefings: [{ title: "Intake verification", context: "Check concurrent delivery.", summary: "Concurrent deliveries remain untested.", sourceIds: ["run"] }] });
+    const runOnly = JSON.stringify({ briefings: [{ title: "Intake verification", summary: "Concurrent deliveries remain untested.", sourceIds: ["run"] }] });
     expect(parseWorkspaceBriefings(runOnly,evidence)[0].latestThread).toBeNull();
   });
   it("coalesces identical requests and binds the cache to full evidence, org and owner", async () => {

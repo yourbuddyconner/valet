@@ -2453,3 +2453,12 @@ CREATE TABLE IF NOT EXISTS "event_receipts" (
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "event_receipts_page" ON "event_receipts" ("org_id", "created_at", "id");
+
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "workspace_briefing_cache" (
+  "org_id" text NOT NULL, "owner_type" text NOT NULL, "owner_id" text NOT NULL,
+  "version" text NOT NULL, "evidence_hash" text, "response" jsonb,
+  "checked_at" bigint, "next_check_at" bigint NOT NULL DEFAULT 0,
+  "lease_token" text, "lease_until" bigint NOT NULL DEFAULT 0,
+  PRIMARY KEY ("org_id", "owner_type", "owner_id")
+);

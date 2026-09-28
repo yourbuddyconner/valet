@@ -298,12 +298,18 @@ These fixtures make no GitHub or Slack changes. Example outcome links use
 ### Contextual briefings
 
 The primary view groups recent evidence by the underlying goal across conversations and workflow runs.
-Each brief explains the goal, current findings, and outstanding decision or next
-step. PRs, artifacts, and runs support that explanation rather than form the page.
+Each brief has a goal title and one short paragraph with the result and remaining
+action. It has no separate context or next-step sections. PRs, artifacts, and runs support that explanation rather than form the page.
 
 The server gathers bounded, authorized conversation and run context, then requests
-a short synthesis through the existing model client. A bounded content-hash cache
-and concurrent-request coalescing avoid repeated generation for unchanged evidence.
+a short synthesis through the existing model client. A durable workspace cache
+stores the evidence hash, generation version, and response. Requests check sources
+at most once per minute per workspace. Unchanged evidence reuses the saved brief
+across server restarts. An atomic lease coalesces checks across API replicas.
+Failed generation backs off before retrying; changed evidence invalidates old links.
+Every read checks source ownership and revocation using bounded IDs. It does not
+load transcript bodies on cache hits. Workflow heartbeat timestamps alone do not
+trigger generation. A short polling interval applies only during shared generation.
 The context budget reserves space for workflows, artifacts, and confirmed effects
 so conversations cannot exclude all outputs. Model calls have a timeout. Failed generation shows an unavailable state with Retry.
 It does not replace a briefing with an invented summary based on titles.
@@ -317,3 +323,12 @@ Coverage is recent workspace evidence, not complete ticket history. Narrative
 claims remain grounded in source records. Local fixtures retain their demo label.
 The seed spans two Threads rollout conversations, an NDA request and legal follow-up,
 and an intake investigation with two workflow runs.
+
+PR links come from confirmed action results and terminal outcome markers. Explicit
+thread, run, and source URL relationships retain outputs omitted by synthesis.
+PR links appear before other sources. These records prove creation, not current
+open, merged, or review state. Live PR status synchronization remains separate.
+
+Freshness is checked on demand while the page is open. This is a workspace cache,
+not a background scheduler or a persistent per-goal index. Changed evidence still
+regenerates the bounded workspace synthesis; unchanged page reads do not call a model.

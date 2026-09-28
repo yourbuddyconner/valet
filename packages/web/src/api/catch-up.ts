@@ -45,6 +45,6 @@ export function useWorkspaceBriefings(owner: OwnerFilter) {
     queryKey: qkCatchUp.briefings(owner),
     queryFn: () => api.getWorkspaceBriefings(owner),
     staleTime: 60_000,
-    refetchInterval: 60_000,
+    refetchInterval: query => query.state.data?.refreshing ? 2_000 : 60_000,
   });
 }
