@@ -4,7 +4,7 @@ import type { RunHost } from "@valet/workflow";
 import { and, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { eventDeliveries, eventDropLog, events, eventSubscriptions, orgMembers, teamMembers, teams, userIdentityLinks } from "../schema/index.js";
+import { eventDeliveries, eventDropLog, eventReceipts, events, eventSubscriptions, orgMembers, teamMembers, teams, userIdentityLinks } from "../schema/index.js";
 import { freshTestPgDb, type TestPgDb } from "../test-helpers/pg-test-db.js";
 import { PgWorkflowStore } from "../workflows/pg-store.js";
 import { EventDispatcher, type OrchestratorDeliverFn } from "./dispatcher.js";
@@ -120,6 +120,11 @@ describe("team assistant mentions through the org bot event pipeline", () => {
     expect(rows).not.toEqual(expect.arrayContaining([expect.objectContaining({ reason: "filter_excluded" })]));
     expect(JSON.stringify(rows)).not.toContain("Help us");
     expect(JSON.stringify(rows)).not.toContain("C1");
+    const [receipt] = await tdb.appDb.select().from(eventReceipts);
+    expect(receipt.stages).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "subscription_match", outcome: "authorization_denied" })]));
+    expect(receipt.subscriptions).toEqual(expect.arrayContaining([expect.objectContaining({ outcome: "authorization_denied" })]));
+    expect(JSON.stringify(receipt)).not.toContain("Help us");
+    expect(JSON.stringify(receipt)).not.toContain("U_X");
   });
 
   it("redacts an unauthorized sender from a team-only filter miss", async () => {
@@ -140,7 +145,7 @@ describe("team assistant mentions through the org bot event pipeline", () => {
     const rows = await tdb.appDb.select().from(eventDropLog);
     expect(rows).toEqual([expect.objectContaining({
       reason: "filter_excluded",
-      eventMetadata: expect.objectContaining({ channel: "C2", text: "Help us" }),
+      eventMetadata: expect.objectContaining({ channel: "C2" }),
     })]);
     expect(rows).not.toEqual(expect.arrayContaining([expect.objectContaining({ reason: "not_team_member" })]));
   });

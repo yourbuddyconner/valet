@@ -17,6 +17,7 @@ import type {
   GetEventCatalogResponse,
   GetEventResponse,
   ListEventDropsResponse,
+  ListEventReceiptsResponse,
   ListEventsResponse,
   ListEventSubscriptionsResponse,
   PatchEventSubscriptionRequest,
@@ -211,5 +212,15 @@ export function useDeleteEventSubscription() {
     onSuccess: () => {
       invalidateSubscriptionReaders(qc);
     },
+  });
+}
+
+/** Receipt logs are org-wide and admin-only. No placeholder data crosses a search or page boundary. */
+export function useEventReceipts(orgId: string | undefined, params: { q?: string; cursor?: string; limit?: number }, enabled: boolean) {
+  return useQuery<ListEventReceiptsResponse>({
+    queryKey: ["events", "receipts", orgId, params.q ?? "", params.cursor ?? "", params.limit ?? 25],
+    queryFn: () => api.listEventReceipts(params),
+    enabled: enabled && !!orgId,
+    refetchInterval: params.q || params.cursor ? false : 30_000,
   });
 }

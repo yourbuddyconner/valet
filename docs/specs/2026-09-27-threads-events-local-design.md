@@ -232,3 +232,32 @@ that link unless both sides still have the same owner and organization.
 
 The local child-work seed creates 27 empty execution fixtures. Offline seeding
 attaches settled watch records so pagination can be reviewed without running tasks.
+
+### Durable event receipts
+
+Events includes an organization-admin Delivery log. Receipt records retain bounded
+metadata for up to seven days, with a 10,000-record organization cap. Search accepts
+provider IDs, channel IDs, event keys, and processing outcomes. Pagination binds the
+organization and search. Members and team API keys cannot read these organization
+wide records, including through a copied cursor.
+
+A Slack receipt is written after signature verification and before acknowledgement.
+Each retry gets its own receipt and retains its provider event ID and retry metadata.
+Workspace checks, direct-channel processing, classification, subscription decisions,
+persistence, dispatch, and followed-thread checks append timestamped stages. A receipt
+with no later stage can identify an interruption after acknowledgement. Diagnostic
+write failure is logged without exception payloads and does not stop normal processing.
+
+Normalized ingestion also records unmatched keys, disabled named subscriptions,
+filter exclusions, sender authorization failures, and deduplication. Failed filters
+show field and operator names, never configured or observed values. Matched records
+link to Activity for delivery attempts and workflow outcomes. Queued deliveries and
+completed routing checks do not imply a completed workflow. Duplicate events link
+to the existing event in the same organization.
+
+Receipts retain provider and routing identifiers, classification metadata, bot-identity
+availability, byte size, and subscription decisions. They do not retain message text,
+blocks, credential headers, signing secrets, or exception payloads. Legacy filtered
+Problems also stop retaining message text. Invalid signatures and unconfigured
+connections remain in Problems; unverified bodies never enter the receipt log.
+An absent receipt does not prove that Slack failed to deliver the event.

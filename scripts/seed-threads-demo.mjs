@@ -132,6 +132,20 @@ if (mode === 'bootstrap') {
       for (const [index, childId] of (manifest.childWorkSessionIds ?? []).entries()) {
         await tx.query('INSERT INTO child_watches (child_session_id,queue_item_id,parent_session_id,parent_thread_id,actor_user_id,org_id,settled,created_at,settled_at) VALUES ($1,$2,$3,$4,$5,$6,true,$7,$7) ON CONFLICT (child_session_id) DO NOTHING', [childId,`demo-child-${childId}`,origin.sessionId,origin.threadId,'local-user','local-org',now-index*1000]);
       }
+      const receiptExamples = [
+        ['no-subscription','slack.bot_message','subscription_match','no_subscription','[Demo fixture] No enabled subscription names slack.bot_message.'],
+        ['filter','slack.bot_message','subscription_match','filtered','[Demo fixture] The text prefix filter excluded this form.'],
+        ['disabled','slack.bot_message','subscription_match','no_subscription','[Demo fixture] The named subscription is disabled.'],
+        ['self',null,'classification','rejected',"[Demo fixture] Valet's own message was rejected to prevent a reply loop."],
+        ['identity',null,'classification','rejected','[Demo fixture] Bot message classification needs the installation bot identity.'],
+        ['failure','slack.bot_message','ingestion','failed','[Demo fixture] Processing failed during event and delivery persistence.'],
+      ];
+      for (const [index, [suffix, eventKey, stage, outcome, detail]] of receiptExamples.entries()) {
+        const at = now - index * 60000;
+        const subscriptions = suffix === 'filter' || suffix === 'disabled' ? [{ id: 'demo-nda-intake', name: '[Demo] NDA intake', ownerType: 'team', ownerId: manifest.teamId, target: 'workflow', targetId: manifest.workflowId, outcome: suffix === 'filter' ? 'filter_excluded' : 'disabled', ...(suffix === 'filter' ? { failedFilters: [{ field: 'text', op: 'prefix' }] } : {}) }] : [];
+        const stages = [{ stage: 'verification', outcome: 'verified', detail: '[Demo fixture] Simulated verified receipt. No Slack delivery occurred.', at }, { stage, outcome, detail, at: at + 1 }];
+        await tx.query('INSERT INTO event_receipts (id,org_id,service,external_id,metadata,stages,event_key,subscriptions,created_at,updated_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8::jsonb,$9,$9) ON CONFLICT (id) DO UPDATE SET stages=EXCLUDED.stages, subscriptions=EXCLUDED.subscriptions, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at', [`threads-demo-receipt-${suffix}`,'local-org','slack',`DEMO_EVENT_${suffix}`,JSON.stringify({ channelId: 'C_DEMO_CONTRACT_REVIEW', rawType: 'message', rawSubtype: 'bot_message', botIdentityAvailable: suffix !== 'identity', botUserIdentityAvailable: true, configuredTriggerCount: 3 }),JSON.stringify(stages),eventKey,JSON.stringify(subscriptions),at]);
+      }
       const problems = [
         ['filter_excluded', '[Demo] An NDA form event arrived, but its text did not match the subscription. Compare the raw message text with the configured filter, including leading emoji.'],
         ['unknown_org', '[Demo] The Slack connection is unavailable. Ask an organization administrator to inspect the integration settings.'],
@@ -141,7 +155,7 @@ if (mode === 'bootstrap') {
         await tx.query('INSERT INTO event_drop_log (id,org_id,reason,detail,created_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO UPDATE SET detail=EXCLUDED.detail', [`threads-demo-problem-${index}`,'local-org',reason,detail,now-index*120000]);
       }
     });
-    console.log('Seeded three persisted transcripts and three recorded problem examples.');
+    console.log('Seeded transcripts, child-work records, and labeled receipt/problem examples.');
     for (const row of manifest.records) console.log(`${row.title}: http://localhost:5173/chat?workspace=${encodeURIComponent(row.scope === 'team' ? manifest.teamId : 'user')}&thread=${encodeURIComponent(row.threadId)}`);
   } finally { await db.close(); }
 } else {

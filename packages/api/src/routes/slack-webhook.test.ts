@@ -11,9 +11,12 @@ import { createHmac } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import slackPlugin from "@valet/plugin-slack/plugin";
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
-import { eventDeliveries, eventDropLog, events, eventSubscriptions, teams, orgMembers, teamMembers, userIdentityLinks } from "../schema/index.js";
+import { eventDeliveries, eventDropLog, eventReceipts, events, eventSubscriptions, teams, orgMembers, teamMembers, userIdentityLinks } from "../schema/index.js";
 import { __resetSlackWebhookThrottle } from "./slack-webhook.js";
 import { __resetIngestDropThrottle } from "../events/ingest.js";
+import * as ingestModule from "../events/ingest.js";
+import * as followRouter from "../channels/follow-router.js";
+import * as signalDiagnostics from "../orchestrator/signals.js";
 
 let api: TestApi | undefined;
 
@@ -387,7 +390,6 @@ describe("POST /api/channels/slack/webhook", () => {
       reason: "filter_excluded",
       eventMetadata: {
         channel: "C_FORM",
-        text: "Submitted intake",
         botId: "B_FORM",
         rawEventType: "message",
         rawSubtype: "bot_message",
@@ -720,5 +722,144 @@ describe("POST /api/channels/slack/webhook", () => {
 
     expect(res.status).toBe(200);
     expect(elapsed).toBeLessThan(3_000);
+  });
+});
+
+
+describe("Slack receipt diagnostics", () => {
+  const secretBody = "secret-form-answer-do-not-retain-in-receipt";
+  async function receipts(eventId: string) {
+    return api!.providers.db.select().from(eventReceipts).where(eq(eventReceipts.externalId, eventId));
+  }
+  async function completedReceipt(eventId: string, stage: string) {
+    await expect.poll(async () => (await receipts(eventId)).some(row => Array.isArray(row.stages) && row.stages.some((item: unknown) => typeof item === "object" && item !== null && "stage" in item && item.stage === stage && "outcome" in item && item.outcome !== "started")), { timeout: 5_000 }).toBe(true);
+    const [receipt] = await receipts(eventId);
+    expect(JSON.stringify(receipt)).not.toContain(secretBody);
+    expect(JSON.stringify(receipt)).not.toContain(SECRET);
+    expect(JSON.stringify(receipt)).not.toContain("xoxb-test-token");
+    return receipt;
+  }
+
+  it("links verified redeliveries to one persisted event and preserves retry metadata", async () => {
+    api = await bootTestApi({ plugins: [slackPlugin] });
+    await seedRunningTransport(api);
+    await seedSubscription(api, ["slack.message"]);
+    const eventId = "Ev-receipt-retry";
+    const body = envelope({ ...humanChannelMessage(), text: secretBody }, eventId);
+    expect((await post(api.baseUrl, body, sign(body))).status).toBe(200);
+    const first = await completedReceipt(eventId, "follow");
+    expect(first.stages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: "verification", outcome: "verified" }),
+      expect.objectContaining({ stage: "subscription_match", outcome: "matched" }),
+      expect.objectContaining({ stage: "dispatch", outcome: "enqueued" }),
+    ]));
+    expect((await post(api.baseUrl, body, { ...sign(body), "x-slack-retry-num": "1", "x-slack-retry-reason": "http_timeout" })).status).toBe(200);
+    await expect.poll(async () => JSON.stringify(await receipts(eventId)), { timeout: 5_000 }).toContain('"outcome":"duplicate"');
+    const rows = await receipts(eventId);
+    expect(rows).toHaveLength(2);
+    expect(rows.every(row => row.eventId === first.eventId)).toBe(true);
+    expect(rows.map(row => row.metadata)).toEqual(expect.arrayContaining([expect.objectContaining({ retryNum: "1", retryReason: "http_timeout" })]));
+    expect(await eventCount(api, eventId)).toBe(1);
+    expect(await deliveryCount(api, eventId)).toBe(1);
+    expect(JSON.stringify(rows)).not.toContain(secretBody);
+  });
+
+  it.each([
+    { label: "own bot", event: { ...botFormMessage(), bot_id: "BVALET" } },
+    { label: "own bot profile", event: { ...botFormMessage(), bot_id: undefined, bot_profile: { id: "BVALET" } } },
+    { label: "edit", event: { ...humanChannelMessage(), subtype: "message_changed" } },
+  ])("records verified $label classification rejection without source text", async ({ event }) => {
+    api = await bootTestApi({ plugins: [slackPlugin] });
+    await seedRunningTransport(api);
+    const eventId = "Ev-classification";
+    const body = envelope({ ...event, text: secretBody }, eventId);
+    expect((await post(api.baseUrl, body, sign(body))).status).toBe(200);
+    const receipt = await completedReceipt(eventId, "follow");
+    expect(receipt.stages).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "classification", outcome: "rejected" })]));
+    expect(receipt.metadata).toEqual(expect.objectContaining({ rawType: "message" }));
+    expect(await eventCount(api, eventId)).toBe(0);
+  });
+
+  it("records a missing installation bot identity as classification failure", async () => {
+    api = await bootTestApi({ plugins: [slackPlugin] });
+    await api.providers.engineCredentials.save({ type: "org", id: "local-org" }, "slack", {
+      type: "bot_token", accessToken: "xoxb-test-token", metadata: { webhookSecret: SECRET, teamId: TEAM_ID, botUserId: "U0BOT" },
+    });
+    await api.providers.channelHost.start();
+    const body = envelope({ ...botFormMessage(), text: secretBody }, "Ev-missing-bot-id");
+    expect((await post(api.baseUrl, body, sign(body))).status).toBe(200);
+    const receipt = await completedReceipt("Ev-missing-bot-id", "follow");
+    expect(receipt.stages).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "classification", outcome: "rejected" })]));
+    expect(JSON.stringify(receipt.stages)).toMatch(/bot identity/i);
+  });
+
+  it("records foreign-workspace receipt without running any consumer", async () => {
+    api = await bootTestApi({ plugins: [slackPlugin] });
+    await seedRunningTransport(api);
+    const channel = vi.spyOn(api.providers.channelHost, "handleUpdate");
+    const ingest = vi.spyOn(ingestModule, "ingestEvent");
+    const follow = vi.spyOn(followRouter, "handleFollowedMessage");
+    const body = envelope({ ...humanChannelMessage(), text: secretBody }, "Ev-foreign", "T_OTHER");
+    expect((await post(api.baseUrl, body, sign(body))).status).toBe(200);
+    await expect.poll(async () => JSON.stringify(await api!.providers.db.select().from(eventReceipts)), { timeout: 5_000 }).toContain('"stage":"workspace"');
+    const [receipt] = await api.providers.db.select().from(eventReceipts);
+    expect(receipt.externalId).toBeNull();
+    expect(JSON.stringify(receipt)).not.toContain(secretBody);
+    expect(receipt.stages).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "workspace", outcome: "rejected" })]));
+    expect(channel).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
+    expect(follow).not.toHaveBeenCalled();
+  });
+
+  it("does not attribute unverified body metadata to an authenticated receipt", async () => {
+    api = await bootTestApi({ plugins: [slackPlugin] });
+    await seedRunningTransport(api);
+    const body = envelope({ ...humanChannelMessage(), text: secretBody }, "Ev-forged");
+    expect((await post(api.baseUrl, body, sign(body, "wrong-secret"))).status).toBe(401);
+    const rows = await api.providers.db.select().from(eventReceipts);
+    expect(JSON.stringify(rows)).not.toContain("Ev-forged");
+    expect(JSON.stringify(rows)).not.toContain(secretBody);
+    expect(await eventCount(api, "Ev-forged")).toBe(0);
+  });
+
+  it("preserves signature rejection when legacy diagnostic persistence fails", async () => {
+    api = await bootTestApi({ plugins: [slackPlugin] });
+    await seedRunningTransport(api);
+    vi.spyOn(signalDiagnostics, "writeDropLog").mockRejectedValue(new Error("diagnostic store unavailable"));
+    const body = envelope(dmMessage(), "Ev-invalid-diagnostic-down");
+    expect((await post(api.baseUrl, body, sign(body, "wrong-secret"))).status).toBe(401);
+    expect(await api.providers.db.select().from(eventReceipts)).toHaveLength(0);
+  });
+
+  it("does not mislabel diagnostic write failure as ingestion failure", async () => {
+    api = await bootTestApi({ plugins: [slackPlugin] });
+    await seedRunningTransport(api);
+    vi.spyOn(signalDiagnostics, "writeDropLog").mockRejectedValue(new Error("diagnostic store unavailable"));
+    const body = envelope({ ...botFormMessage(), bot_id: "BVALET", text: secretBody }, "Ev-classified-diagnostic-down");
+    expect((await post(api.baseUrl, body, sign(body))).status).toBe(200);
+    const receipt = await completedReceipt("Ev-classified-diagnostic-down", "follow");
+    expect(receipt.stages).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "classification", outcome: "rejected" })]));
+    expect(receipt.stages).not.toEqual(expect.arrayContaining([expect.objectContaining({ stage: "ingestion", outcome: "failed" })]));
+  });
+
+  it.each(["channel", "ingestion", "follow"] as const)("isolates %s consumer errors and stores no exception contents", async (failingConsumer) => {
+    api = await bootTestApi({ plugins: [slackPlugin] });
+    await seedRunningTransport(api);
+    await seedSubscription(api, ["slack.message"]);
+    const failure = new Error(secretBody);
+    const channel = vi.spyOn(api.providers.channelHost, "handleUpdate");
+    const ingest = vi.spyOn(ingestModule, "ingestEvent");
+    const follow = vi.spyOn(followRouter, "handleFollowedMessage");
+    if (failingConsumer === "channel") channel.mockRejectedValueOnce(failure);
+    if (failingConsumer === "ingestion") ingest.mockRejectedValueOnce(failure);
+    if (failingConsumer === "follow") follow.mockRejectedValueOnce(failure);
+    const body = envelope({ ...dmMessage(), text: secretBody }, "Ev-consumer-fail");
+    expect((await post(api.baseUrl, body, sign(body))).status).toBe(200);
+    const receipt = await completedReceipt("Ev-consumer-fail", "follow");
+    expect(channel).toHaveBeenCalled();
+    expect(ingest).toHaveBeenCalled();
+    expect(follow).toHaveBeenCalled();
+    expect(receipt.stages).toEqual(expect.arrayContaining([expect.objectContaining({ stage: failingConsumer, outcome: "failed" })]));
+    expect(await eventCount(api, "Ev-consumer-fail")).toBe(failingConsumer === "ingestion" ? 0 : 1);
   });
 });

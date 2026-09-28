@@ -4,12 +4,14 @@ import { TabBar, tabPanelId } from "~/components/primitives";
 import { WorkspaceClause } from "~/components/workspace-clause";
 import { EventFeed, type FeedScope } from "~/components/events/feed";
 import { SubscriptionsPanel } from "~/components/events/subscriptions-panel";
+import { useMe } from "~/api/settings";
+import { ReceiptsPanel } from "~/components/events/receipts-panel";
 import { DropsPanel } from "~/components/events/drops-panel";
 import { textParam } from "~/lib/search-params";
 
 /**
  * `/events` — the UI over the event system (feed, catalog, subscriptions;
- * see the events router in packages/api). Three tabs:
+ * see the events router in packages/api). Tabs:
  *
  * - Activity: ingested events, filterable by service/key, each expandable
  *   into its payload and delivery attempts. The scope control starts at the
@@ -17,13 +19,14 @@ import { textParam } from "~/lib/search-params";
  * - Subscriptions: the rules that turn a matching event into a workflow
  *   run or an orchestrator prompt, listed for the active workspace.
  * - Problems: reasons why an event did not become an activity row.
+ * - Delivery log: admin-only receipt metadata and processing decisions.
  *
  * The selected tab and the feed scope live in search params. A shared
  * Problems search or cursor must also select Problems after reload. This
  * follows the workflows hub's `?tab=` pattern. One event has its own URL,
  * `/events/$eventId`, because a broken run needs a paste-able reference.
  */
-type TabId = "activity" | "subscriptions" | "problems";
+type TabId = "activity" | "subscriptions" | "problems" | "receipts";
 
 interface EventsSearch {
   tab?: TabId;
@@ -37,7 +40,7 @@ interface EventsSearch {
  * value reads as the default tab and workspace scope. */
 export function readEventsSearch(raw: unknown): EventsSearch {
   const tabValue = textParam(raw, "tab");
-  const tab = tabValue === "subscriptions" || tabValue === "problems" ? tabValue : undefined;
+  const tab = tabValue === "subscriptions" || tabValue === "problems" || tabValue === "receipts" ? tabValue : undefined;
   const scope = textParam(raw, "scope") === "all" ? "all" : undefined;
   const problemsQ = textParam(raw, "problemsQ");
   const problemsCursor = textParam(raw, "problemsCursor");
@@ -62,7 +65,11 @@ export function EventsPage() {
   // this module and never builds a real router context.
   const search = readEventsSearch(useSearch({ strict: false }));
   const navigate = useNavigate();
-  const [tab, setTab] = useState<TabId>(search.tab ?? "activity");
+  const me = useMe();
+  const isAdmin = !me.error && me.data?.orgRole === "admin";
+  const [selectedTab, setTab] = useState<TabId>(search.tab ?? "activity");
+  const tab = selectedTab === "receipts" && !isAdmin ? "activity" : selectedTab;
+  const tabs = isAdmin ? [...TABS, { id: "receipts" as const, label: "Delivery log" }] : TABS;
   useEffect(() => setTab(search.tab ?? "activity"), [search.tab]);
   const scope: FeedScope = search.scope ?? "workspace";
 
@@ -90,7 +97,7 @@ export function EventsPage() {
         </p>
 
         <div className="mt-6">
-          <TabBar tabs={TABS} active={tab} onSelect={selectTab} label={TABS_LABEL} />
+          <TabBar tabs={tabs} active={tab} onSelect={selectTab} label={TABS_LABEL} />
         </div>
 
         <div
@@ -107,6 +114,7 @@ export function EventsPage() {
               }
             />
           )}
+          {tab === "receipts" && isAdmin && <ReceiptsPanel key={me.data?.orgId} />}
           {tab === "subscriptions" && <SubscriptionsPanel />}
           {tab === "problems" && (
             <DropsPanel

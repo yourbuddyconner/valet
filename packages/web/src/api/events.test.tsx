@@ -17,6 +17,7 @@ import type { ListEventDropsResponse, ListEventsResponse, ListEventSubscriptions
 // Every case here holds its query, so no request should be made. The mock
 // keeps a missed hold from reaching the network instead of failing loudly.
 const listEvents = vi.fn();
+const listEventReceipts = vi.fn().mockResolvedValue({ receipts: [], nextCursor: null, lastReceiptAt: null, retentionDays: 7 });
 const listEventDrops = vi.fn<() => Promise<ListEventDropsResponse>>(() =>
   Promise.resolve({ drops: [], nextCursor: null, previousCursor: null, lastEventAt: null }),
 );
@@ -24,12 +25,13 @@ const listEventSubscriptions = vi.fn();
 vi.mock("./client", () => ({
   api: {
     listEvents: () => listEvents(),
+    listEventReceipts: () => listEventReceipts(),
     listEventDrops: () => listEventDrops(),
     listEventSubscriptions: () => listEventSubscriptions(),
   },
 }));
 
-import { eventDropsRefetchInterval, qkEvents, useEvents, useEventSubscriptions } from "./events";
+import { eventDropsRefetchInterval, qkEvents, useEventReceipts, useEvents, useEventSubscriptions } from "./events";
 
 /** What a warm org-wide entry holds — the rows a held query must not show. */
 const ORG_FEED: ListEventsResponse = {
@@ -142,4 +144,12 @@ describe("qkEvents", () => {
     expect(held).not.toEqual(bare);
     expect(held.slice(0, bare.length)).toEqual(bare);
   });
+});
+
+it("does not request receipts without admin permission or a resolved org", () => {
+  listEventReceipts.mockClear();
+  const wrapper = makeWrapper(newClient());
+  renderHook(() => useEventReceipts("org", {}, false), { wrapper });
+  renderHook(() => useEventReceipts(undefined, {}, true), { wrapper });
+  expect(listEventReceipts).not.toHaveBeenCalled();
 });

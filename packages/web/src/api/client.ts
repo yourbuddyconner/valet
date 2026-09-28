@@ -195,6 +195,7 @@ import type {
   GetEventCatalogResponse,
   GetEventResponse,
   ListEventDropsResponse,
+  ListEventReceiptsResponse,
   ListEventsResponse,
   ListEventSubscriptionsResponse,
   PatchEventSubscriptionRequest,
@@ -1037,6 +1038,13 @@ export const api = {
     const q = qs.toString();
     const path = q ? `/events?${q}${ownerSuffix(owner)}` : `/events${ownerQuery(owner)}`;
     return request<ListEventsResponse>("GET", path);
+  },
+  listEventReceipts: (params: { q?: string; cursor?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", params.q);
+    if (params.cursor) qs.set("cursor", params.cursor);
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    return request<ListEventReceiptsResponse>("GET", `/events/receipts${qs.size ? `?${qs}` : ""}`);
   },
   listEventDrops: (params: { q?: string; cursor?: string; direction?: "previous" } = {}) => {
     const qs = new URLSearchParams();

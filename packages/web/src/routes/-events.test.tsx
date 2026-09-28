@@ -141,6 +141,8 @@ const deleteMutate = vi.fn();
  * writes. Mutating it does NOT re-render — nothing subscribes — so a case
  * that needs the new value on screen must cause a render of its own, which
  * is what a tab click does. Reset in `afterEach`. */
+let orgRole = "member";
+const receiptsHook = vi.fn();
 let searchState: Record<string, unknown> = {};
 type NavigateSearch = Record<string, unknown> | ((previous: Record<string, unknown>) => Record<string, unknown>);
 const navigateCalls: { search?: NavigateSearch }[] = [];
@@ -170,6 +172,7 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 vi.mock("~/api/events", () => ({
+  useEventReceipts: (...args: unknown[]) => { receiptsHook(...args); return { data: { receipts: [], nextCursor: null, lastReceiptAt: null, retentionDays: 7 } }; },
   useEventCatalog: () => ({ data: catalogData, isLoading: false, error: null }),
   useEvents: () => ({
     data: eventsData,
@@ -204,7 +207,7 @@ vi.mock("~/api/settings", () => ({
   // `isError` is read by both events surfaces: it is what separates an
   // owner that has not resolved YET from one that never will.
   useMe: () => ({
-    data: { id: "u1", orgRole: "member" },
+    data: { id: "u1", orgId: "org_1", orgRole },
     isLoading: false,
     isError: false,
     error: null,
@@ -254,6 +257,8 @@ function team(id: string, name: string, callerRole: "admin" | "member" | null): 
 }
 
 beforeEach(() => {
+  orgRole = "member";
+  receiptsHook.mockClear();
   patchMutate.mockClear();
   createMutate.mockClear();
   deleteMutate.mockClear();
@@ -723,4 +728,19 @@ describe("EventsPage — Subscriptions", () => {
       subscriptionsData.subscriptions[0].eventKeys = ["github.pr.opened"];
     }
   });
+});
+
+it("hides Delivery log and never queries receipts for a member deep link", () => {
+  searchState = { tab: "receipts" };
+  render(<EventsPage />);
+  expect(screen.queryByRole("tab", { name: "Delivery log" })).toBeNull();
+  expect(receiptsHook).not.toHaveBeenCalled();
+});
+it("opens the admin Delivery log through the Events tab", () => {
+  orgRole = "admin";
+  render(<EventsPage />);
+  fireEvent.click(screen.getByRole("tab", { name: "Delivery log" }));
+  expect(receiptsHook).toHaveBeenCalledWith("org_1", expect.anything(), true);
+  expect(screen.getByText(/No receipts recorded in the last 7 days/)).toBeTruthy();
+  expect(searchState.tab).toBe("receipts");
 });

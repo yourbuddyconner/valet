@@ -5233,3 +5233,22 @@ export interface BrowserAnnotation {
   marks: BrowserAnnotationMark[];
   createdAt: number;
 }
+
+/** Redacted diagnostics for one ingress attempt; timestamps are epoch milliseconds. */
+export interface ReceiptStage { stage: string; outcome: string; detail: string; at: number }
+export interface ReceiptSubscriptionDecision {
+  id: string; name?: string; ownerType: string; ownerId: string; target: string; targetId?: string;
+  outcome: "matched" | "filter_excluded" | "authorization_denied" | "disabled" | "key_mismatch";
+  failedFilters?: Array<{ field: string; op: string }>;
+}
+export interface EventReceiptWire {
+  id: string; service: string; externalId: string | null;
+  metadata: Record<string, string | number | boolean>; stages: ReceiptStage[];
+  eventKey: string | null; eventId: string | null; subscriptions: ReceiptSubscriptionDecision[];
+  createdAt: number; updatedAt: number;
+}
+export interface ListEventReceiptsResponse {
+  receipts: EventReceiptWire[]; nextCursor: string | null;
+  /** Latest retained receipt in this organization, independent of search/page. */
+  lastReceiptAt: number | null; retentionDays: 7;
+}

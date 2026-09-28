@@ -83,6 +83,7 @@ import { SLACK_WEBHOOK_MOUNT } from "./services/slack-app.js";
 import { eventWebhooksRouter } from "./routes/event-webhooks.js";
 import { workflowHooksRouter } from "./routes/workflow-hooks.js";
 import { artifactsRouter, buildArtifactsPublicRouter } from "./routes/artifacts.js";
+import { eventReceiptsRouter } from "./routes/event-receipts.js";
 import { eventsRouter } from "./routes/events.js";
 import { mountWebStatic } from "./static-web.js";
 import { traceRequests } from "./observability/http-middleware.js";
@@ -380,6 +381,7 @@ export function createApp(
   // Mounted at /api (not /api/events) because the router carries both the
   // /events* and /event-subscriptions* path families. Placed after every
   // more-specific /api/* router above so nothing gets shadowed.
+  app.route("/api", eventReceiptsRouter);
   app.route("/api", eventsRouter);
 
   // WebSocket — must be registered against the same Hono instance the runtime

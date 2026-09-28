@@ -151,3 +151,13 @@ it("dismisses a child under an explicit encoded parent", async () => {
   await api.dismissChild("parent:team", "child:one");
   expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/sessions/parent%3Ateam/children/child%3Aone/dismiss");
 });
+
+it("encodes receipt search and page cursor", async () => {
+  const fetchMock = stubFetchOk();
+  await api.listEventReceipts({ q: "C123 + Ev456", cursor: "cursor+/=", limit: 25 });
+  const url = new URL(fetchMock.mock.calls[0]?.[0] as string, "https://example.test");
+  expect(url.pathname).toBe("/api/events/receipts");
+  expect(url.searchParams.get("q")).toBe("C123 + Ev456");
+  expect(url.searchParams.get("cursor")).toBe("cursor+/=");
+  expect(url.searchParams.get("limit")).toBe("25");
+});

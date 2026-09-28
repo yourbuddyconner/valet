@@ -674,6 +674,20 @@ export const userNotificationPreferences = pgTable(
 // non-member senders, unbound conversations, trigger-mode filtering) once
 // channel routing lands.
 
+export const eventReceipts = pgTable("event_receipts", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull(),
+  service: text("service").notNull(),
+  externalId: text("external_id"),
+  metadata: jsonb("metadata").notNull().default({}),
+  stages: jsonb("stages").notNull().default([]),
+  eventKey: text("event_key"),
+  eventId: text("event_id"),
+  subscriptions: jsonb("subscriptions").notNull().default([]),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+}, (t) => [index("event_receipts_page").on(t.orgId, t.createdAt, t.id)]);
+
 export const eventDropLog = pgTable(
   "event_drop_log",
   {
