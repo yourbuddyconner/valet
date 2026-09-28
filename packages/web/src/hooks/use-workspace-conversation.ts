@@ -10,9 +10,7 @@ export function useOwnerConversation(workspace: string | undefined) {
     enabled: workspace !== undefined,
     queryFn: async () => {
       if (workspace === undefined) throw new Error("Choose a workspace to open its threads.");
-      return workspace === "user"
-        ? api.ensureOrchestrator()
-        : api.ensureTeamOrchestrator(workspace);
+      return api.ensureWorkspaceRuntime(workspace);
     },
     staleTime: Infinity,
     retry: false,

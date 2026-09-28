@@ -1,3 +1,4 @@
+import { workspaceSenderIdentity } from "../services/workspace-sender.js";
 /**
  * `ChannelHost` — inbound routing for channel transports (telegram etc,
  * Phase 7 / spec decisions 4-6, 10). `handleUpdate` is the single entry
@@ -45,7 +46,6 @@ import {
   ensureDefaultAssistantSession,
   loadAssistant,
   loadAssistantBySessionId,
-  assistantSenderIdentity as senderIdentityForAssistant,
 } from "../assistants/service.js";
 import type { EngineHost } from "../engine/host.js";
 import { loadSessionMeta } from "../engine/session-meta.js";
@@ -800,7 +800,7 @@ export class ChannelHost {
     if (this.delivered.has(dedupeKey)) return;
     const transport = this.transports.get(target.channelType);
     if (!transport) return;
-    const sender = await this.assistantSenderIdentity(sessionId);
+    const sender = await this.workspaceSenderForSession(sessionId);
     try {
       await transport.send(target.conversationKey, {
         markdown: first.content,
@@ -934,12 +934,12 @@ export class ChannelHost {
    * override set — the transport then posts under the bot's own identity.
    * Best-effort: a lookup failure must not stop the delivery.
    */
-  private async assistantSenderIdentity(
+  private async workspaceSenderForSession(
     sessionId: string,
   ): Promise<{ displayName?: string; avatarUrl?: string } | undefined> {
     try {
       const row = await loadAssistantBySessionId(this.deps.db, sessionId);
-      return row ? senderIdentityForAssistant(row) : undefined;
+      return row ? workspaceSenderIdentity(this.deps.db, row.orgId, { type: row.ownerType, id: row.ownerId }) : undefined;
     } catch (err) {
       // Identity is decoration on the post; the text must still land.
       console.error("[channels] assistant identity lookup failed", err);
@@ -980,7 +980,7 @@ export class ChannelHost {
     if (!transport) return;
 
     const markdown = `\`${entry.command}\`\n${entry.output}`;
-    const sender = await this.assistantSenderIdentity(sessionId);
+    const sender = await this.workspaceSenderForSession(sessionId);
     await transport.send(mapped.conversationKey, {
       markdown,
       ...(sender !== undefined ? { sender } : {}),
@@ -1046,9 +1046,9 @@ export class ChannelHost {
     sessionId: string,
   ): Promise<void> {
     // The card carries the asking assistant's identity. In a channel with
-    // several assistants, the reader must see who asks for approval.
+    // shared workspaces, the reader must see who asks for approval.
     // Resolution edits keep the posted identity.
-    const sender = await this.assistantSenderIdentity(sessionId);
+    const sender = await this.workspaceSenderForSession(sessionId);
     const ref = await transport.sendGatePrompt(conversationKey, {
       ...prompt,
       ...(sender !== undefined ? { sender } : {}),
@@ -1681,7 +1681,7 @@ export class ChannelHost {
             // No gate, a recipient who cannot resolve it, or a lookup that
             // failed: fall through to the plain summary with the web link.
             const sender = event.sessionId
-              ? await this.assistantSenderIdentity(event.sessionId)
+              ? await this.workspaceSenderForSession(event.sessionId)
               : undefined;
             await transport.send(conversationKey, {
               markdown: this.attentionMarkdown(event),

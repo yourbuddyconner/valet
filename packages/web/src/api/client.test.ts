@@ -69,9 +69,9 @@ describe("api client: colon-safe URL encoding", () => {
 
   it("ensureOrchestrator posts to /orchestrator with no id to encode", async () => {
     const fetchMock = stubFetchOk({ sessionId: COLON_ID });
-    const res = await api.ensureOrchestrator();
+    const res = await api.ensureWorkspaceRuntime("user");
     const url = fetchMock.mock.calls[0]?.[0] as string;
-    expect(url).toBe("/api/orchestrator");
+    expect(url).toBe("/api/workspaces/user/runtime");
     expect(res.sessionId).toBe(COLON_ID);
   });
 

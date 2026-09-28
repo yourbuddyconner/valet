@@ -315,12 +315,6 @@ CREATE TABLE "assistants" (
 	"org_id" text NOT NULL,
 	"owner_type" text NOT NULL,
 	"owner_id" text NOT NULL,
-	"name" text,
-	"avatar_url" text,
-	"personality" text,
-	"behavior" text,
-	"model" text,
-	"reasoning" text,
 	"session_id" text NOT NULL,
 	"created_at" bigint NOT NULL,
 	"archived_at" bigint

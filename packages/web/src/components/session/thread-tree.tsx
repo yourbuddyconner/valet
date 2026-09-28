@@ -33,7 +33,7 @@ import {
 } from "~/api/queries";
 import { useComposerPrefillStore } from "~/stores/composer-prefill";
 import { useChatHotkeysStore } from "~/stores/chat-hotkeys";
-import { useDismissChild, useOrchestratorChildren, useOrchestratorInfo } from "~/api/orchestrator";
+import { useDismissChild, useOrchestratorChildren, useWorkspaceRuntimeInfo } from "~/api/orchestrator";
 import { useModels, useModelTiers } from "~/api/settings";
 import { usePendingGatesSeed } from "~/hooks/use-pending-gates-seed";
 import { useStreamStore } from "~/stores/stream";
@@ -192,7 +192,7 @@ export function childStatusDotClassName(status: OrchestratorChildSummary["status
  * recoverable via hover tooltip when truncated.
  */
 export function ThreadTree({ sessionId: override, showChildren = true }: ThreadTreeProps = {}) {
-  const info = useOrchestratorInfo();
+  const info = useWorkspaceRuntimeInfo(override ? undefined : "user");
   // No `override` means the caller's own assistant — the original and still
   // the default behavior.
   const sessionId = override ?? info.data?.sessionId;

@@ -1,3 +1,4 @@
+import { workspaceSenderIdentity } from "../services/workspace-sender.js";
 import { workflowEditorThreadContext } from "../workflows/editor-thread-context.js";
 import type { Model } from "@earendil-works/pi-ai/compat";
 import { and, eq } from "drizzle-orm";
@@ -50,7 +51,7 @@ import {
 } from "@valet/engine";
 import { buildPolicyResolver, revokeSessionGrants } from "../policies/service.js";
 import { withSlackOwnerMetadata } from "../channels/identity-links.js";
-import type { AssistantBehavior, RepoBinding } from "../wire/types.js";
+import type { RepoBinding } from "../wire/types.js";
 import { makeCommandContext, makeWorkspaceSkillsProvider } from "./command-providers.js";
 import { makeRepoInstructionsProvider } from "./repo-instructions.js";
 import {
@@ -111,12 +112,9 @@ import {
 } from "../schema/index.js";
 import {
   ArchivedAssistantError,
-  assistantSenderIdentity,
-  findDefaultAssistant,
   loadAssistant,
   loadAssistantBySessionId,
 } from "../assistants/service.js";
-import { applyBehaviorToPlugins, filterSkillSources, parseAssistantBehavior } from "../assistants/behavior.js";
 import { personaPrefixText } from "../assistants/persona.js";
 import { internalToken } from "../lib/internal-auth.js";
 import {
@@ -577,13 +575,6 @@ interface CacheEntry {
 /** Durable events for submissions settled longer ago than this are pruned on restore. */
 const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** The action ids a pin list protects from the behavior filter — pins are
- * substrate the host injects, never gated (assistant-editor design). */
-function pinnedIdSet(pins: readonly PinnedActionSpec[]): ReadonlySet<string> {
-  return new Set(pins.map((p) => p.actionId));
-}
-
-
 /**
  * Size ceiling for the line-count read in `readSandboxFileMeta` (Valet Security
  * guardrail 4). A file over this size skips the line check — reading megabytes
@@ -1018,7 +1009,6 @@ export class EngineHost {
       meta.orgId,
       [],
       extraPlugins,
-      null,
       isSecurityRunner ? buildSecurityRunnerTools().map((tool) => tool.name) : [],
     );
     const skillsProvider = this.skillsProviderFor(principal, meta.orgId, extraPlugins);
@@ -1109,6 +1099,7 @@ export class EngineHost {
       () => builtSession,
       specProvider !== undefined,
       extras.pluginCatalog,
+      principal,
     );
     // Repo AGENTS.md instructions (agents-md spec, decision 5): same lazy
     // `builtSession` accessor as the command options above.
@@ -1386,7 +1377,6 @@ export class EngineHost {
     // registry manifest) — appended after the registry set so registry
     // plugins keep shadow priority.
     extraPlugins: readonly ValetPlugin[] = [],
-    behavior: AssistantBehavior | null = null,
     appendedNativeToolNames: readonly string[] = [],
   ): Promise<PluginSessionExtras> {
     const assembled = [...this.basePlugins(), ...extraPlugins];
@@ -1395,19 +1385,13 @@ export class EngineHost {
       (item) => !assembledServices.has(item.service),
     );
     const entitled = await this.filterEntitledPlugins(assembled, owner, orgId);
-    const plugins = applyBehaviorToPlugins(entitled, behavior, pinnedIdSet(pins));
+    const plugins = entitled;
 
     const disabledServices = removedActionServices(assembled, entitled).map((service) => ({
       service,
       state: "disabled_by_org" as const,
       reason: "the organization disabled this plugin",
       fix: `An org admin must enable the ${service} plugin.`,
-    }));
-    const excludedServices = removedActionServices(entitled, plugins).map((service) => ({
-      service,
-      state: "excluded_by_assistant" as const,
-      reason: "this assistant's behavior excludes the service",
-      fix: `The workspace configuration excludes ${service}. Ask a workspace administrator to review its integration access.`,
     }));
     const resolveServiceAvailability = async (actionService?: string): Promise<ServiceAvailability[]> => {
       const inventory = await unavailableServiceInventory({
@@ -1434,7 +1418,6 @@ export class EngineHost {
         loadFailures,
         availabilityFailures,
         disabledServices,
-        excludedServices,
         deploymentServices,
       );
     };
@@ -1450,7 +1433,7 @@ export class EngineHost {
     if (!this.opts.db) return pluginSessionExtras(plugins, [], effectivePins, catalogOptions);
     return pluginSessionExtras(
       plugins,
-      filterSkillSources(await listSkillSourcesFor(this.opts.db, owner, orgId), behavior),
+      await listSkillSourcesFor(this.opts.db, owner, orgId),
       effectivePins,
       catalogOptions,
     );
@@ -1477,21 +1460,13 @@ export class EngineHost {
     // registry refresh silently DROPS the extras' skills (the refresh
     // replaces the session's whole skill map from this provider).
     extraPlugins: readonly ValetPlugin[] = [],
-    behavior: AssistantBehavior | null = null,
   ): (() => Promise<SkillSource[]>) | undefined {
     const db = this.opts.db;
     if (!db) return undefined;
-    // Filtered once, outside the closure: both inputs are fixed for the
-    // closure's lifetime — every behavior PATCH evicts the cached session
-    // (assistant-editor design, Task 2), so a stale result never outlives
-    // its config. Only the stored-skill read is per-call.
-    const plugins = [...this.basePlugins(), ...extraPlugins];
-    const filtered = applyBehaviorToPlugins(plugins, behavior);
-    return async () =>
-      mergedSkillSources(
-        filtered,
-        filterSkillSources(await listSkillSourcesFor(db, owner, orgId), behavior),
-      ).skills;
+    return async () => {
+      const plugins = await this.filterEntitledPlugins([...this.basePlugins(), ...extraPlugins], owner, orgId);
+      return mergedSkillSources(plugins, await listSkillSourcesFor(db, owner, orgId)).skills;
+    };
   }
 
   /**
@@ -2208,11 +2183,6 @@ export class EngineHost {
   /**
    * `hasPrep` gates the workspace-skills provider — see the doc block above.
    * Pass `true` only when the caller wired a `specProvider` for this build.
-   *
-   * `behavior` applies the same filter `sessionExtras` applies, so the
-   * command catalog and the `call_tool` catalog agree — a plugin slash
-   * command must not reach an action the integrations allowlist gated out
-   * of `list_tools`. Same pin exemption, for the same reason.
    */
   private async buildCommandOptions(
     orgId: string,
@@ -2220,8 +2190,7 @@ export class EngineHost {
     getSession: () => Session | undefined,
     hasPrep: boolean,
     pluginCatalog: PluginCatalog,
-    behavior: AssistantBehavior | null = null,
-    pinnedActionIds: ReadonlySet<string> = new Set(),
+    owner: Principal,
   ): Promise<
     | {
         workspaceSkillsProvider?: () => Promise<SkillSource[]>;
@@ -2258,7 +2227,7 @@ export class EngineHost {
       : undefined;
     const commandContext = makeCommandContext(db, this.opts.engineCredentials, orgId, sessionId);
 
-    const plugins = applyBehaviorToPlugins(this.opts.plugins ?? [], behavior, pinnedActionIds);
+    const plugins = await this.filterEntitledPlugins(this.opts.plugins ?? [], owner, orgId);
     const pluginCommands = plugins.flatMap((p) =>
       (p.commands ?? []).map((def) => ({ pluginName: p.name, def })),
     );
@@ -2529,26 +2498,10 @@ export class EngineHost {
     return promise;
   }
 
-  /**
-   * Resolve the sender when an action posts outbound. The lookup stays at
-   * action time so profile edits apply to cached sessions.
-   */
-  private outboundSenderResolver(orgId: string, owner: Principal, assistantId?: string) {
+  /** Team and organization display names are workspace configuration. */
+  private outboundSenderResolver(orgId: string, owner: Principal) {
     const db = this.opts.db;
-    if (!db) return undefined;
-
-    return async () => {
-      try {
-        const assistant = assistantId
-          ? await loadAssistant(db, assistantId)
-          : await findDefaultAssistant(db, orgId, owner);
-        return assistant ? assistantSenderIdentity(assistant) : undefined;
-      } catch (err) {
-        const target = assistantId ?? owner.type + ":" + owner.id;
-        console.error("[engine-host] assistant identity lookup failed (assistant=" + target + ")", err);
-        return undefined;
-      }
-    };
+    return db ? () => workspaceSenderIdentity(db, orgId, owner) : undefined;
   }
 
   private async buildAssistantSession(
@@ -2583,18 +2536,16 @@ export class EngineHost {
       throw new ArchivedAssistantError();
     }
     // The OWNER, not the assistant: memory, journal and skills belong to the
-    // principal and are shared by every assistant it owns. Only the
-    // workspace directory below is per-assistant.
+    // principal. The runtime keeps its own working directory.
     const principal: Principal = { type: assistant.ownerType, id: assistant.ownerId };
 
     const workspace = join(homedir(), ".valet", "assistants", assistantId);
     await mkdir(workspace, { recursive: true });
 
-    const behavior = parseAssistantBehavior(assistant.behavior, assistant.id);
     const scope: MemoryScope = { owner: principal, actorUserId: meta.actorUserId };
     await ensureTodayJournal(db, scope);
     const snapshotContent = await assembleMemorySnapshot(db, scope);
-    const personaPrefix = await this.resolvePersonaPrefix(db, scope, assistant.name, assistant.personality);
+    const personaPrefix = await this.resolvePersonaPrefix(db, scope);
     // The owner's human name, so the persona names the team/org instead of its
     // raw id (the "team_<uuid>" leak). A missing row falls back to a neutral
     // phrase inside the persona.
@@ -2613,15 +2564,13 @@ export class EngineHost {
     // onto every other member — only a user-principal assistant reads the
     // actor's own default (TKAI-255 review round).
     const { model, spec: modelSpec } = await this.resolveModelForBuild(existing, meta.orgId, {
-      userId: principal.type === "user" ? meta.actorUserId : undefined,
+      userId: principal.type === "user" ? principal.id : undefined,
       overrideId,
       ownerTeamId: principal.type === "team" ? principal.id : undefined,
-      assistantDefault: assistant.model ?? undefined,
     });
     const reasoning = await this.resolveReasoningForBuild(existing, meta.orgId, {
-      userId: principal.type === "user" ? meta.actorUserId : undefined,
+      userId: principal.type === "user" ? principal.id : undefined,
       ownerTeamId: principal.type === "team" ? principal.id : undefined,
-      assistantDefault: assistant.reasoning ?? undefined,
     });
     const queueMode: "steer" | "followup" = principal.type === "user" ? "steer" : "followup";
     // `principal`, not `meta.actorUserId`: an assistant session belongs to
@@ -2636,16 +2585,13 @@ export class EngineHost {
     // on that frozen `userId`, which reaches that person's own workflows and
     // every team they belong to. So a pinned save tool in a team assistant
     // would let the second member drive the first member's principal. The
-    // workflow editor panel always opens the caller's OWN default assistant
-    // (`use-workflow-assistant.ts`), so this scope costs the panel nothing.
+    // team editor uses the scoped workflow action catalog.
     const pins = principal.type === "user" ? PINNED_ACTIONS : [];
-    const pinnedIds = pinnedIdSet(pins);
     const extras = await this.sessionExtras(
       principal,
       meta.orgId,
       pins,
       [],
-      behavior,
       buildMemoryTools().map((tool) => tool.name),
     );
 
@@ -2682,13 +2628,12 @@ export class EngineHost {
       () => builtSession,
       false,
       extras.pluginCatalog,
-      behavior,
-      pinnedIds,
+      principal,
     );
     const policyResolver = this.getPolicyResolver();
     const pluginStoreFactory = this.getPluginStoreFactory();
-    const skillsProvider = this.skillsProviderFor(principal, meta.orgId, [], behavior);
-    const resolveOutboundSender = this.outboundSenderResolver(meta.orgId, principal, assistantId);
+    const skillsProvider = this.skillsProviderFor(principal, meta.orgId);
+    const resolveOutboundSender = this.outboundSenderResolver(meta.orgId, principal);
     const sessionOptions = {
       userId: meta.actorUserId,
       orgId: meta.orgId,
@@ -2800,30 +2745,10 @@ export class EngineHost {
     return session;
   }
 
-  /**
-   * `You are {name}. {personality}` prefix for the assistant's
-   * `systemPrompt` (assistant-centered web UI decision 5): `name` from
-   * `assistants.name`, `personality` from the row when set, or from the
-   * `assistant/personality.md` memory file as the pre-config fallback. Absent
-   * name → `""` (neutral persona, unchanged) regardless of whether a
-   * personality exists — the identity step always sets name first, so an
-   * orphaned personality without a name shouldn't happen, but if it ever does
-   * we don't want a prefix with no name in it.
-   */
-  private async resolvePersonaPrefix(
-    db: AppDb,
-    scope: MemoryScope,
-    name: string | null,
-    rowPersonality: string | null,
-  ): Promise<string> {
-    if (!name) return "";
-    // The row wins when set (assistant editor design): per-assistant persona.
-    // Null falls back to the owner's own file, the pre-config behavior —
-    // own-scope only, never a team member's file (readOwnFile bypasses the
-    // team read-union).
-    if (rowPersonality !== null) return personaPrefixText(name, rowPersonality);
+  /** Only the owner's memory supplies persona text; team read unions do not apply. */
+  private async resolvePersonaPrefix(db: AppDb, scope: MemoryScope): Promise<string> {
     const row = await readOwnFile(db, scope, "assistant/personality.md");
-    return personaPrefixText(name, row ? row.content : "");
+    return personaPrefixText(row?.content ?? "");
   }
 
   /** The shared per-process EventStream. Engine sessions and WS handlers fan out through this one instance. */
@@ -3334,7 +3259,7 @@ export class EngineHost {
    * `overrideId` and the user default — that persisted value already
    * reflects whatever `setModel` (or the original create-time model) set.
    * Only on create does the preference cascade apply (TKAI-255):
-   * `overrideId ?? assistantDefault ?? childDefault ?? userDefault ?? teamDefault ?? opts.defaultModelId ?? "s"`
+   * `overrideId ?? childDefault ?? userDefault ?? teamDefault ?? opts.defaultModelId ?? "s"`
    * — most-specific wins. Org model preferences are gone (superseded by the
    * per-tier ordered target lists): the final fallback is the tier token
    * `"s"`, which `resolveModelSpec` resolves through the org's tier map
@@ -3348,15 +3273,6 @@ export class EngineHost {
    *   touch a shared session must not freeze their personal preference
    *   onto everyone (the resolved model persists, restore-no-clobber).
    * - `ownerTeamId` opts into the team tier for team-owned sessions.
-   * - `assistantDefault` is the assistant row's OWN stored `model` (Task 9,
-   *   model-selector-overhaul). Unlike `userId`, this is principal-scoped,
-   *   not actor-scoped: an assistant's stored model belongs to the
-   *   assistant itself, so passing it for a SHARED team/org assistant is
-   *   correct and does not leak whoever happened to wake the session first
-   *   — every waker sees the same assistant-level pick. It sits right
-   *   after `overrideId` because it is the next most specific choice: a
-   *   caller-supplied explicit override always wins, but absent one, the
-   *   assistant's own configured model outranks every other default tier.
    */
   private async resolveModelForBuild(
     existing: SessionData | null,
@@ -3366,13 +3282,11 @@ export class EngineHost {
       overrideId?: string;
       ownerTeamId?: string;
       childDefault?: string;
-      assistantDefault?: string;
     },
   ): Promise<BuildModel> {
     if (existing?.model) return this.resolveModelObject(orgId, existing.model);
     const id =
       prefs.overrideId ??
-      prefs.assistantDefault ??
       prefs.childDefault ??
       (prefs.userId ? await this.userDefaultModel(prefs.userId) : undefined) ??
       (prefs.ownerTeamId ? await this.teamDefaultModel(orgId, prefs.ownerTeamId) : undefined) ??
@@ -3425,7 +3339,7 @@ export class EngineHost {
    * on shutdown). So on restore (`existing` present), the *persisted* value
    * always wins outright over every cascade tier. Only on create does the
    * preference cascade apply:
-   * `assistantDefault ?? userDefault ?? teamDefault ?? orgDefault ?? undefined`
+   * `userDefault ?? teamDefault ?? orgDefault ?? undefined`
    * — most-specific wins — and the resolved level (if any) is clamped to the
    * org's cap (`clampToMax`). A cascade-resolved value that isn't a known
    * level (a stale/invalid column) is treated as unset rather than thrown.
@@ -3437,14 +3351,13 @@ export class EngineHost {
   private async resolveReasoningForBuild(
     existing: SessionData | null,
     orgId: string,
-    prefs: { userId?: string; ownerTeamId?: string; assistantDefault?: string },
+    prefs: { userId?: string; ownerTeamId?: string },
   ): Promise<ReasoningLevel | undefined> {
     if (existing?.reasoning) {
       return isReasoningLevel(existing.reasoning) ? existing.reasoning : undefined;
     }
     const settings = this.opts.db ? await getOrgReasoningSettings(this.opts.db, orgId) : {};
     const level =
-      prefs.assistantDefault ??
       (prefs.userId ? await this.userDefaultReasoning(prefs.userId) : undefined) ??
       (prefs.ownerTeamId ? await this.teamDefaultReasoning(orgId, prefs.ownerTeamId) : undefined) ??
       settings.default;
@@ -3493,19 +3406,17 @@ export class EngineHost {
       : undefined;
     const isUserAssistant = assistant?.ownerType === "user";
     const isTeamAssistant = assistant?.ownerType === "team";
-    const userId = assistant ? (isUserAssistant ? actorUserId : undefined) : actorUserId;
+    const userId = assistant ? (isUserAssistant ? assistant.ownerId : undefined) : actorUserId;
     const ownerTeamId = assistant
       ? (isTeamAssistant ? assistant.ownerId : undefined)
       : meta.ownerTeamId;
     const { spec } = await this.resolveModelForBuild(null, meta.orgId, {
       userId,
       ownerTeamId,
-      assistantDefault: assistant?.model ?? undefined,
     });
     const reasoning = await this.resolveReasoningForBuild(null, meta.orgId, {
       userId,
       ownerTeamId,
-      assistantDefault: assistant?.reasoning ?? undefined,
     });
     return {
       model: spec,
@@ -3673,10 +3584,7 @@ export class EngineHost {
     );
     const policyResolver = this.getPolicyResolver();
     const pluginStoreFactory = this.getPluginStoreFactory();
-    const parentAssistant = this.opts.db
-      ? await loadAssistantBySessionId(this.opts.db, opts.parentSessionId)
-      : undefined;
-    const resolveOutboundSender = this.outboundSenderResolver(opts.orgId, opts.owner, parentAssistant?.id);
+    const resolveOutboundSender = this.outboundSenderResolver(opts.orgId, opts.owner);
     // A child spawned with a repo binding (the spawner inserts the
     // `session_repos` row before calling in here) gets the same declarative
     // clone prep a REST-created session gets. Only this first build decides —

@@ -722,10 +722,9 @@ describe("EngineHost model resolution wiring", () => {
     expect(restored.options.model.provider).toBe(row.id);
   });
 
-  // `assistantDefault` (model-selector-overhaul Task 9): an assistant's own
-  // stored `model` column, threaded into the cascade from `assistantSessionFor`.
-  describe("assistantDefault cascade slot (Task 9)", () => {
-    it("new-session precedence: the assistant's own model wins over the user's personal default", async () => {
+  // Workspace runtimes inherit their owner defaults.
+  describe("workspace owner model defaults", () => {
+    it("new workspace runtime uses the personal owner model default", async () => {
       api = await bootTestApi();
       const { db, engineHost } = api.providers;
       await db.update(users).set({ defaultModel: "claude-opus-4-5" }).where(eq(users.id, "local-user"));
@@ -734,7 +733,7 @@ describe("EngineHost model resolution wiring", () => {
       // "l" tier resolves to anthropic/claude-opus-4-7 by built-in default
       // (model-tiers.ts) — distinct from the user's "claude-opus-4-5" pick,
       // so the two tiers are distinguishable.
-      await db.update(assistants).set({ model: "l" }).where(eq(assistants.id, assistant.id));
+      await db.update(users).set({ defaultModel: "l" }).where(eq(users.id, "local-user"));
 
       const session = await engineHost.assistantSessionFor(assistant.id, {
         actorUserId: "local-user",
@@ -745,12 +744,24 @@ describe("EngineHost model resolution wiring", () => {
       expect(session.options.modelSpec).toBe("l");
     });
 
-    it("new-session precedence: an explicit overrideId wins over the assistant's own model", async () => {
+    it("uses the personal owner's defaults instead of the member who wakes it", async () => {
+      api = await bootTestApi();
+      const { db, engineHost } = api.providers;
+      await db.update(users).set({ defaultModel: "l", defaultReasoning: "high" }).where(eq(users.id, "local-user"));
+      await db.update(users).set({ defaultModel: "m", defaultReasoning: "low" }).where(eq(users.id, "test-member"));
+      const assistant = await resolveDefaultAssistant(db, "local-org", { type: "user", id: "local-user" });
+      const session = await engineHost.assistantSessionFor(assistant.id, { actorUserId: "test-member", orgId: "local-org" });
+      expect(session.options.modelSpec).toBe("l");
+      expect(session.options.sampling?.reasoning).toBe("high");
+      expect(await engineHost.resolveFreshThreadSettings(session.id, { userId: "test-member", orgId: "local-org", workspace: "/tmp" })).toEqual({ model: "l", reasoning: "high" });
+    });
+
+    it("an explicit session override wins over the personal owner default", async () => {
       api = await bootTestApi();
       const { db, engineHost } = api.providers;
 
       const assistant = await resolveDefaultAssistant(db, "local-org", { type: "user", id: "local-user" });
-      await db.update(assistants).set({ model: "l" }).where(eq(assistants.id, assistant.id));
+      await db.update(users).set({ defaultModel: "l" }).where(eq(users.id, "local-user"));
 
       const session = await engineHost.assistantSessionFor(
         assistant.id,
@@ -767,19 +778,18 @@ describe("EngineHost model resolution wiring", () => {
   // re-resolves a fresh cascade value on every cache-eviction rebuild would
   // silently clobber an explicit `session.setReasoning(...)`.
   describe("reasoning cascade (Task 11)", () => {
-    it("assistant default beats the user's personal default", async () => {
+    it("workspace runtime uses the personal owner reasoning default", async () => {
       api = await bootTestApi();
       const { db, engineHost } = api.providers;
       await db.update(users).set({ defaultReasoning: "low" }).where(eq(users.id, "local-user"));
 
       const assistant = await resolveDefaultAssistant(db, "local-org", { type: "user", id: "local-user" });
-      await db.update(assistants).set({ reasoning: "high" }).where(eq(assistants.id, assistant.id));
 
       const session = await engineHost.assistantSessionFor(assistant.id, {
         actorUserId: "local-user",
         orgId: "local-org",
       });
-      expect(session.options.sampling?.reasoning).toBe("high");
+      expect(session.options.sampling?.reasoning).toBe("low");
     });
 
     it("org default applies when nothing else is set", async () => {

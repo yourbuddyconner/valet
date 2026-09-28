@@ -9,16 +9,12 @@
  */
 import { render, screen } from "@testing-library/react";
 import type {
-  AssistantSummary,
   GlobalWorkflowRunSummary,
-  ListAssistantsResponse,
   ListTeamsResponse,
   TeamChildSummary,
 } from "@valet/api/wire";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-
-let assistantsData: ListAssistantsResponse = { assistants: [] };
 let teamsData: ListTeamsResponse = { teams: [] };
 
 // The header and cards render bare Links, which need a router — stub them to
@@ -75,8 +71,6 @@ function child(overrides: Partial<TeamChildSummary> = {}): TeamChildSummary {
     parentThreadId: "th-1",
     status: "settled",
     createdAt: 100,
-    assistantId: "asst_1",
-    assistantName: "Sentinel",
     ...overrides,
   };
 }
@@ -94,16 +88,6 @@ function run(overrides: Partial<GlobalWorkflowRunSummary> = {}): GlobalWorkflowR
   };
 }
 
-function teamAssistant(overrides: Partial<AssistantSummary> = {}): AssistantSummary {
-  return {
-    id: "asst_team",
-    owner: { type: "team", id: "team-1" },
-    sessionId: "assistant:asst_team",
-    createdAt: 10,
-    ...overrides,
-  };
-}
-
 describe("mergeTeamFeed", () => {
   it("merges both kinds newest-first and caps the result", () => {
     const children = [child({ sessionId: "c1", createdAt: 30 }), child({ sessionId: "c2", createdAt: 10 })];
@@ -112,13 +96,13 @@ describe("mergeTeamFeed", () => {
     expect(feed.map((i) => i.key)).toEqual(["child:c1", "run:r1"]);
   });
 
-  it("attributes an assistant run to its assistant, with a fallback for unnamed ones", () => {
+  it("attributes child executions to team work", () => {
     const named = mergeTeamFeed([child()], [])[0];
-    expect(named?.actor).toBe("Sentinel");
+    expect(named?.actor).toBe("Team work");
     expect(named?.title).toBe("Audit PR");
 
-    const unnamed = mergeTeamFeed([child({ assistantName: undefined })], [])[0];
-    expect(unnamed?.actor).toBe("Assistant");
+    const unnamed = mergeTeamFeed([child()], [])[0];
+    expect(unnamed?.actor).toBe("Team work");
   });
 
   it("maps tones: running children run; failed or cancelled outcomes fail; parked runs still run", () => {
@@ -139,7 +123,6 @@ describe("mergeTeamFeed", () => {
 
 describe("TeamDashboard header", () => {
   it("opens workspace threads instead of profile editors", () => {
-    assistantsData = { assistants: [teamAssistant({ name: "Sentinel" })] };
     render(<TeamDashboard teamId="team-1" />);
     expect(screen.getByRole("link", { name: "Open threads" }).getAttribute("href")).toBe("/chat");
     expect(screen.queryByRole("link", { name: "Edit assistant" })).toBeNull();

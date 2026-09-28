@@ -46,7 +46,7 @@ import { bundledPlugins } from "../plugins/registry.gen.js";
 import { actionInvocations } from "../schema/index.js";
 import type {
   CreateWorkflowResponse,
-  EnsureOrchestratorResponse,
+  EnsureWorkspaceRuntimeResponse,
   GetWorkflowRunResponse,
   ListMessagesResponse,
   StartWorkflowRunResponse,
@@ -116,9 +116,9 @@ describeIfKey("api integration: plugin system exit criteria — orchestrator flo
         apiKey: "fixture-demo-key",
       });
 
-      const ensureRes = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
+      const ensureRes = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST" });
       expect(ensureRes.status).toBe(200);
-      const { sessionId } = (await ensureRes.json()) as EnsureOrchestratorResponse;
+      const { sessionId } = (await ensureRes.json()) as EnsureWorkspaceRuntimeResponse;
 
       await driveTurn({
         baseUrl: api.baseUrl,

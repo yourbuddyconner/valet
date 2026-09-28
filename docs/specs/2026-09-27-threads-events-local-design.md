@@ -179,3 +179,35 @@ pagination. Their cursors bind all three identifiers. The workspace gallery link
 back to originating work and its thread. Reader comments target that stored thread.
 Artifacts without source metadata remain available through the workspace gallery.
 Runtime links resolve the owner before redirecting to personal or team Threads.
+
+
+### Consolidated web routes
+
+Threads owns work discovery and the workspace artifact gallery. Its Work and
+artifacts view switches between executions and all workspace artifacts. The gallery
+keeps copy, revoke, and pagination controls. A workspace change resets both views.
+
+The standalone `/sessions` and `/artifacts` pages and `/orchestrator` redirect are
+removed. Execution detail remains at `/sessions/$sessionId`. Published artifacts
+remain at `/a/$token`. Personal thread defaults use `/settings/threads`. Home remains
+available as the workspace overview. Removed pages have no compatibility redirects.
+
+### Workspace runtime cutover
+
+Personal and team views use `/api/workspaces/:workspace/runtime`. The personal
+workspace uses `user`; teams use their team ID. GET probes, POST ensures the
+singleton runtime, and GET `/info` returns presence and active child counts.
+Runtime access follows workspace membership. Team API keys can access only their
+own team. Explicit team views never query personal runtime presence.
+
+The assistant list API and client caches are removed. Runtime rows retain only
+identity, ownership, lifecycle timestamps, and their session address. The migration
+drops profile name, avatar, personality, behavior, model, and reasoning columns.
+It preserves runtime IDs and conversation history.
+
+Execution uses personal or team model and reasoning defaults. Organization model
+tiers, reasoning caps, credentials, and action policy still apply. Owner memory
+`assistant/personality.md` supplies optional context with a 500-character cap.
+Team and organization outbound messages use the workspace name. Personal messages
+use the integration's default bot identity. No per-assistant capability filter or
+profile override remains.

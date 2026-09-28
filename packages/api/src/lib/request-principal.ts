@@ -56,15 +56,15 @@ function underSegment(path: string, root: string): boolean {
 /**
  * Surfaces a team `vlt_` key may call. Everything else is personal, org, or
  * membership admin — a CI key must not inherit the creating user's rights.
- * `teamId` is the key's own team: the one orchestrator it may wake is that
- * team's default assistant, which is what `valet send` targets when no
- * session is named.
+ * `teamId` is the key's own team: runtime reads and ensures are limited
+ * to that workspace, including when the creating administrator leaves.
  */
 export function teamApiKeyPathAllowed(path: string, method: string, teamId: string): boolean {
   if (path === "/api/me" && method === "GET") return true;
   if (underSegment(path, "/api/sessions")) return true;
   if (underSegment(path, "/api/workflows")) return true;
-  if (path === `/api/teams/${teamId}/orchestrator` && method === "POST") return true;
+  if (path === `/api/workspaces/${teamId}/runtime` && (method === "POST" || method === "GET")) return true;
+  if (path === `/api/workspaces/${teamId}/runtime/info` && method === "GET") return true;
   return false;
 }
 

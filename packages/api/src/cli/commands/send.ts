@@ -17,7 +17,7 @@ import { streamSession, type StreamSessionOpts } from "../stream.js";
 import type { CliContext } from "../types.js";
 import type {
   DecisionGate,
-  EnsureOrchestratorResponse,
+  EnsureWorkspaceRuntimeResponse,
   SendPromptRequest,
   SendPromptResponse,
   WireEvent,
@@ -25,7 +25,7 @@ import type {
 
 /** The subset of `InstanceClient` the `send` command needs. */
 export interface SendClient {
-  ensureOrchestrator(): Promise<EnsureOrchestratorResponse>;
+  ensureOrchestrator(): Promise<EnsureWorkspaceRuntimeResponse>;
   sendPrompt(id: string, body: SendPromptRequest): Promise<SendPromptResponse>;
 }
 

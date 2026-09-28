@@ -13,7 +13,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import type {
   EventSubscriptionWire,
-  ListAssistantsResponse,
   TeamSummary,
   WorkflowDefinitionSummary,
 } from "@valet/api/wire";
@@ -124,10 +123,6 @@ vi.mock("~/api/workflows", () => ({
   useWorkflows: () => ({ data: workflowsData, isLoading: false, error: null }),
 }));
 
-/** The assistants the caller can see. A row badges one of these, so an empty
- * list is the unresolved case. Mutable per case, reset in `beforeEach`. */
-let assistantsData: ListAssistantsResponse = { assistants: [] };
-
 // The assistant badge links to the assistant editor, and the real `Link`
 // wants a router this suite has no reason to mount. `params` is serialized
 // so a case can read the assistant a badge navigates to.
@@ -192,7 +187,6 @@ beforeEach(() => {
   feedCalls = 0;
   subscriptionsData = { subscriptions: [subscription()] };
   workflowsData = { workflows: [] };
-  assistantsData = { assistants: [] };
   teamsData = { teams: [] };
   feedRefetch.mockClear();
 });
@@ -361,17 +355,6 @@ describe("SubscriptionsPanel", () => {
   // to the one this rule uses.
   it("badges a team orchestrator target with its assistant, linked to the editor", () => {
     teamsData = { teams: [teamFixture()] };
-    assistantsData = {
-      assistants: [
-        {
-          id: "asst_eng",
-          owner: { type: "team", id: "t_eng" },
-          sessionId: "assistant:asst_eng",
-          name: "Release Captain",
-          createdAt: 1,
-        },
-      ],
-    };
     subscriptionsData = {
       subscriptions: [
         subscription({
@@ -403,16 +386,6 @@ describe("SubscriptionsPanel", () => {
   // badge names the org and the plain word must step aside: one "Org", not
   // two.
   it("prints one Org label when the org's assistant resolves (forward guard)", () => {
-    assistantsData = {
-      assistants: [
-        {
-          id: "asst_org",
-          owner: { type: "org", id: "org_1" },
-          sessionId: "assistant:asst_org",
-          createdAt: 1,
-        },
-      ],
-    };
     subscriptionsData = {
       subscriptions: [
         subscription({
@@ -436,16 +409,6 @@ describe("SubscriptionsPanel", () => {
   // Everything on a personal page belongs to the reader, so a badge naming
   // their own default assistant carries no information.
   it("says nothing about a personal rule its reader's default assistant answers", () => {
-    assistantsData = {
-      assistants: [
-        {
-          id: "asst_mine",
-          owner: { type: "user", id: "u1" },
-          sessionId: "assistant:asst_mine",
-          createdAt: 1,
-        },
-      ],
-    };
     const { container } = render(
       <TooltipProvider>
         <SubscriptionsPanel />

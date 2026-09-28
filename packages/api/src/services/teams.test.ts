@@ -98,7 +98,7 @@ describe("teams service", () => {
     const now = Date.now();
     await db.insert(teams).values({ id: "team_old", orgId, name: "Old", origin: "local", createdAt: now });
     await db.insert(teams).values({ id: "team_named", orgId, name: "Named", origin: "local", createdAt: now });
-    await seedWorkspaceAssistant(db, orgId, { type: "team", id: "team_named" }, "Bot");
+    await seedWorkspaceAssistant(db, orgId, { type: "team", id: "team_named" });
     const seeded = await createTeam(db, { orgId, name: "Fresh", creatorUserId: "u1" });
 
     // "Named" already holds a default: its first assistant became one.
@@ -108,7 +108,7 @@ describe("teams service", () => {
       expect(row).toBeDefined();
     }
     const namedRows = await db.select().from(assistants).where(and(eq(assistants.ownerType, "team"), eq(assistants.ownerId, "team_named")));
-    expect(namedRows.map((r) => r.name)).toEqual(["Bot"]);
+    expect(namedRows).toHaveLength(1);
 
     expect(await seedMissingTeamDefaults(db)).toEqual([]);
   });

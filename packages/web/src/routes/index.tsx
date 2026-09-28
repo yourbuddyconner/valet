@@ -1,6 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import type { GetOrchestratorInfoResponse } from "@valet/api/wire";
-import { useOrchestratorChildren, useOrchestratorInfo } from "~/api/orchestrator";
+import { useOrchestratorChildren, useWorkspaceRuntimeInfo } from "~/api/orchestrator";
 import { useNotifications } from "~/api/queries";
 import { ActivityStrip, mergeActivity } from "~/components/assistant/activity-strip";
 import { MemoryCard } from "~/components/assistant/memory-card";
@@ -11,17 +10,7 @@ import { TeamDashboard } from "~/components/dashboard/team-dashboard";
 import { Spinner } from "~/components/primitives";
 import { useWorkspaceScope } from "~/lib/workspace-scope";
 
-/**
- * `/` — the dashboard. Follows the workspace switcher, exactly like every
- * list page (team dashboard design, 2026-08-27): the personal workspace
- * renders the assistant dashboard (assistant-centered web UI, decision 1);
- * a team workspace renders the team's activity dashboard.
- *
- * The personal branch works as before: `GET /api/orchestrator/info` with
- * `name === null` means first visit — an inline, full-page-centered
- * identity step (decision 11); once named, the identity header + card grid
- * + activity strip.
- */
+/** Home follows the workspace switcher and shows the personal or team activity dashboard. */
 export const Route = createFileRoute("/")({
   component: Home,
 });
@@ -35,7 +24,7 @@ export function Home() {
 }
 
 export function Dashboard() {
-  const info = useOrchestratorInfo();
+  const info = useWorkspaceRuntimeInfo("user");
 
   if (info.isLoading) {
     return (
@@ -60,10 +49,10 @@ export function Dashboard() {
     );
   }
 
-  return <DashboardBody info={info.data} />;
+  return <DashboardBody />;
 }
 
-function DashboardBody({ info }: { info: GetOrchestratorInfoResponse }) {
+function DashboardBody() {
   const childrenQ = useOrchestratorChildren();
   const notificationsQ = useNotifications();
 

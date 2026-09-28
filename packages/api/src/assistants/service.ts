@@ -3,16 +3,11 @@
  * ownership. The database enforces this invariant, including retired rows.
  */
 import { assistantSessionId, type Principal, type Session } from "@valet/engine";
-import { and, asc, eq, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { EngineHost } from "../engine/host.js";
 import type { AppDb, AppQueryable } from "../lib/drizzle.js";
 import { agentSessions, assistants, type AssistantRow } from "../schema/index.js";
-import type { AssistantSummary } from "../wire/types.js";
-import { parseAssistantBehavior } from "./behavior.js";
-
-/** Reject assistant selection in workspace-owned writes. */
-export const WORKSPACE_ASSISTANT_MESSAGE = "Each personal space and team has one assistant. Manage workspace settings or start a new thread instead.";
 
 /** Raised when a request targets an assistant that is already archived. */
 export class ArchivedAssistantError extends Error {
@@ -22,25 +17,6 @@ export class ArchivedAssistantError extends Error {
     super("This workspace assistant has been retired.");
     this.name = "ArchivedAssistantError";
   }
-}
-
-/** The wire shape of one row. `name` is absent until someone sets it. */
-export function toAssistantSummary(row: AssistantRow): AssistantSummary {
-  return {
-    id: row.id,
-    owner: { type: row.ownerType, id: row.ownerId },
-    ...(row.name !== null ? { name: row.name } : {}),
-    ...(row.avatarUrl !== null ? { avatarUrl: row.avatarUrl } : {}),
-    ...(row.personality !== null ? { personality: row.personality } : {}),
-    ...(() => {
-      const behavior = parseAssistantBehavior(row.behavior, row.id);
-      return behavior !== null ? { behavior } : {};
-    })(),
-    sessionId: row.sessionId,
-    createdAt: row.createdAt,
-    model: row.model,
-    reasoning: row.reasoning,
-  };
 }
 
 function ownerMatch(orgId: string, principal: Principal): SQL | undefined {
@@ -55,19 +31,6 @@ function ownerMatch(orgId: string, principal: Principal): SQL | undefined {
 export async function loadAssistant(db: AppQueryable, assistantId: string): Promise<AssistantRow | undefined> {
   const rows = await db.select().from(assistants).where(eq(assistants.id, assistantId)).limit(1);
   return rows[0];
-}
-
-export function assistantSenderIdentity(
-  row: Pick<AssistantRow, "name" | "avatarUrl">,
-): { displayName?: string; avatarUrl?: string } | undefined {
-  const displayName = row.name ?? undefined;
-  const avatarUrl = row.avatarUrl ?? undefined;
-  return displayName === undefined && avatarUrl === undefined
-    ? undefined
-    : {
-        ...(displayName !== undefined ? { displayName } : {}),
-        ...(avatarUrl !== undefined ? { avatarUrl } : {}),
-      };
 }
 
 /**
@@ -108,9 +71,6 @@ export async function findDefaultAssistant(
 function newAssistantRow(args: {
   orgId: string;
   principal: Principal;
-  name: string | null;
-  personality?: string | null;
-  behavior?: string | null;
 }): AssistantRow {
   const id = `asst_${randomUUID()}`;
   return {
@@ -118,12 +78,6 @@ function newAssistantRow(args: {
     orgId: args.orgId,
     ownerType: args.principal.type,
     ownerId: args.principal.id,
-    name: args.name,
-    avatarUrl: null,
-    personality: args.personality ?? null,
-    behavior: args.behavior ?? null,
-    model: null,
-    reasoning: null,
     sessionId: assistantSessionId(id),
     createdAt: Date.now(),
     archivedAt: null,
@@ -144,7 +98,7 @@ export async function resolveDefaultAssistant(
     return existing;
   }
 
-  const row = newAssistantRow({ orgId, principal, name: null });
+  const row = newAssistantRow({ orgId, principal });
   const inserted = await db.insert(assistants).values(row).onConflictDoNothing().returning();
   if (inserted[0]) return inserted[0];
 
@@ -211,7 +165,7 @@ async function ensureAssistantSession(
         userId: meta.actorUserId,
         orgId: meta.orgId,
         workspace: data.workspace,
-        title: assistant.name ?? "Assistant",
+        title: "Assistant",
         status: "active",
         ownerType: principal.type,
         ownerId: principal.id,
@@ -226,30 +180,6 @@ async function ensureAssistantSession(
   }
 
   return { assistant, sessionId, session };
-}
-
-// ── Listing ───────────────────────────────────────────────────────────────
-
-/**
- * Live workspace runtimes owned by any of `owners`, oldest
- * first, in one query. The unfiltered list passes the caller plus every
- * team the caller belongs to; the filtered list passes the one owner it was
- * asked for.
- */
-export async function listAssistantsForOwners(
-  db: AppDb,
-  orgId: string,
-  owners: Principal[],
-): Promise<AssistantRow[]> {
-  if (owners.length === 0) return [];
-  const byOwner = owners.map((p) =>
-    and(eq(assistants.ownerType, p.type), eq(assistants.ownerId, p.id)),
-  );
-  return db
-    .select()
-    .from(assistants)
-    .where(and(eq(assistants.orgId, orgId), isNull(assistants.archivedAt), or(...byOwner)))
-    .orderBy(asc(assistants.createdAt));
 }
 
 export async function retireAssistant(db: AppQueryable, assistantId: string): Promise<void> {

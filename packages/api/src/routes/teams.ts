@@ -9,7 +9,6 @@ import { deleteTeamResources } from "../services/team-resource-deletion.js";
  *   POST   /api/teams/:id/members           → add/update a member
  *   PATCH  /api/teams/:id/members/:userId   → change a member's role
  *   DELETE /api/teams/:id/members/:userId   → remove a member
- *   POST   /api/teams/:id/orchestrator      → get-or-create the team's default assistant session
  *   GET/POST/DELETE /api/teams/:id/api-keys → team `vlt_` keys (TKAI-396; `routes/team-api-keys.ts`)
  *
  * Org-membership-gated: every route requires the team to belong to the
@@ -63,9 +62,7 @@ import { validateDefaultModelId } from "../services/model-catalog.js";
 import { assertModelSelectable } from "../services/approved-models.js";
 import { assertReasoningSelectable } from "../services/reasoning.js";
 import {
-  ensureDefaultAssistantSession,
-  listAssistantsForOwners,
-  toAssistantSummary,
+  findDefaultAssistant,
 } from "../assistants/service.js";
 import {
   addMember,
@@ -94,7 +91,6 @@ import type {
   AddTeamMemberRequest,
   CreateTeamRequest,
   CreateTeamResponse,
-  EnsureOrchestratorResponse,
   GetTeamChildrenResponse,
   TeamChildSummary,
   JoinSuggestedTeamResponse,
@@ -268,64 +264,9 @@ teamsRouter.post("/:id/join", async (c) => {
   return c.json({ joined: true } satisfies JoinSuggestedTeamResponse);
 });
 
-// ── Orchestrator (get-or-create) ────────────────────────────────────────────
-
-/**
- * The team's DEFAULT assistant session. Mirrors `POST /api/orchestrator`
- * (`routes/orchestrator.ts`), which explicitly documents team/org
- * assistants as "created via other paths" — this is that path. Any team
- * member can reach it, same gate as `GET /:id/members`; there's no
- * team-admin-only tier for talking to the team's own assistant.
- *
- * A team owns any number of assistants. This route resolves the default,
- * which is what a caller that names only the team can mean. Use
- * `GET /api/assistants?ownerType=team&ownerId={id}` to reach the others.
- *
- * `ensureDefaultAssistantSession` is idempotent and safe to call from every
- * member: the underlying engine session may already exist (a team-owned
- * workflow's `orchestrator` node can wake one before any human ever views
- * it — see `workflows/engine-deps.ts`'s `promptOrchestrator`), in which
- * case this only backfills the `agent_sessions` app row the viewing routes
- * (`GET /api/sessions/:id`, messages, the WS) need, rather than creating a
- * second session.
- *
- * A team `vlt_` key reaches this for its own team, with no membership
- * check on the creating admin: the key survives them leaving (decision 2
- * of the team-api-keys design). The scope gate already refuses every
- * other team's id; the principal comparison here is the route's own
- * guard, so it holds even if that gate changes.
- */
-teamsRouter.post("/:id/orchestrator", async (c) => {
-  const { db, engineHost } = c.var.providers;
-  const user = c.var.user;
-  const principal = c.var.principal;
-  const id = c.req.param("id");
-
-  const team = await loadTeamInOrg(db, id, user.orgId);
-  if (!team) return c.json({ error: "team not found" }, 404);
-  const admitted = principal.type === "team" ? principal.id === id : await canViewTeam(db, id, user.id);
-  if (!admitted) return c.json({ error: "team not found" }, 404);
-
-  const { sessionId } = await ensureDefaultAssistantSession(
-    { db, engineHost },
-    { type: "team", id },
-    { actorUserId: user.id, orgId: user.orgId },
-  );
-
-  const body: EnsureOrchestratorResponse = { sessionId };
-  return c.json(body);
-});
-
 // ── Children (team dashboard) ───────────────────────────────────────────
 
-/**
- * `GET /api/teams/:id/children` — the team mirror of
- * `GET /api/orchestrator/children`: child runs spawned by EVERY assistant
- * the team owns, newest first, capped at 20 (a dashboard feed, not a
- * history — /sessions is the history). Rows carry the spawning assistant
- * so the feed can attribute a run. Same member-or-org-admin gate as the
- * roster; non-members get 404 (existence-hiding).
- */
+/** Recent child runs from the team runtime. Threads provides the full work history. */
 teamsRouter.get("/:id/children", async (c) => {
   const { db } = c.var.providers;
   const user = c.var.user;
@@ -335,12 +276,8 @@ teamsRouter.get("/:id/children", async (c) => {
   if (!team) return c.json({ error: "team not found" }, 404);
   if (!(await canViewTeam(db, id, user.id))) return c.json({ error: "team not found" }, 404);
 
-  const assistants = await listAssistantsForOwners(db, user.orgId, [{ type: "team", id }]);
-  const bySessionId = new Map(assistants.map((a) => [a.sessionId, a]));
-  if (bySessionId.size === 0) {
-    const empty: GetTeamChildrenResponse = { children: [] };
-    return c.json(empty);
-  }
+  const runtime = await findDefaultAssistant(db, user.orgId, { type: "team", id });
+  if (!runtime || runtime.archivedAt !== null) return c.json({ children: [] });
 
   const selection = {
     sessionId: childWatches.childSessionId,
@@ -352,7 +289,7 @@ teamsRouter.get("/:id/children", async (c) => {
     lastActivityAt: agentSessions.lastActivityAt,
   };
   const parentFilter = and(
-    inArray(childWatches.parentSessionId, [...bySessionId.keys()]),
+    eq(childWatches.parentSessionId, runtime.sessionId),
     isNull(childWatches.dismissedAt),
   );
   // Two reads, merged: the newest window feeds the dashboard, and RUNNING
@@ -381,15 +318,12 @@ teamsRouter.get("/:id/children", async (c) => {
     .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt));
 
   const children: TeamChildSummary[] = rows.map((r) => {
-    const assistant = bySessionId.get(r.parentSessionId);
     return {
       sessionId: r.sessionId,
       title: r.title ?? r.sessionId,
       parentThreadId: r.parentThreadId,
       status: r.settled ? "settled" : "running",
       createdAt: r.createdAt,
-      assistantId: assistant?.id ?? "",
-      ...(assistant?.name != null ? { assistantName: assistant.name } : {}),
     };
   });
 
@@ -458,7 +392,7 @@ teamsRouter.post("/", async (c) => {
     const resp: CreateTeamResponse = {
       team: await rowToSummary(db, team, user.id),
       adoptedSources,
-      defaultAssistant: toAssistantSummary(team.defaultAssistant),
+      runtime: { sessionId: team.defaultAssistant.sessionId },
     };
     return c.json(resp, 201);
   } catch (err) {

@@ -34,7 +34,7 @@ import { driveTurn } from "./_test-utils.js";
 import { internalToken } from "../lib/internal-auth.js";
 import { childWatches, memoryFiles } from "../schema/index.js";
 import { readFile as readMemoryFile } from "../services/memory.js";
-import type { EnsureOrchestratorResponse } from "../wire/types.js";
+import type { EnsureWorkspaceRuntimeResponse } from "../wire/types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_ROOT = join(__dirname, "..", "..", "test", "fixtures", "okf-bundle");
@@ -178,9 +178,9 @@ describeE2E("api integration: phase 4 exit criteria — full orchestrator loop",
       expect(pinnedRow?.pinned).toBe(true);
 
       // ── 2. Ensure orchestrator, no-tool turn, zero sandbox creates + snapshot present ──
-      const ensureRes = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
+      const ensureRes = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST" });
       expect(ensureRes.status).toBe(200);
-      const { sessionId } = (await ensureRes.json()) as EnsureOrchestratorResponse;
+      const { sessionId } = (await ensureRes.json()) as EnsureWorkspaceRuntimeResponse;
 
       const session = api.providers.engineHost.liveSession(sessionId);
       expect(session).not.toBeNull();

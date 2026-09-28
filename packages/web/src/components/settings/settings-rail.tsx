@@ -39,7 +39,7 @@ export function isTeamSettingsPath(pathname: string): boolean {
 
 const YOU_ITEMS = [
   { to: "/settings/profile", label: "Profile" },
-  { to: "/settings/assistant", label: "Thread defaults" },
+  { to: "/settings/threads", label: "Thread defaults" },
   { to: "/settings/appearance", label: "Appearance" },
   { to: "/settings/notifications", label: "Notifications" },
   { to: "/settings/connected-accounts", label: "Connected accounts" },

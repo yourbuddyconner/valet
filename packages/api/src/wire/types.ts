@@ -820,20 +820,7 @@ export interface PauseSessionResponse {
   status: "hibernated";
 }
 
-// ── REST: orchestrator ────────────────────────────────────────────────────
-
-/** POST /api/orchestrator — ensures the caller's orchestrator session exists. */
-export interface EnsureOrchestratorResponse {
-  sessionId: string;
-}
-
-/** GET /api/orchestrator — probes without creating. `sessionId` is null
- * while the caller has no default assistant: an assistant addresses its
- * session by its own id, so a caller that owns none has no id to report. */
-export interface GetOrchestratorResponse {
-  sessionId: string | null;
-  exists: boolean;
-}
+// ── REST: workspace runtime ──────────────────────────────────────────────
 
 export type OrchestratorPresence = "idle" | "thinking" | "working";
 
@@ -847,71 +834,17 @@ export interface AssistantOwner {
   id: string;
 }
 
-/** Which skills reach the assistant's session. Absent or `mode: "all"` is
- * today's behavior: every skill the owner can reach. Names are the merge
- * key stored skills already shadow plugin skills by. */
-export type AssistantSkillsBehavior =
-  | { mode: "all" }
-  | { mode: "allowlist"; names: string[] };
-
-/** One attached integration. `service` is the ActionPlugin routing key
- * (e.g. "github"). `excludeActions` holds fully-qualified action ids
- * (e.g. "github.create_issue"), the same ids the action-policy tables use. */
-export interface AssistantIntegrationEntry {
-  service: string;
-  excludeActions?: string[];
-}
-
-export type AssistantIntegrationsBehavior =
-  | { mode: "all" }
-  | { mode: "allowlist"; entries: AssistantIntegrationEntry[] };
-
-/** Internal runtime behavior configuration. Absent fields include all available capabilities. */
-export interface AssistantBehavior {
-  skills?: AssistantSkillsBehavior;
-  integrations?: AssistantIntegrationsBehavior;
-}
-
-/** Maximum personality text length injected into the runtime prompt. */
-export const PERSONALITY_INJECT_CAP = 500;
-
-export interface AssistantSummary {
-  id: string;
-  owner: AssistantOwner;
-  /** Optional internal display name. */
-  name?: string;
-  /** Avatar URL for outbound channel posts. Absent = the bot's own icon. */
-  avatarUrl?: string;
-  /** Runtime session address; listing does not materialize the session. */
+/** Workspace runtime status, with no separate assistant profile. */
+export interface WorkspaceRuntimeInfoResponse {
   sessionId: string;
-  createdAt: number;
-  /** Absent until someone sets it. When absent the session falls back to the
-   * owner's assistant/personality.md memory file. `""` means explicitly
-   * cleared: the neutral persona, with no file fallback. */
-  personality?: string;
-  /** Absent means every skill and integration (the pre-config behavior). */
-  behavior?: AssistantBehavior;
-  /** Assistant-specific model override. */
-  model?: string | null;
-  /** Assistant-specific reasoning/thinking level override. */
-  reasoning?: string | null;
-}
-
-export interface ListAssistantsResponse {
-  assistants: AssistantSummary[];
-}
-
-/** GET /api/orchestrator/info — assistant identity + presence (assistant-
- * centered web UI decision 4). Never creates the engine session.
- * `personality` is the EFFECTIVE value the next wake applies: the
- * assistants.personality column when set, else the legacy memory file. */
-export interface GetOrchestratorInfoResponse {
-  sessionId: string;
-  name: string | null;
-  personality: string | null;
   presence: OrchestratorPresence;
   activeChildren: number;
 }
+export interface WorkspaceRuntimeResponse {
+  sessionId: string | null;
+  exists: boolean;
+}
+export interface EnsureWorkspaceRuntimeResponse { sessionId: string; }
 
 export interface OrchestratorChildSummary {
   sessionId: string;
@@ -928,14 +861,8 @@ export interface GetOrchestratorChildrenResponse {
   children: OrchestratorChildSummary[];
 }
 
-/** One row of `GET /api/teams/:id/children` — a child run spawned by ANY of
- * the team's assistants (team dashboard design), with the assistant that
- * spawned it, so the feed can attribute the run. */
-export interface TeamChildSummary extends OrchestratorChildSummary {
-  assistantId: string;
-  /** Absent when the assistant is unnamed; the UI applies its label rule. */
-  assistantName?: string;
-}
+/** Work spawned from a team's singleton runtime. */
+export type TeamChildSummary = OrchestratorChildSummary;
 
 /** GET /api/teams/:id/children — newest first, capped at 20. Team members
  * and org admins only; non-members get 404. */
@@ -1730,10 +1657,8 @@ export interface CreateTeamRequest {
 
 export interface CreateTeamResponse {
   team: TeamSummary;
-  /** Seeded in the same transaction as the team. The client writes this
-   * into the assistants cache so `/chat` opens it instead of treating the
-   * team as empty and creating a second row. */
-  defaultAssistant: AssistantSummary;
+  /** Runtime identity seeded atomically with the workspace. */
+  runtime: { sessionId: string };
   /** Org workflow sources copied onto the new team. Empty when the org
    * publishes none. Each row is pending until its first sync finishes. */
   adoptedSources?: SkillSourceSummary[];
@@ -2757,10 +2682,7 @@ export interface PluginServiceSummary {
   actions: PluginActionSummary[];
 }
 
-/** A plugin's actions grouped by ActionPlugin routing service — the key
- * `AssistantBehavior.integrations` entries use. `services[].actions` groups
- * by CREDENTIAL service instead and omits credential-less plugins, so the
- * assistant editor reads this list. */
+/** Actions grouped by routing service, including credential-less plugins. */
 export interface PluginActionServiceSummary {
   service: string;
   dynamic?: true;

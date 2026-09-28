@@ -30,7 +30,6 @@
  * navigation was requested, not that a router resolved it.
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ListAssistantsResponse } from "@valet/api/wire";
 import {
   collectTemplatePaths,
   renderTemplate,
@@ -46,7 +45,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const navigate = vi.fn();
 const createMutateAsync = vi.fn();
 let teamId: string | undefined;
-let assistantsResult: { data?: ListAssistantsResponse; isLoading: boolean; error: Error | null };
 vi.mock("~/api/settings", () => ({
   useModels: () => ({ data: { models: [] }, isLoading: false, error: null }),
   useModelTiers: () => ({ data: { xs: [], s: [], m: [], l: [], xl: [] }, isLoading: false, error: null }),
@@ -343,12 +341,6 @@ function renderDialog() {
 
 beforeEach(() => {
   teamId = undefined;
-  assistantsResult = { data: { assistants: [
-    { id: "personal", owner: { type: "user", id: "user1" }, name: "Personal", sessionId: "assistant:personal", createdAt: 1 },
-    { id: "team-a", owner: { type: "team", id: "team1" }, name: "Team default", sessionId: "assistant:team-a", createdAt: 1 },
-    { id: "team-b", owner: { type: "team", id: "team1" }, name: "Release bot", sessionId: "assistant:team-b", createdAt: 1 },
-    { id: "other", owner: { type: "team", id: "team2" }, name: "Other team", sessionId: "assistant:other", createdAt: 1 },
-  ] }, isLoading: false, error: null };
   navigate.mockReset();
   createMutateAsync.mockReset();
   createMutateAsync.mockResolvedValue({ id: "wf_new" });

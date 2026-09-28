@@ -4,7 +4,7 @@
  * `drive: product` cases measure the PRODUCTION agent, not a lab replica:
  * the harness boots the real api in-process (fresh scratch PGlite per case
  * — no cross-case state), ensures the real orchestrator session over
- * `POST /api/orchestrator` (real persona, real HTTP-backed mem_* tools,
+ * `POST /api/workspaces/user/runtime` (real persona, real HTTP-backed mem_* tools,
  * real plugin catalog and policy, real ChildWatcher), and drives every
  * turn over the public message route. Reads go through the back door: the
  * harness owns the providers, so settlement is polled on the engine store
@@ -107,7 +107,7 @@ export async function runProductCase(evalCase: EvalCase, opts: ProductDriveOptio
 
   try {
     // ── The real orchestrator session, through the front door.
-    const ensureRes = await fetch(`${baseUrl}/api/orchestrator`, { method: "POST" });
+    const ensureRes = await fetch(`${baseUrl}/api/workspaces/user/runtime`, { method: "POST" });
     if (!ensureRes.ok) {
       throw new Error(`ensure orchestrator failed: ${ensureRes.status} ${await ensureRes.text()}`);
     }

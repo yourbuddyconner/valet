@@ -16,7 +16,7 @@ vi.mock("~/api/settings", async (importOriginal) => ({
 }));
 
 describe("leaving team settings", () => {
-  it.each(["/integrations", "/workflows", "/artifacts", "/chat"])("allows primary navigation to %s", async (destination) => {
+  it.each(["/integrations", "/workflows", "/chat"])("allows primary navigation to %s", async (destination) => {
     const root = createRootRoute({ component: () => <><Link to={destination}>Leave settings</Link><Outlet /></> });
     const settings = createRoute({ getParentRoute: () => root, path: "/settings", component: SettingsLayout });
     const team = createRoute({ getParentRoute: () => settings, path: "/team", component: () => <p>Team settings content</p> });

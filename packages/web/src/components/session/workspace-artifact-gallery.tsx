@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import type { ArtifactListItem } from "@valet/api/wire";
 import { useState } from "react";
 import { useListOwner } from "~/lib/use-list-owner";
@@ -13,7 +13,7 @@ import { relativeTime } from "~/lib/relative-time";
 import { useCopyToClipboard } from "~/lib/use-copy";
 
 /**
- * `/artifacts` — the selected workspace's gallery (memory docs and
+ * The selected workspace's gallery in Threads (memory docs and
  * agent-generated snapshots alike; see the artifacts design). Revoked
  * artifacts are filtered out: a revoked link is a dead link, not a row to
  * manage from here.
@@ -26,9 +26,7 @@ import { useCopyToClipboard } from "~/lib/use-copy";
  * in dev is the api origin and does not serve the SPA. `url` is correct
  * only for the clipboard copy.
  */
-export const Route = createFileRoute("/artifacts/")({ component: ArtifactsPage });
-
-export function ArtifactsPage() {
+export function WorkspaceArtifactGallery() {
   const owner = useListOwner();
   const me = useMe();
   if (!owner) {
@@ -36,10 +34,10 @@ export function ArtifactsPage() {
       ? <ErrorRow>Could not load your workspace. Reload to try again.</ErrorRow>
       : <LoadingRow label="Loading artifacts…" />;
   }
-  return <ScopedArtifactsPage key={`${owner.ownerType}:${owner.ownerId}`} owner={owner} />;
+  return <ScopedArtifactGallery key={`${owner.ownerType}:${owner.ownerId}`} owner={owner} />;
 }
 
-function ScopedArtifactsPage({ owner }: { owner: OwnerFilter }) {
+function ScopedArtifactGallery({ owner }: { owner: OwnerFilter }) {
   const me = useMe();
   const [cursors, setCursors] = useState<string[]>([]);
   const listQ = useArtifacts(owner, { limit: 50, cursor: currentCursor(cursors) });
@@ -48,8 +46,8 @@ function ScopedArtifactsPage({ owner }: { owner: OwnerFilter }) {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-10">
-        <h1 className="font-display text-2xl text-ink">Artifacts</h1>
+      <div className="py-4">
+        <h2 className="text-lg font-semibold text-ink">Workspace artifacts</h2>
         <p className="mt-1 text-sm text-muted">
           {owner.ownerType === "team"
             ? "Team-only pages. Only current members of this team can open these links."

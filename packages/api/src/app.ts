@@ -34,8 +34,8 @@ import { teamsRouter } from "./routes/teams.js";
 import { teamApiKeysRouter } from "./routes/team-api-keys.js";
 import { memoryRouter } from "./routes/memory.js";
 import { securityRouter } from "./routes/security.js";
+import { workspaceRuntimeRouter } from "./routes/workspace-runtime.js";
 import { orchestratorRouter } from "./routes/orchestrator.js";
-import { assistantsRouter } from "./routes/assistants.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { changelogRouter } from "./routes/changelog.js";
 import { workflowPreviewRouter } from "./routes/workflow-preview.js";
@@ -321,11 +321,9 @@ export function createApp(
   // Authed artifact surface (share/list/manage). The public `GET /:token`
   // half is mounted pre-auth above.
   app.route("/api/artifacts", artifactsRouter);
+  app.route("/api/workspaces", workspaceRuntimeRouter);
   app.route("/api/orchestrator", orchestratorRouter);
-  // Upload endpoints are mounted before the assistants router so its /:id
-  // routes cannot claim the profile-picture path.
   app.route("/api", profilePicturesRouter);
-  app.route("/api/assistants", assistantsRouter);
   app.route("/api/notifications", notificationsRouter);
   app.route("/api/changelog", changelogRouter);
   // Trigger routes first: workflowsRouter's `GET /:id` would otherwise

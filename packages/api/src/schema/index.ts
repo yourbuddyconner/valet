@@ -560,23 +560,6 @@ export const assistants = pgTable(
     orgId: text("org_id").notNull(),
     ownerType: text("owner_type", { enum: ["user", "team", "org"] }).notNull(),
     ownerId: text("owner_id").notNull(),
-    /** What the reader calls it. Was `orchestrator_identities.handle`. Also
-     * the outbound display name on channel posts (Slack `username`). */
-    name: text("name"),
-    /** Avatar image URL for outbound channel posts (Slack `icon_url`).
-     * Null falls back to the bot's own icon. */
-    avatarUrl: text("avatar_url"),
-    /** Per-assistant persona text. Null falls back to the owner's
-     * assistant/personality.md memory file (the pre-config behavior). */
-    personality: text("personality"),
-    /** JSON `AssistantBehavior` (wire/types.ts). Null means every skill and
-     * integration. Validated on write (`validateAssistantBehavior`); parsed
-     * fail-open on read (`parseAssistantBehavior`). */
-    behavior: text("behavior"),
-    /** Tier token or catalog model id. Null = inherit the cascade. */
-    model: text("model"),
-    /** Reasoning level. Null = inherit the cascade. */
-    reasoning: text("reasoning"),
     sessionId: text("session_id").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     /** Null while live. Team teardown retires the workspace identity; the

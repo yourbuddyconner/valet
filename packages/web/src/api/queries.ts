@@ -63,7 +63,6 @@ export const qk = {
   /** Spelled here (not in assistants.ts's `qkAssistants`) so useDeleteSession
    * below can invalidate it without an import cycle — assistants.ts already
    * imports this factory and derives `qkAssistants.list` from it. */
-  assistants: () => ["assistants"] as const,
   notifications: () => ["notifications"] as const,
   notificationPreferences: () => ["notifications", "preferences"] as const,
   identityLinks: () => ["identityLinks"] as const,
@@ -205,7 +204,6 @@ export function useDeleteSession() {
       // instead of on the next focus refetch. Unconditional on purpose:
       // migrated assistants keep legacy non-`assistant:`-prefixed session
       // ids, so the id alone cannot say whether a retire happened.
-      qc.invalidateQueries({ queryKey: qk.assistants() });
       qc.invalidateQueries({ queryKey: ["workspace-conversation"] });
     },
   });

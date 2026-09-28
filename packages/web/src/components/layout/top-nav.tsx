@@ -1,7 +1,7 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Menu, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
 import { useChangelog } from "~/api/changelog";
-import { useOrchestratorInfo } from "~/api/orchestrator";
+import { useWorkspaceRuntimeInfo } from "~/api/orchestrator";
 import { useSession } from "~/api/queries";
 import { pluginEnabledForCaller, useMe, useOrg, useTeams } from "~/api/settings";
 import { PresenceMark } from "~/components/assistant/presence-mark";
@@ -17,8 +17,6 @@ import { useWorkspaceScope } from "~/lib/workspace-scope";
 import { useSidebarControls } from "./app-shell";
 import { NotificationsBell } from "./notifications-bell";
 
-/** Primary navigation leads with Threads. Legacy session and artifact
- * routes remain reachable from existing links during the local iteration. */
 /**
  * Top-nav link with a working active state. Text color lives in
  * `activeProps`/`inactiveProps` — NOT the base className — because TanStack
@@ -118,7 +116,8 @@ function SidebarToggle() {
 
 export function TopNav() {
   const mobileNav = useResponsiveOverlay("md");
-  const info = useOrchestratorInfo();
+  const scope = useWorkspaceScope();
+  const info = useWorkspaceRuntimeInfo(scope.key);
   const presence = info.data?.presence ?? "idle";
 
   // The switcher reads the same three queries the rail does, so switching
@@ -136,7 +135,6 @@ export function TopNav() {
   // only ever resolved on `/chat`, so every other page read "Personal"
   // regardless of the workspace the reader was in. The scope owns it now and
   // still lets the open assistant win — see `workspace-scope.tsx`.
-  const scope = useWorkspaceScope();
   const onChat = useRouterState({ select: (st) => st.location.pathname === "/chat" });
   // A security session lives at /sessions/:id like any other, so the URL
   // cannot distinguish it — read the id off the path and check its kind so

@@ -12,13 +12,11 @@ import {
 import type {
   GetTeamChildrenResponse,
   GetOrchestratorChildrenResponse,
-  GetOrchestratorInfoResponse,
+  WorkspaceRuntimeInfoResponse,
 } from "@valet/api/wire";
 import { api } from "./client";
-import { qk, refetchSessionReads } from "./queries";
 
 export const qkOrchestrator = {
-  info: () => ["orchestrator", "info"] as const,
   // Keyed by parent session so one assistant's children never overwrite
   // another's in the cache. Bare key stays for the caller's own default.
   children: (sessionId?: string) =>
@@ -27,12 +25,14 @@ export const qkOrchestrator = {
       : (["orchestrator", "children"] as const),
 };
 
-export function useOrchestratorInfo(
-  opts?: Partial<UseQueryOptions<GetOrchestratorInfoResponse>>,
-) {
-  return useQuery<GetOrchestratorInfoResponse>({
-    queryKey: qkOrchestrator.info(),
-    queryFn: () => api.getOrchestratorInfo(),
+export function useWorkspaceRuntimeInfo(workspace: string | undefined, opts?: Partial<UseQueryOptions<WorkspaceRuntimeInfoResponse>>) {
+  return useQuery<WorkspaceRuntimeInfoResponse>({
+    queryKey: ["workspace-runtime", workspace, "info"],
+    queryFn: () => {
+      if (workspace === undefined) throw new Error("Choose a workspace.");
+      return api.getWorkspaceRuntimeInfo(workspace);
+    },
+    enabled: workspace !== undefined,
     ...opts,
   });
 }
@@ -76,30 +76,6 @@ export function useDismissChild(sessionId?: string) {
     mutationFn: (childSessionId) => api.dismissChild(childSessionId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qkOrchestrator.children(sessionId) });
-    },
-  });
-}
-
-/**
- * `/chat`'s mount-time ensure (brief for Task 5): `GET /info` never
- * creates the engine session (decision 4), so an assistant that has a name
- * but was never `POST /orchestrator`-ensured (e.g. named via a future path
- * that skips the identity step's own ensure call) would 404 the moment the
- * chat page tries to open its session/WS. `POST /orchestrator` is
- * idempotent — safe to call on every chat mount.
- */
-export function useEnsureOrchestrator() {
-  const qc = useQueryClient();
-  return useMutation<{ sessionId: string }, Error, void>({
-    mutationFn: () => api.ensureOrchestrator(),
-    onSuccess: ({ sessionId }) => {
-      qc.invalidateQueries({ queryKey: qkOrchestrator.info() });
-      // `GET /info` reports a session id without creating the session, so on
-      // a first-ever load the rail's thread tree reads that id and 404s
-      // while this call is still in flight. Re-reading once the row exists
-      // turns that into the conversation rather than a dead end that only a
-      // manual reload fixes.
-      void refetchSessionReads(qc, sessionId);
     },
   });
 }

@@ -11,7 +11,7 @@ import {
 } from "@tanstack/react-router";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { OrgPluginWire } from "@valet/api/wire";
+import type { OrgPluginWire, TeamSummary } from "@valet/api/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceScopeProvider } from "~/lib/workspace-scope";
 import { AppShell } from "./app-shell";
@@ -20,6 +20,8 @@ import { TopNav } from "./top-nav";
 // The nav gates the Security link on the `security` plugin's entitlement,
 // read from `useOrg().data.plugins`. Mock the settings reads so the gate is
 // deterministic; `securityPlugins` is mutable per test.
+let navTeams: TeamSummary[] = [];
+const infoWorkspace = vi.fn();
 let securityPlugins: OrgPluginWire[] = [
   {
     name: "security",
@@ -40,12 +42,12 @@ vi.mock("~/api/settings", async (importOriginal) => {
       isLoading: false,
       error: null,
     }),
-    useTeams: () => ({ data: { teams: [] }, isLoading: false, error: null }),
+    useTeams: () => ({ data: { teams: navTeams }, isLoading: false, error: null }),
   };
 });
 
 vi.mock("~/api/orchestrator", () => ({
-  useOrchestratorInfo: () => ({
+  useWorkspaceRuntimeInfo: (workspace: string) => (infoWorkspace(workspace), {
     data: {
       sessionId: "orchestrator:user-1",
       name: "Echo",
@@ -62,7 +64,7 @@ vi.mock("./notifications-bell", () => ({
   NotificationsBell: () => <div data-testid="bell-stub" />,
 }));
 
-function renderNav(opts: { withSidebar?: boolean } = {}) {
+function renderNav(opts: { withSidebar?: boolean; workspace?: string } = {}) {
   // The nav reads the workspace scope, which throws outside its provider —
   // deliberately, so a surface can never silently render another workspace's
   // data under this one's name. The provider must sit INSIDE the router: it
@@ -86,9 +88,9 @@ function renderNav(opts: { withSidebar?: boolean } = {}) {
       ),
   });
   const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => null });
-  const sessionsRoute = createRoute({
+  const threadsRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: "/sessions",
+    path: "/chat",
     component: () => null,
   });
   const skillsRoute = createRoute({
@@ -97,8 +99,8 @@ function renderNav(opts: { withSidebar?: boolean } = {}) {
     component: () => null,
   });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, sessionsRoute, skillsRoute]),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
+    routeTree: rootRoute.addChildren([indexRoute, threadsRoute, skillsRoute]),
+    history: createMemoryHistory({ initialEntries: [opts.workspace ? `/?workspace=${opts.workspace}` : "/"] }),
   });
   const queryClient = new QueryClient();
 
@@ -110,6 +112,14 @@ function renderNav(opts: { withSidebar?: boolean } = {}) {
 }
 
 describe("TopNav", () => {
+  it("requests presence for the workspace in the URL", async () => {
+    navTeams = [{ id: "platform", orgId: "org", name: "Platform", origin: "local", externalId: null, createdAt: 1, memberCount: 1, callerRole: "member", defaultModel: null }];
+    renderNav({ workspace: "platform" });
+    await screen.findByRole("link", { name: /Valet/ });
+    expect(infoWorkspace).toHaveBeenLastCalledWith("platform");
+    navTeams = [];
+  });
+
   beforeEach(() => {
     securityPlugins = [
       {

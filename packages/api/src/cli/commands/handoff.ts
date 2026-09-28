@@ -25,7 +25,7 @@ import type { CliContext } from "../types.js";
 import type {
   CreateSessionRequest,
   CreateSessionResponse,
-  EnsureOrchestratorResponse,
+  EnsureWorkspaceRuntimeResponse,
   RepoBinding,
   SendPromptRequest,
   SendPromptResponse,
@@ -33,7 +33,7 @@ import type {
 
 /** The subset of `InstanceClient` the `handoff` command needs. */
 export interface HandoffClient {
-  ensureOrchestrator(): Promise<EnsureOrchestratorResponse>;
+  ensureOrchestrator(): Promise<EnsureWorkspaceRuntimeResponse>;
   createSession(body: CreateSessionRequest): Promise<CreateSessionResponse>;
   sendPrompt(id: string, body: SendPromptRequest): Promise<SendPromptResponse>;
 }

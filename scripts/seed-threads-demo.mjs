@@ -30,8 +30,8 @@ if (mode === 'bootstrap') {
   const teams = await request('/teams');
   let team = teams.teams.find(row => row.name === 'Threads Demo');
   if (!team) team = (await request('/teams', 'POST', { name: 'Threads Demo' })).team;
-  const personal = await request('/orchestrator', 'POST', {});
-  const teamSession = await request(`/teams/${team.id}/orchestrator`, 'POST', {});
+  const personal = await request('/workspaces/user/runtime', 'POST', {});
+  const teamSession = await request(`/workspaces/${team.id}/runtime`, 'POST', {});
   const records = [];
   for (const scenario of scenarios) {
     const sessionId = scenario.scope === 'team' ? teamSession.sessionId : personal.sessionId;

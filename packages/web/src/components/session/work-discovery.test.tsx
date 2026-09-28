@@ -90,3 +90,19 @@ it("hides cached artifacts and pagination when a refresh loses workspace access"
   expect(screen.queryByText("Private report")).toBeNull();
   expect(screen.queryByRole("button", { name: "Load more artifacts" })).toBeNull();
 });
+
+it("opens the workspace gallery inside Threads and resets it on a workspace change", async () => {
+  owner = { ownerType: "team", ownerId: "t" };
+  vi.mocked(api.listWork).mockResolvedValue({ sessions: [], nextCursor: null });
+  vi.mocked(api.listArtifacts).mockResolvedValue({ artifacts: [], nextCursor: null });
+  const view = render(<WorkDiscovery />, { wrapper });
+  fireEvent.click(screen.getByRole("button", { name: "All workspace artifacts" }));
+  expect(await screen.findByRole("heading", { name: "Workspace artifacts" })).toBeTruthy();
+  await waitFor(() => expect(api.listArtifacts).toHaveBeenCalledWith(owner, { mine: undefined, limit: 50, cursor: undefined }));
+  expect(screen.getByRole("heading", { name: "Work and artifacts" })).toBeTruthy();
+  owner = { ownerType: "team", ownerId: "other-team" };
+  view.rerender(<WorkDiscovery />);
+  expect(screen.queryByRole("heading", { name: "Workspace artifacts" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "All workspace artifacts" }));
+  await waitFor(() => expect(api.listArtifacts).toHaveBeenCalledWith(owner, { mine: undefined, limit: 50, cursor: undefined }));
+});

@@ -11,7 +11,6 @@ import type {
   AbortThreadRequest,
   AddTeamMemberRequest,
   AuthConfigResponse,
-  ListAssistantsResponse,
   AllowWorkflowPermissionsRequest,
   AllowWorkflowPermissionsResponse,
   CancelWorkflowRunResponse,
@@ -49,7 +48,9 @@ import type {
   DeleteOrgPolicyResponse,
   DeletePolicyOverrideRequest,
   DeletePolicyOverrideResponse,
-  EnsureOrchestratorResponse,
+  EnsureWorkspaceRuntimeResponse,
+  WorkspaceRuntimeInfoResponse,
+  WorkspaceRuntimeResponse,
   GetArtifactResponse,
   GetChangelogResponse,
   GetGithubAppResponse,
@@ -63,7 +64,6 @@ import type {
   OrgSettingsResponse,
   PatchOrgSettingsRequest,
   GetOrchestratorChildrenResponse,
-  GetOrchestratorInfoResponse,
   GetPrebuildForRepoResponse,
   GetReposResponse,
   GetSlackAppResponse,
@@ -712,10 +712,12 @@ export const api = {
     request<{ ok: true }>("POST", `/sessions/${encodeURIComponent(id)}/sandbox/replace`),
   // orchestrator (session ids contain colons — always encoded above too, but
   // this entry point never touches a raw id itself, only ensures one exists)
-  ensureOrchestrator: () =>
-    request<EnsureOrchestratorResponse>("POST", "/orchestrator"),
-  getOrchestratorInfo: () =>
-    request<GetOrchestratorInfoResponse>("GET", "/orchestrator/info"),
+  ensureWorkspaceRuntime: (workspace: string) =>
+    request<EnsureWorkspaceRuntimeResponse>("POST", `/workspaces/${encodeURIComponent(workspace)}/runtime`),
+  getWorkspaceRuntime: (workspace: string) =>
+    request<WorkspaceRuntimeResponse>("GET", `/workspaces/${encodeURIComponent(workspace)}/runtime`),
+  getWorkspaceRuntimeInfo: (workspace: string) =>
+    request<WorkspaceRuntimeInfoResponse>("GET", `/workspaces/${encodeURIComponent(workspace)}/runtime/info`),
   /** `sessionId` scopes the list to one assistant's children — the open
    * assistant in the chat thread tree, so a team assistant's runs nest under
    * it. Omitted = your own default assistant. */
@@ -735,7 +737,6 @@ export const api = {
   // assistants (`docs/specs/2026-08-13-assistants-design.md`). The list is
   // also how the client learns each assistant's session id, so it replaces
   // the client-side id derivation the rail used to do.
-  listAssistants: () => request<ListAssistantsResponse>("GET", "/assistants"),
 
   // memory (assistant-centered web UI decision 7; dashboard memory card +
   // the Task 6 explorer share these reads)
@@ -1280,8 +1281,6 @@ export const api = {
       "DELETE",
       `/teams/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
     ),
-  ensureTeamOrchestrator: (id: string) =>
-    request<EnsureOrchestratorResponse>("POST", `/teams/${encodeURIComponent(id)}/orchestrator`),
   listTeamApiKeys: (id: string) =>
     request<ListTeamApiKeysResponse>("GET", `/teams/${encodeURIComponent(id)}/api-keys`),
   createTeamApiKey: (id: string, body: CreateTeamApiKeyRequest) =>

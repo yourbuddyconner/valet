@@ -5,18 +5,12 @@ import { ModelCombobox } from "~/components/settings/model-combobox";
 import { ReasoningSelect } from "~/components/settings/reasoning-select";
 import { Section } from "~/components/settings/section";
 
-/**
- * `/settings/assistant` — You · Assistant. Name + personality (shared
- * `IdentityFields`, same component/mutation the dashboard's identity header
- * uses) plus the default-model typeahead (now tier-first, Task 15) over
- * `GET /api/models` + `PATCH /api/me`, and the default-reasoning select
- * over `GET /api/org/reasoning` + `PATCH /api/me`.
- */
-export const Route = createFileRoute("/settings/assistant")({
-  component: AssistantPage,
+/** Personal defaults for new threads. */
+export const Route = createFileRoute("/settings/threads")({
+  component: ThreadDefaultsPage,
 });
 
-export function AssistantPage() {
+export function ThreadDefaultsPage() {
   const meQ = useMe();
   const patchMe = usePatchMe();
 

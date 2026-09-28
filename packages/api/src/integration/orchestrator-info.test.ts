@@ -6,7 +6,7 @@ import { addMember, createTeam } from "../services/teams.js";
 import { defaultAssistantSessionFor } from "../test-helpers/assistant-session.js";
 import type {
   GetOrchestratorChildrenResponse,
-  GetOrchestratorInfoResponse
+  WorkspaceRuntimeInfoResponse
 } from "../wire/types.js";
 import { bootTestApi, type TestApi } from "./_setup.js";
 
@@ -21,13 +21,13 @@ afterEach(async () => {
  * session by its own generated id, so no test can spell it as a literal any
  * more — every seeding helper below asks the API for it first. */
 async function assistantSessionIdFor(target: TestApi): Promise<string> {
-  const res = await fetch(`${target.baseUrl}/api/orchestrator/info`);
+  const res = await fetch(`${target.baseUrl}/api/workspaces/user/runtime/info`);
   expect(res.status).toBe(200);
-  const body = (await res.json()) as GetOrchestratorInfoResponse;
+  const body = (await res.json()) as WorkspaceRuntimeInfoResponse;
   return body.sessionId;
 }
 
-describe("GET /api/orchestrator/info", () => {
+describe("GET /api/workspaces/user/runtime/info", () => {
   // The route resolves the caller's DEFAULT assistant, so it does create
   // that one row — the response carries its session id, and the id is no
   // longer derivable from the caller. It still creates nothing that runs:
@@ -35,19 +35,16 @@ describe("GET /api/orchestrator/info", () => {
   it("reports name/personality null and presence idle before any ensure, creating only the assistant row", async () => {
     api = await bootTestApi();
 
-    const res = await fetch(`${api.baseUrl}/api/orchestrator/info`);
+    const res = await fetch(`${api.baseUrl}/api/workspaces/user/runtime/info`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as GetOrchestratorInfoResponse;
+    const body = (await res.json()) as WorkspaceRuntimeInfoResponse;
     expect(body.sessionId).toMatch(/^assistant:asst_/);
-    expect(body.name).toBeNull();
-    expect(body.personality).toBeNull();
     expect(body.presence).toBe("idle");
     expect(body.activeChildren).toBe(0);
 
     const assistantRows = await api.providers.db.select().from(assistants);
     expect(assistantRows).toHaveLength(1);
     expect(assistantRows[0]).toBeDefined();
-    expect(assistantRows[0]?.name).toBeNull();
 
     // Nothing that runs was created.
     expect(await api.providers.db.select().from(agentSessions)).toHaveLength(0);
@@ -73,49 +70,18 @@ describe("GET /api/orchestrator/info", () => {
         createdAt: now,
       });
 
-    const res = await fetch(`${api.baseUrl}/api/orchestrator/info`);
-    const body = (await res.json()) as GetOrchestratorInfoResponse;
+    const res = await fetch(`${api.baseUrl}/api/workspaces/user/runtime/info`);
+    const body = (await res.json()) as WorkspaceRuntimeInfoResponse;
     expect(body.presence).toBe("working");
     expect(body.activeChildren).toBe(1);
   });
 
-  it("does not leak a team's assistant/personality.md into a member's own persona/info (own-scope read only)", async () => {
+  it("returns only runtime state and exposes no identity customization", async () => {
     api = await bootTestApi();
-    const { db } = api.providers;
-
-    // local-user is a member of Platform, which has its own
-    // assistant/personality.md. local-user has never written a personal
-    // one. Personality reads (GET /info and persona injection) must go
-    // through an own-scope-only lookup, not `readFile`'s team read-union
-    // (which is correct/intentional for the memory explorer, but wrong for
-    // a per-user persona/identity field).
-    const team = await createTeam(db, { orgId: "local-org", name: "Platform", creatorUserId: "local-user" });
-    await addMember(db, { teamId: team.id, userId: "local-user", role: "member" });
-    await writeFile(db, { owner: { type: "team", id: team.id }, actorUserId: "local-user" }, {
-      path: "assistant/personality.md",
-      content: "Team-wide corporate voice.",
-    });
-
-    const infoRes = await fetch(`${api.baseUrl}/api/orchestrator/info`);
-    expect(infoRes.status).toBe(200);
-    const infoBody = (await infoRes.json()) as GetOrchestratorInfoResponse;
-    expect(infoBody.personality).toBeNull();
-
-    // Retired profile writes cannot rename the runtime or import team context.
-    const patchRes = await fetch(`${api.baseUrl}/api/orchestrator/info`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Wren" }),
-    });
-    expect(patchRes.status).toBe(404);
-
-    const session = await defaultAssistantSessionFor(
-      api.providers,
-      { type: "user", id: "local-user" },
-      { actorUserId: "local-user", orgId: "local-org" },
-    );
-    expect(session.options.systemPrompt).not.toContain("You are Wren.");
-    expect(session.options.systemPrompt).not.toContain("Team-wide corporate voice.");
+    const res = await fetch(`${api.baseUrl}/api/workspaces/user/runtime/info`);
+    const body = (await res.json()) as WorkspaceRuntimeInfoResponse;
+    expect(Object.keys(body).sort()).toEqual(["activeChildren", "presence", "sessionId"]);
+    expect((await fetch(`${api.baseUrl}/api/orchestrator/info`)).status).toBe(404);
   });
 
   it("settled child_watches rows don't count toward activeChildren/presence", async () => {
@@ -136,8 +102,8 @@ describe("GET /api/orchestrator/info", () => {
         createdAt: Date.now(),
       });
 
-    const res = await fetch(`${api.baseUrl}/api/orchestrator/info`);
-    const body = (await res.json()) as GetOrchestratorInfoResponse;
+    const res = await fetch(`${api.baseUrl}/api/workspaces/user/runtime/info`);
+    const body = (await res.json()) as WorkspaceRuntimeInfoResponse;
     expect(body.presence).toBe("idle");
     expect(body.activeChildren).toBe(0);
   });

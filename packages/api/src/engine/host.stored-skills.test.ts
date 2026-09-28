@@ -170,7 +170,7 @@ describe("stored skills on a session", () => {
     expect(result.text).not.toContain("skill_not_found");
   });
 
-  it("keeps an org skill out of a team assistant allowlist that denies it", async () => {
+  it("keeps org skills available in the team runtime without a profile allowlist", async () => {
     api = await bootTestApi({ plugins: [] });
     const db = api.providers.db;
     const team = await createTeam(db, { orgId: ORG, name: "Reviewers", creatorUserId: USER });
@@ -182,9 +182,7 @@ describe("stored skills on a session", () => {
       description: "Attack a change and try to prove it wrong.",
       content: "# Adversarial code review\n",
     });
-    const assistant = await seedWorkspaceAssistant(db, ORG, { type: "team", id: team.id }, "Restricted", {
-      behavior: { skills: { mode: "allowlist", names: ["team-review-notes"] } },
-    });
+    const assistant = await seedWorkspaceAssistant(db, ORG, { type: "team", id: team.id });
 
     const { session } = await ensureDefaultAssistantSession(
       { db, engineHost: api.providers.engineHost },
@@ -192,8 +190,8 @@ describe("stored skills on a session", () => {
       { actorUserId: USER, orgId: ORG },
     );
 
-    expect(session.options.skills?.some((skill) => skill.name === "adversarial-code-review") ?? false).toBe(false);
-    expect(session.options.tools?.some((tool) => tool.name === "skill") ?? false).toBe(false);
+    expect(session.options.skills?.some((skill) => skill.name === "adversarial-code-review") ?? false).toBe(true);
+    expect(session.options.tools?.some((tool) => tool.name === "skill") ?? false).toBe(true);
   });
 
   it("gives a team-owned child session the team's skills, not the actor's", async () => {

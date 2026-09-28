@@ -80,7 +80,6 @@ vi.mock("@tanstack/react-router", () => ({
       {children}
     </a>
   ),
-  createFileRoute: () => (config: unknown) => config,
 }));
 
 vi.mock("~/api/artifacts", () => ({
@@ -100,10 +99,10 @@ vi.mock("~/api/artifacts", () => ({
   }),
 }));
 
-import { ArtifactsPage } from "./artifacts.index";
+import { WorkspaceArtifactGallery } from "./workspace-artifact-gallery";
 
 function renderPage() {
-  return render(<ArtifactsPage />);
+  return render(<WorkspaceArtifactGallery />);
 }
 
 /** The row controls, in list order. The dialog's confirm button carries the
@@ -130,7 +129,7 @@ beforeEach(() => {
   useArtifactsMock.mockClear();
 });
 
-describe("ArtifactsPage", () => {
+describe("WorkspaceArtifactGallery", () => {
   it("requests the personal owner rather than the publishing actor", () => {
     renderPage();
     expect(useArtifactsMock).toHaveBeenCalledWith(owner, { limit: 50, cursor: undefined });
@@ -152,7 +151,7 @@ describe("ArtifactsPage", () => {
     ] satisfies OwnerFilter[]) {
       useArtifactsMock.mockClear();
       owner = nextOwner;
-      view.rerender(<ArtifactsPage />);
+      view.rerender(<WorkspaceArtifactGallery />);
       expect(useArtifactsMock).toHaveBeenCalledWith(owner, { limit: 50, cursor: undefined });
       expect(useArtifactsMock.mock.calls.every((call) => call[1].cursor === undefined)).toBe(true);
       fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -165,7 +164,7 @@ describe("ArtifactsPage", () => {
     expect(screen.getByText("Loading artifacts…")).toBeTruthy();
     expect(useArtifactsMock).not.toHaveBeenCalled();
     identityError = new Error("offline");
-    view.rerender(<ArtifactsPage />);
+    view.rerender(<WorkspaceArtifactGallery />);
     expect(screen.getByText(/Could not load your workspace/)).toBeTruthy();
     expect(useArtifactsMock).not.toHaveBeenCalled();
   });
@@ -265,7 +264,7 @@ describe("ArtifactsPage", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
 
     revokeError = new Error("network unreachable");
-    view.rerender(<ArtifactsPage />);
+    view.rerender(<WorkspaceArtifactGallery />);
 
     expect(
       within(screen.getByRole("dialog")).getByText(
@@ -302,7 +301,7 @@ it("shows colleague artifacts without offering unauthorized revoke", () => {
   expect(screen.getByText("Deploy report")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
   orgRole = "admin";
-  view.rerender(<ArtifactsPage />);
+  view.rerender(<WorkspaceArtifactGallery />);
   expect(screen.getByRole("button", { name: "Revoke" })).toBeTruthy();
 });
 
@@ -310,7 +309,7 @@ it("labels team rows and gallery as team-only even with a legacy public flag", (
   owner = { ownerType: "team", ownerId: "team-1" };
   artifactsData = { artifacts: [{ ...mine, ownerType: "team", visibility: "public", actorUserId: "other-member" }] };
   orgRole = "member";
-  render(<ArtifactsPage />);
+  render(<WorkspaceArtifactGallery />);
   expect(screen.getByText("Team-only")).toBeTruthy();
   expect(screen.getByText("Team-only pages. Only current members of this team can open these links.")).toBeTruthy();
   expect(screen.queryByText("public")).toBeNull();

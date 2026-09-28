@@ -179,10 +179,7 @@ describe("PATCH /api/sessions/:id — teamId (move between workspaces)", () => {
       orgId: "local-org",
       ownerType: "user",
       ownerId: "local-user",
-      name: null,
-      personality: null,
-      behavior: null,
-      sessionId: "orchestrator:user:local-user",
+            sessionId: "orchestrator:user:local-user",
       createdAt: Date.now(),
       archivedAt: null,
     });

@@ -50,17 +50,17 @@ describe("teams routes", () => {
 
     const createRes = await createTeam(baseUrl, "Platform");
     expect(createRes.status).toBe(201);
-    const { team, defaultAssistant } = (await createRes.json()) as CreateTeamResponse;
+    const { team, runtime } = (await createRes.json()) as CreateTeamResponse;
     expect(team.name).toBe("Platform");
-    expect(defaultAssistant.sessionId).toBeTruthy();
-    expect(defaultAssistant.owner).toEqual({ type: "team", id: team.id });
+    expect(runtime.sessionId).toBeTruthy();
+
     // The response carries the row the create transaction seeded, not a
     // second one minted by a re-read.
     const seeded = await api.providers.db
       .select()
       .from(assistants)
       .where(and(eq(assistants.ownerType, "team"), eq(assistants.ownerId, team.id)));
-    expect(seeded.map((r) => r.id)).toEqual([defaultAssistant.id]);
+    expect(seeded.map((r) => r.sessionId)).toEqual([runtime.sessionId]);
 
     const listRes = await fetch(`${baseUrl}/api/teams`, { headers: HEADERS });
     expect(listRes.status).toBe(200);

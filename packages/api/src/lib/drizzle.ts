@@ -160,6 +160,7 @@ interface SchemaRepair {
   describe: string;
   probe:
     | { kind: "column"; table: string; column: string }
+    | { kind: "removed-column"; table: string; column: string }
     | { kind: "table"; table: string }
     | { kind: "index"; index: string };
   sql: string;
@@ -249,6 +250,12 @@ END $cost_view$`;
  */
 
 const SCHEMA_REPAIRS: SchemaRepair[] = [
+  // Development cutover: workspace configuration replaces retired profile fields.
+  ...["name", "avatar_url", "personality", "behavior", "model", "reasoning"].map((column): SchemaRepair => ({
+    describe: `remove assistants.${column}`,
+    probe: { kind: "removed-column", table: "assistants", column },
+    sql: `ALTER TABLE "assistants" DROP COLUMN IF EXISTS "${column}"`,
+  })),
   {
     describe: "workspace assistant singleton cutover",
     probe: { kind: "index", index: "assistants_workspace" },
@@ -798,22 +805,6 @@ const SCHEMA_REPAIRS: SchemaRepair[] = [
     sql: 'ALTER TABLE "mcp_oauth_clients" ADD COLUMN IF NOT EXISTS "scopes_supported" jsonb',
   },
   {
-    // Per-assistant personality prose (assistant editor, #325). Null on rows
-    // from before the column existed, which the persona builder reads as
-    // "no personality section" — the same answer a fresh assistant gets.
-    describe: "assistants.personality column",
-    probe: { kind: "column", table: "assistants", column: "personality" },
-    sql: 'ALTER TABLE "assistants" ADD COLUMN IF NOT EXISTS "personality" text',
-  },
-  {
-    // Per-assistant behavior config JSON (assistant editor, #325). Null reads
-    // as "no restrictions" at wake (host.ts parseAssistantBehavior), matching
-    // pre-editor behavior.
-    describe: "assistants.behavior column",
-    probe: { kind: "column", table: "assistants", column: "behavior" },
-    sql: 'ALTER TABLE "assistants" ADD COLUMN IF NOT EXISTS "behavior" text',
-  },
-  {
     // The LLM recording gateway's request log (#432). The gateway writes a row
     // here on every recorded call, so an already-migrated DB without it 500s
     // at runtime. Columns are in lockstep with `llm_proxy_requests` in
@@ -1352,20 +1343,6 @@ const SCHEMA_REPAIRS: SchemaRepair[] = [
     sql: 'ALTER TABLE "teams" ADD COLUMN IF NOT EXISTS "default_reasoning" text',
   },
   {
-    // Per-assistant model override (model selector overhaul).
-    // Tier token or catalog model id. Null = inherit the cascade.
-    describe: "assistants.model column",
-    probe: { kind: "column", table: "assistants", column: "model" },
-    sql: 'ALTER TABLE "assistants" ADD COLUMN IF NOT EXISTS "model" text',
-  },
-  {
-    // Per-assistant reasoning override (model selector overhaul).
-    // Null = inherit the cascade.
-    describe: "assistants.reasoning column",
-    probe: { kind: "column", table: "assistants", column: "reasoning" },
-    sql: 'ALTER TABLE "assistants" ADD COLUMN IF NOT EXISTS "reasoning" text',
-  },
-  {
     // Persisted session-default reasoning level (model selector overhaul).
     // An ENGINE table: the same rule as engine_entries.seq above applies —
     // additive columns arrive through this repair, and ENGINE_SCHEMA_VERSION
@@ -1381,13 +1358,6 @@ const SCHEMA_REPAIRS: SchemaRepair[] = [
     describe: "engine_threads.reasoning column",
     probe: { kind: "column", table: "engine_threads", column: "reasoning" },
     sql: 'ALTER TABLE "engine_threads" ADD COLUMN IF NOT EXISTS "reasoning" text',
-  },
-  {
-    // Per-assistant avatar for outbound channel posts (TKAI-387).
-    // Null = the bot's own icon.
-    describe: "assistants.avatar_url column",
-    probe: { kind: "column", table: "assistants", column: "avatar_url" },
-    sql: 'ALTER TABLE "assistants" ADD COLUMN IF NOT EXISTS "avatar_url" text',
   },
   {
     // Team `vlt_` key pin (TKAI-396). Nullable: a personal key has none.
@@ -1500,7 +1470,7 @@ export async function missingSchemaRepairs(db: PgDb): Promise<SchemaRepair[]> {
   const tableNames: string[] = [];
   const indexNames: string[] = [];
   for (const { probe } of SCHEMA_REPAIRS) {
-    if (probe.kind === "column") columnTables.add(probe.table);
+    if (probe.kind === "column" || probe.kind === "removed-column") columnTables.add(probe.table);
     else if (probe.kind === "table") tableNames.push(probe.table);
     else indexNames.push(probe.index);
   }
@@ -1534,6 +1504,7 @@ export async function missingSchemaRepairs(db: PgDb): Promise<SchemaRepair[]> {
   );
 
   const pending = SCHEMA_REPAIRS.filter(({ probe: p }) => {
+    if (p.kind === "removed-column") return present.has(`column:${p.table}.${p.column}`);
     const key = p.kind === "column" ? `column:${p.table}.${p.column}` : p.kind === "table" ? `table:${p.table}` : `index:${p.index}`;
     return !present.has(key);
   });

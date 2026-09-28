@@ -139,7 +139,7 @@ vi.mock("~/lib/workspace-scope", async (importOriginal) => {
 import { PALETTE_CHOICES } from "~/lib/theme";
 import { ApiKeysPage } from "./settings.api-keys";
 import { AppearancePage } from "./settings.appearance";
-import { AssistantPage } from "./settings.assistant";
+import { ThreadDefaultsPage } from "./settings.threads";
 import { NotificationsPage } from "./settings.notifications";
 import { ProfilePage } from "./settings.profile";
 
@@ -217,7 +217,7 @@ describe("ProfilePage", () => {
   });
 });
 
-describe("AssistantPage", () => {
+describe("ThreadDefaultsPage", () => {
   beforeEach(() => {
     patchMeMutate.mockClear();
     meData = {
@@ -235,7 +235,7 @@ describe("AssistantPage", () => {
   });
 
   it("renders the shared identity fields and the default-model helper text verbatim", () => {
-    render(<AssistantPage />);
+    render(<ThreadDefaultsPage />);
     expect(screen.queryByLabelText("Name")).toBeNull();
     expect(screen.queryByLabelText(/Personality/)).toBeNull();
     expect(
@@ -246,7 +246,7 @@ describe("AssistantPage", () => {
   });
 
   it("the model combobox filters to curated sonnet entries on 'sonnet'", () => {
-    render(<AssistantPage />);
+    render(<ThreadDefaultsPage />);
     const input = screen.getByLabelText("Default model");
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: "sonnet" } });
@@ -258,7 +258,7 @@ describe("AssistantPage", () => {
   });
 
   it("selecting a model fires PATCH /api/me with its id", () => {
-    render(<AssistantPage />);
+    render(<ThreadDefaultsPage />);
     const input = screen.getByLabelText("Default model");
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: "sonnet" } });
@@ -269,7 +269,7 @@ describe("AssistantPage", () => {
 
   it("shows a clear row naming the fallback tiers and clears with defaultModel: null", () => {
     meData = { ...meData!, defaultModel: "claude-sonnet-4-5" };
-    render(<AssistantPage />);
+    render(<ThreadDefaultsPage />);
     const input = screen.getByLabelText("Default model");
     fireEvent.focus(input);
 
@@ -284,7 +284,7 @@ describe("AssistantPage", () => {
 
   it("defaults the reasoning select to Inherit and selecting a level fires PATCH /api/me", async () => {
     const user = userEvent.setup();
-    render(<AssistantPage />);
+    render(<ThreadDefaultsPage />);
     const select = screen.getByLabelText("Reasoning") as HTMLSelectElement;
     expect(select.value).toBe("");
 
@@ -295,7 +295,7 @@ describe("AssistantPage", () => {
   it("resetting the reasoning select to Inherit clears with defaultReasoning: null", async () => {
     meData = { ...meData!, defaultReasoning: "high" };
     const user = userEvent.setup();
-    render(<AssistantPage />);
+    render(<ThreadDefaultsPage />);
 
     await user.selectOptions(screen.getByLabelText("Reasoning"), "");
     expect(patchMeMutate).toHaveBeenCalledWith({ defaultReasoning: null });
@@ -303,7 +303,7 @@ describe("AssistantPage", () => {
 
   it("changes the model and thinking behavior for new threads", async () => {
     const user = userEvent.setup();
-    render(<AssistantPage />);
+    render(<ThreadDefaultsPage />);
     const select = screen.getByLabelText("New thread behavior") as HTMLSelectElement;
     expect(select.value).toBe("keep_current");
 

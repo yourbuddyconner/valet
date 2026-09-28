@@ -78,7 +78,7 @@ describe("profile-picture uploads", () => {
     expect(replacementResponse.status).toBe(200);
     expect((await fetch(userResult.avatarUrl)).status).toBe(404);
 
-    const assistant = await seedWorkspaceAssistant(api.providers.db, "local-org", { type: "user", id: "local-user" }, "Valet");
+    const assistant = await seedWorkspaceAssistant(api.providers.db, "local-org", { type: "user", id: "local-user" });
     const assistantResponse = await fetch(`${api.baseUrl}/api/assistants/${assistant.id}/avatar`, {
       method: "POST",
       body: uploadBody(source),
@@ -102,7 +102,7 @@ describe("profile-picture uploads", () => {
       .where(eq(users.id, "local-user"));
     expect(rows[0]?.image).toBeNull();
 
-    const assistant = await seedWorkspaceAssistant(api.providers.db, "local-org", { type: "user", id: "local-user" }, "Valet");
+    const assistant = await seedWorkspaceAssistant(api.providers.db, "local-org", { type: "user", id: "local-user" });
     const forbidden = await fetch(`${api.baseUrl}/api/assistants/${assistant.id}/avatar`, {
       method: "POST",
       headers: MEMBER_HEADERS,
@@ -110,10 +110,8 @@ describe("profile-picture uploads", () => {
     });
     expect(forbidden.status).toBe(404);
 
-    const listed = await fetch(`${api.baseUrl}/api/assistants`).then((response) => response.json()) as {
-      assistants: Array<{ id: string; avatarUrl?: string }>;
-    };
-    expect(listed.assistants.find((item) => item.id === assistant.id)?.avatarUrl).toBeUndefined();
+    expect((await fetch(`${api.baseUrl}/api/assistants`)).status).toBe(404);
+
   });
 
   it("rejects malformed, mismatched, and oversized files without persistence", async () => {

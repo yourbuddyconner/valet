@@ -272,7 +272,7 @@ describe("PATCH /api/sessions/:id — profile", () => {
     const provider = new RecordingSandboxProvider();
     api = await bootTestApi({ sandboxProvider: provider });
 
-    const ensure = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
+    const ensure = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST" });
     expect(ensure.status).toBe(200);
     const { sessionId } = (await ensure.json()) as { sessionId: string };
     expect(await storedProfile(api, sessionId)).toBe("headless");

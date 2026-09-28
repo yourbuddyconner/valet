@@ -12,14 +12,14 @@ import { resolveInstance } from "../resolve.js";
 import type { CliContext } from "../types.js";
 import type {
   DecisionGate,
-  EnsureOrchestratorResponse,
+  EnsureWorkspaceRuntimeResponse,
   ListDecisionsResponse,
   ResolveDecisionRequest,
 } from "../../wire/types.js";
 
 /** The subset of `InstanceClient` the `gates` command needs. */
 export interface GatesClient {
-  ensureOrchestrator(): Promise<EnsureOrchestratorResponse>;
+  ensureOrchestrator(): Promise<EnsureWorkspaceRuntimeResponse>;
   listDecisions(id: string): Promise<ListDecisionsResponse>;
   resolveDecision(id: string, gateId: string, body: ResolveDecisionRequest): Promise<void>;
 }

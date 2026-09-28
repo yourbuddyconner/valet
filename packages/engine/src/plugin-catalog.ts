@@ -170,7 +170,6 @@ export type ServiceAvailabilityState =
   | "not_connected"
   | "deployment_unconfigured"
   | "disabled_by_org"
-  | "excluded_by_assistant"
   | "load_failed";
 
 export interface ServiceAvailability {

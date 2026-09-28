@@ -10,7 +10,7 @@ import { bootTestApi, type TestApi } from "./_setup.js";
 import { agentSessions, childWatches } from "../schema/index.js";
 import type {
   GetOrchestratorChildrenResponse,
-  GetOrchestratorInfoResponse,
+  WorkspaceRuntimeInfoResponse,
 } from "../wire/types.js";
 
 let api: TestApi | undefined;
@@ -23,9 +23,9 @@ afterEach(async () => {
 /** The caller's default assistant session id. An assistant addresses its
  * session by its own generated id, so no test can spell it as a literal. */
 async function assistantSessionIdFor(target: TestApi): Promise<string> {
-  const res = await fetch(`${target.baseUrl}/api/orchestrator/info`);
+  const res = await fetch(`${target.baseUrl}/api/workspaces/user/runtime/info`);
   expect(res.status).toBe(200);
-  const body = (await res.json()) as GetOrchestratorInfoResponse;
+  const body = (await res.json()) as WorkspaceRuntimeInfoResponse;
   return body.sessionId;
 }
 

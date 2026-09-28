@@ -504,7 +504,7 @@ describe("EngineHost team-owned session credentials", () => {
         type: "api_key",
         apiKey: "member-linear",
       });
-      const assistant = await seedWorkspaceAssistant(appDb, orgId, { type: "team", id: teamId }, "Team bot");
+      const assistant = await seedWorkspaceAssistant(appDb, orgId, { type: "team", id: teamId });
       await appDb.insert(agentSessions).values({
         id: assistant.sessionId,
         userId,

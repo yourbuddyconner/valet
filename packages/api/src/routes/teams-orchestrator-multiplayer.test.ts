@@ -18,7 +18,7 @@ import { WebSocket } from "ws";
 import { eq } from "drizzle-orm";
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
 import { teamMembers, teams } from "../schema/index.js";
-import type { EnsureOrchestratorResponse, WireEvent } from "../wire/types.js";
+import type { EnsureWorkspaceRuntimeResponse, WireEvent } from "../wire/types.js";
 
 let api: TestApi | undefined;
 
@@ -39,8 +39,8 @@ async function seedTeamWithTwoMembers(target: TestApi): Promise<string> {
     { teamId: "team_1", userId: "test-member", role: "member" },
   ]);
   const created = (await (
-    await fetch(`${target.baseUrl}/api/teams/team_1/orchestrator`, { method: "POST" })
-  ).json()) as EnsureOrchestratorResponse;
+    await fetch(`${target.baseUrl}/api/workspaces/team_1/runtime`, { method: "POST" })
+  ).json()) as EnsureWorkspaceRuntimeResponse;
   return created.sessionId;
 }
 

@@ -1,10 +1,8 @@
-import { orchestratorName } from "~/lib/assistant-name";
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { MemoryTreeEntry } from "@valet/api/wire";
 import { api } from "~/api/client";
 import { useMemoryTree } from "~/api/memory";
-import { useOrchestratorInfo } from "~/api/orchestrator";
 import { Spinner } from "~/components/primitives";
 import { relativeTime } from "~/lib/relative-time";
 
@@ -50,8 +48,6 @@ export function memoryStats(entries: readonly MemoryTreeEntry[]): MemoryStats {
  * server-side per journal edit); stats derive from the tree query.
  */
 export function MemoryCard() {
-  const info = useOrchestratorInfo();
-  const name = orchestratorName(info.data?.name);
   const treeQ = useMemoryTree();
   const summaryQ = useQuery({
     queryKey: ["memory", "journal-summary"],
@@ -93,7 +89,7 @@ export function MemoryCard() {
 
         {empty && (
           <p className="text-sm text-muted">
-            Nothing remembered yet. Talk to {name}, or import a bundle from the{" "}
+            Nothing remembered yet. Start a thread, or import a bundle from the{" "}
             <Link to="/memory" className="underline hover:text-moss">
               Memory page
             </Link>

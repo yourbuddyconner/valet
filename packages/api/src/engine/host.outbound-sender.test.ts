@@ -1,3 +1,4 @@
+import { createTeam } from "../services/teams.js";
 import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
 /**
  * Session-backed agent actions must resolve their sender identity when they
@@ -9,11 +10,10 @@ import { fauxAssistantMessage, fauxToolCall, registerFauxProvider, type FauxProv
 import slackPlugin from "@valet/plugin-slack/plugin";
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
 
-import { actionPolicies, assistants } from "../schema/index.js";
+import { actionPolicies, teams } from "../schema/index.js";
 
 const USER = "local-user";
 const ORG = "local-org";
-const AVATAR_URL = "https://cdn.example.com/release-bot.png";
 
 let faux: FauxProviderRegistration | undefined;
 
@@ -104,13 +104,10 @@ describe("EngineHost outbound sender identity", () => {
     api = undefined;
   });
 
-  it("uses the current default assistant for a workflow session node", async () => {
+  it("uses the bot identity for a personal workflow session", async () => {
     api = await bootTestApi({ plugins: [] });
-    const assistant = await seedWorkspaceAssistant(api.providers.db, ORG, { type: "user", id: USER }, "Release bot");
-    await api.providers.db
-      .update(assistants)
-      .set({ avatarUrl: AVATAR_URL })
-      .where(eq(assistants.id, assistant.id));
+    const assistant = await seedWorkspaceAssistant(api.providers.db, ORG, { type: "user", id: USER });
+
 
     const session = await api.providers.engineHost.workflowSessionFor("wf:run1:node1", {
       actorUserId: USER,
@@ -119,43 +116,36 @@ describe("EngineHost outbound sender identity", () => {
       workspace: "/tmp",
     });
 
-    expect(await senderFor(session)).toEqual({ displayName: "Release bot", avatarUrl: AVATAR_URL });
+    expect(await senderFor(session)).toBeUndefined();
   });
 
-  it("uses the current parent assistant for a child-agent session", async () => {
+  it("uses the current team name for a child-agent session", async () => {
     api = await bootTestApi({ plugins: [] });
-    const assistant = await seedWorkspaceAssistant(api.providers.db, ORG, { type: "user", id: USER }, "Release bot");
-    await api.providers.db
-      .update(assistants)
-      .set({ avatarUrl: AVATAR_URL })
-      .where(eq(assistants.id, assistant.id));
+    const team = await createTeam(api.providers.db, { orgId: ORG, name: "Release team", creatorUserId: USER });
+    const assistant = await seedWorkspaceAssistant(api.providers.db, ORG, { type: "team", id: team.id });
+
 
     const session = await api.providers.engineHost.childSessionFor("child:release", {
       parentSessionId: assistant.sessionId,
       parentThreadId: "thread:parent",
       actorUserId: USER,
       orgId: ORG,
-      owner: { type: "user", id: USER },
+      owner: { type: "team", id: team.id },
       workspace: "/tmp",
     });
-    await api.providers.db
-      .update(assistants)
-      .set({ name: "Release captain", avatarUrl: null })
-      .where(eq(assistants.id, assistant.id));
 
-    expect(await senderFor(session)).toEqual({ displayName: "Release captain" });
+
+    await api.providers.db.update(teams).set({ name: "Release team renamed" }).where(eq(teams.id, team.id));
+    expect(await senderFor(session)).toEqual({ displayName: "Release team renamed" });
   });
 
-  it("posts a workflow session action with the configured Slack identity", async () => {
+  it("posts a personal workflow action with org credentials and the bot identity", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "fixture-key");
     faux = registerFauxProvider({ api: "anthropic-messages", provider: "anthropic" });
     api = await bootTestApi({ plugins: [slackPlugin] });
     await allowSlackSend(api);
-    const assistant = await seedWorkspaceAssistant(api.providers.db, ORG, { type: "user", id: USER }, "Release bot");
-    await api.providers.db
-      .update(assistants)
-      .set({ avatarUrl: AVATAR_URL })
-      .where(eq(assistants.id, assistant.id));
+    const assistant = await seedWorkspaceAssistant(api.providers.db, ORG, { type: "user", id: USER });
+
 
     const session = await api.providers.engineHost.workflowSessionFor("wf:run1:node1", {
       actorUserId: USER,
@@ -167,8 +157,6 @@ describe("EngineHost outbound sender identity", () => {
     await expect(postThroughSession(session)).resolves.toMatchObject({
       channel: "C1",
       text: "from a workflow session",
-      username: "Release bot",
-      icon_url: AVATAR_URL,
     });
   });
 

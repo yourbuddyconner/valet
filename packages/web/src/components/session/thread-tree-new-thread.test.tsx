@@ -66,8 +66,9 @@ vi.mock("~/api/settings", async (importOriginal) => {
   };
 });
 
+const runtimeInfo = vi.fn((_workspace?: string) => ({ data: { sessionId: "orchestrator:user-1" } }));
 vi.mock("~/api/orchestrator", () => ({
-  useOrchestratorInfo: () => ({ data: { sessionId: "orchestrator:user-1" } }),
+  useWorkspaceRuntimeInfo: (workspace: string | undefined) => runtimeInfo(workspace),
   useOrchestratorChildren: () => ({ data: { children: [] }, refetch: vi.fn() }),
   useDismissChild: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -79,6 +80,10 @@ vi.mock("~/stores/stream", () => ({
 import { ThreadTree } from "./thread-tree";
 
 describe("ThreadTree — new thread affordance", () => {
+  it("disables the personal runtime query when an explicit session is supplied", () => {
+    render(<TooltipProvider><ThreadTree sessionId="team-runtime" /></TooltipProvider>);
+    expect(runtimeInfo).toHaveBeenLastCalledWith(undefined);
+  });
   it("creates a thread and navigates to it", async () => {
     render(
       <TooltipProvider>

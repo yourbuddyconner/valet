@@ -16,7 +16,7 @@ import { ApiError, AuthError, UnreachableError } from "./exit.js";
 import type {
   CreateSessionRequest,
   CreateSessionResponse,
-  EnsureOrchestratorResponse,
+  EnsureWorkspaceRuntimeResponse,
   GetSessionResponse,
   HealthResponse,
   ListDecisionsResponse,
@@ -119,17 +119,17 @@ export class InstanceClient {
 
   /**
    * The caller's default assistant session, ensure-if-absent. A personal
-   * credential posts `/api/orchestrator`. A team key posts
-   * `/api/teams/:id/orchestrator` for its own team, because the key acts
-   * as the team and `/api/orchestrator` would name the person who minted
+   * credential posts `/api/workspaces/user/runtime`. A team key posts
+   * `/api/workspaces/:id/runtime` for its own team, because the key acts
+   * as the team and `/api/workspaces/user/runtime` would name the person who minted
    * it. Which one applies is read off `GET /api/me`.
    */
-  async ensureOrchestrator(): Promise<EnsureOrchestratorResponse> {
+  async ensureOrchestrator(): Promise<EnsureWorkspaceRuntimeResponse> {
     this.identity ??= this.me();
     const me = await this.identity;
     const path =
-      me.role === "team" ? `/api/teams/${encodeURIComponent(me.id)}/orchestrator` : "/api/orchestrator";
-    return this.request<EnsureOrchestratorResponse>("POST", path);
+      me.role === "team" ? `/api/workspaces/${encodeURIComponent(me.id)}/runtime` : "/api/workspaces/user/runtime";
+    return this.request<EnsureWorkspaceRuntimeResponse>("POST", path);
   }
 
   // ── sessions ───────────────────────────────────────────────────────────

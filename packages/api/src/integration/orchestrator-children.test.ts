@@ -15,7 +15,7 @@ import { eq } from "drizzle-orm";
 import { bootTestApi, type TestApi } from "./_setup.js";
 import { driveTurn } from "./_test-utils.js";
 import { childWatches } from "../schema/index.js";
-import type { EnsureOrchestratorResponse } from "../wire/types.js";
+import type { EnsureWorkspaceRuntimeResponse } from "../wire/types.js";
 
 const describeIfKey = process.env.ANTHROPIC_API_KEY ? describe : describe.skip;
 
@@ -41,9 +41,9 @@ describeIfKey("api integration: orchestrator spawns a child via task, receives c
     async () => {
       api = await bootTestApi();
 
-      const ensureRes = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
+      const ensureRes = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST" });
       expect(ensureRes.status).toBe(200);
-      const { sessionId } = (await ensureRes.json()) as EnsureOrchestratorResponse;
+      const { sessionId } = (await ensureRes.json()) as EnsureWorkspaceRuntimeResponse;
 
       await driveTurn({
         baseUrl: api.baseUrl,

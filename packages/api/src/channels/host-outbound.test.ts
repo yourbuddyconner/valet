@@ -414,12 +414,9 @@ describe("ChannelHost outbound delivery", () => {
     expect(fakeTransport.sent.map((sent) => sent.message.markdown)).toEqual(["internal response"]);
   });
 
-  it("delivers a branded command_result to the channel the command came from", async () => {
+  it("delivers a command_result with the bot identity to the channel the command came from", async () => {
     const session = await defaultAssistantSessionFor({ db: testDb.appDb, engineHost }, { type: "user", id: USER_ID }, { actorUserId: USER_ID, orgId: ORG_ID });
-    await testDb.appDb
-      .update(assistants)
-      .set({ name: "Ledger", avatarUrl: "https://cdn.example.com/ledger.png" })
-      .where(eq(assistants.sessionId, session.id));
+
     const sessionId = session.id;
     const threadId = session.thread("fake:99").id;
 
@@ -452,10 +449,7 @@ describe("ChannelHost outbound delivery", () => {
     });
     const hit = fakeTransport.sent.find((s) => s.message.markdown.includes("Queue"));
     expect(hit?.message.markdown).toContain("/status");
-    expect(hit?.message.sender).toEqual({
-      displayName: "Ledger",
-      avatarUrl: "https://cdn.example.com/ledger.png",
-    });
+    expect(hit?.message.sender).toBeUndefined();
     // Dedup: the second append must not double-deliver.
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(fakeTransport.sent.filter((s) => s.message.markdown.includes("Queue"))).toHaveLength(1);
@@ -2112,7 +2106,7 @@ describe("ChannelHost.attentionDeliverer", () => {
     expect(host.gateForRef(ref)).toMatchObject({ gateId: "gate-1", sessionId: "sess-1" });
   });
 
-  it("an approval event without a gate keeps a branded plain summary message", async () => {
+  it("an approval event without a gate keeps a plain summary with the bot identity", async () => {
     host = await buildHost({ publicUrl: "https://valet.example.com" });
     await linkIdentity(testDb.appDb, { provider: "fake", externalId: "77", userId: USER_ID });
     await testDb.appDb.insert(assistants).values({
@@ -2120,8 +2114,6 @@ describe("ChannelHost.attentionDeliverer", () => {
       orgId: ORG_ID,
       ownerType: "user",
       ownerId: USER_ID,
-      name: "Ledger",
-      avatarUrl: "https://cdn.example.com/ledger.png",
       sessionId: "sess-1",
       createdAt: Date.now(),
     });
@@ -2133,10 +2125,7 @@ describe("ChannelHost.attentionDeliverer", () => {
 
     expect(fakeTransport.gatePrompts).toHaveLength(0);
     expect(fakeTransport.sent).toHaveLength(1);
-    expect(fakeTransport.sent[0]?.message.sender).toEqual({
-      displayName: "Ledger",
-      avatarUrl: "https://cdn.example.com/ledger.png",
-    });
+    expect(fakeTransport.sent[0]?.message.sender).toBeUndefined();
   });
 
   it("resolution edits EVERY recorded prompt for the gate — one message per recipient DM", async () => {

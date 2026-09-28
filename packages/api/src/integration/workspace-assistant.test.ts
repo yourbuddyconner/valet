@@ -10,7 +10,7 @@ describe("workspace assistant contract", () => {
   it("concurrent initialization returns one personal assistant", async () => {
     api = await bootTestApi();
     const base = api.baseUrl;
-    const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(`${base}/api/orchestrator`, {
+    const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(`${base}/api/workspaces/user/runtime`, {
       method: "POST", headers, body: "{}",
     })));
     expect(responses.map(r => r.status)).toEqual([200, 200, 200, 200]);
@@ -25,29 +25,29 @@ describe("workspace assistant contract", () => {
       method: "POST", headers, body: JSON.stringify({ name: "Custom agent", personality: "custom" }),
     });
     expect(custom.status).toBe(404);
-    await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST", headers, body: "{}" });
+    await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST", headers, body: "{}" });
     const [row] = await api.providers.db.select().from(assistants);
     expect(row).toBeDefined();
     const edited = await fetch(`${api.baseUrl}/api/assistants/${row!.id}`, {
       method: "PATCH", headers, body: JSON.stringify({ name: "Another agent" }),
     });
     expect(edited.status).toBe(404);
-    expect((await api.providers.db.select().from(assistants))[0]?.name).toBeNull();
+    expect(await api.providers.db.select().from(assistants)).toEqual([row]);
   });
   it("keeps the team singleton separate from personal work and rejects nonmembers", async () => {
     api = await bootTestApi();
     await api.providers.db.insert(teams).values({ id: "team-one", orgId: "local-org", name: "Team", createdAt: Date.now() });
     await api.providers.db.insert(teamMembers).values({ teamId: "team-one", userId: "local-user", role: "admin" });
-    const personal = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" }).then(r => r.json()) as { sessionId: string };
+    const personal = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST" }).then(r => r.json()) as { sessionId: string };
     const initialize = async () => {
-      const response = await fetch(`${api!.baseUrl}/api/teams/team-one/orchestrator`, { method: "POST" });
+      const response = await fetch(`${api!.baseUrl}/api/workspaces/team-one/runtime`, { method: "POST" });
       expect(response.status).toBe(200);
       return await response.json() as { sessionId: string };
     };
     const [first, second] = await Promise.all([initialize(), initialize()]);
     expect(first.sessionId).toBe(second.sessionId);
     expect(first.sessionId).not.toBe(personal.sessionId);
-    const denied = await fetch(`${api.baseUrl}/api/teams/team-one/orchestrator`, {
+    const denied = await fetch(`${api.baseUrl}/api/workspaces/team-one/runtime`, {
       method: "POST", headers: { "x-valet-test-user-id": "test-member" },
     });
     expect(denied.status).toBe(404);
@@ -56,7 +56,7 @@ describe("workspace assistant contract", () => {
 
   it("disables the alternate profile editing endpoint without changing the assistant", async () => {
     api = await bootTestApi();
-    const response = await fetch(`${api.baseUrl}/api/orchestrator/info`, {
+    const response = await fetch(`${api.baseUrl}/api/workspaces/user/runtime/info`, {
       method: "PATCH", headers, body: JSON.stringify({ name: "Custom", personality: "custom" }),
     });
     expect(response.status).toBe(404);

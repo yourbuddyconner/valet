@@ -82,7 +82,7 @@ const port = await new Promise<number>((resolveListen) => {
 
 // ── Step 1: ensure the orchestrator session.
 
-const ensureRes = await fetch(`http://localhost:${port}/api/orchestrator`, { method: "POST" });
+const ensureRes = await fetch(`http://localhost:${port}/api/workspaces/user/runtime`, { method: "POST" });
 if (!ensureRes.ok) {
   console.error("ensure orchestrator failed:", ensureRes.status, await ensureRes.text());
   await shutdown(1);

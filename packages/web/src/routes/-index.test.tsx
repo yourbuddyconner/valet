@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-/**
- * Dashboard branch (assistant-centered web UI, decision 11/20): `/` shows
- * the identity step when `info.name === null` (first visit), otherwise the
- * identity header + card grid. Card internals (each a self-contained
- * query, decision 15) are stubbed here so this test stays focused on the
- * naming-vs-dashboard branch — they're covered by their own component
- * tests.
- */
+/** Home selects the personal or team dashboard without profile setup. */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -21,7 +14,7 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 vi.mock("~/api/orchestrator", () => ({
-  useOrchestratorInfo: () => infoMock(),
+  useWorkspaceRuntimeInfo: () => infoMock(),
   useOrchestratorChildren: () => ({
     data: { children: [] },
     isLoading: false,
@@ -86,12 +79,10 @@ function renderDashboard() {
 }
 
 describe("Dashboard", () => {
-  it("shows the identity step on first visit (name === null)", () => {
+  it("shows threads without a profile setup step", () => {
     infoMock.mockReturnValue({
       data: {
         sessionId: "orchestrator:user-1",
-        name: null,
-        personality: null,
         presence: "idle",
         activeChildren: 0,
       },
@@ -106,12 +97,10 @@ describe("Dashboard", () => {
     expect(screen.getByTestId("threads-card")).toBeTruthy();
   });
 
-  it("shows the identity header + card grid once named", () => {
+  it("shows the personal workspace header and cards", () => {
     infoMock.mockReturnValue({
       data: {
         sessionId: "orchestrator:user-1",
-        name: "Echo",
-        personality: null,
         presence: "idle",
         activeChildren: 0,
       },
@@ -141,7 +130,7 @@ describe("Home (workspace branch)", () => {
   it("renders the personal dashboard when the scope is personal", () => {
     scopeMock.mockReturnValue({ key: "user", teamId: undefined, available: ["user"], setKey: vi.fn() });
     infoMock.mockReturnValue({
-      data: { sessionId: "orchestrator:user-1", name: null, personality: null, presence: "idle", activeChildren: 0 },
+      data: { sessionId: "orchestrator:user-1", presence: "idle", activeChildren: 0 },
       isLoading: false,
       error: null,
       refetch: vi.fn(),

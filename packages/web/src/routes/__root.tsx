@@ -51,7 +51,7 @@ function NotFound() {
  *
  * - `/chat` — the nested thread-tree (children grouped under their
  *   spawning thread), replacing the flat thread list.
- * - everything else (`/`, `/sessions`, `/sessions/$sessionId`,
+ * - everything else (`/`, `/sessions/$sessionId`,
  *   `/memory` and `/memory/*`, …) — no app sidebar. Standalone sessions
  *   have no thread UI (decision 14); the memory explorer renders its own
  *   tree pane inside the route (Task 6); the dashboard and session list

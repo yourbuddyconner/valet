@@ -19,6 +19,9 @@ describe("workspace singleton repair on an already migrated database", () => {
 
   it("repairs the previous columns with one executable statement and reserves retired owners", async () => {
     await restorePreviousSchema();
+    for (const column of ["name", "avatar_url", "personality", "behavior", "model", "reasoning"]) {
+      await db.query(`ALTER TABLE assistants ADD COLUMN ${column} text`);
+    }
     await db.query("ALTER TABLE teams DROP COLUMN slack_home_channel_id");
     await db.query("ALTER TABLE user_notification_preferences DROP COLUMN team_dm");
     await db.query("ALTER TABLE artifacts DROP COLUMN source_thread_id");
@@ -34,7 +37,7 @@ describe("workspace singleton repair on an already migrated database", () => {
     await expect(applyAppMigrations(db)).resolves.toBeUndefined();
     const removed = await db.query(`SELECT table_name, column_name FROM information_schema.columns
       WHERE table_schema = current_schema() AND
-      ((table_name = 'assistants' AND column_name = 'is_default') OR
+      ((table_name = 'assistants' AND column_name IN ('is_default', 'name', 'avatar_url', 'personality', 'behavior', 'model', 'reasoning')) OR
        (table_name IN ('followed_threads', 'workflow_schedules') AND column_name = 'assistant_id'))`);
     expect(removed.rows).toEqual([]);
     const added = await db.query(`SELECT table_name, column_name FROM information_schema.columns

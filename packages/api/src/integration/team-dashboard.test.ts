@@ -1,5 +1,4 @@
 import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
-import { toAssistantSummary } from "../assistants/service.js";
 /**
  * The three reads behind the team dashboard
  * (`docs/specs/2026-08-27-team-dashboard-design.md`):
@@ -18,7 +17,6 @@ import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentSessions, artifacts, childWatches, teamMembers, teams } from "../schema/index.js";
 import type {
-  AssistantSummary,
   GetTeamChildrenResponse,
   ListArtifactsResponse,
   UsageBreakdownResponse,
@@ -43,9 +41,9 @@ async function seedTeam(target: TestApi): Promise<void> {
     .values({ teamId: "team_1", userId: "local-user", role: "admin" });
 }
 
-async function createTeamAssistant(target: TestApi, name: string): Promise<AssistantSummary> {
+async function createTeamAssistant(target: TestApi, name: string) {
   // Historical multiple profiles remain readable after the public creation path is retired.
-  return toAssistantSummary(await seedWorkspaceAssistant(target.providers.db, "local-org", { type: "team", id: "team_1" }, name));
+  return await seedWorkspaceAssistant(target.providers.db, "local-org", { type: "team", id: "team_1" });
 }
 
 async function seedChild(
@@ -97,14 +95,10 @@ describe("GET /api/teams/:id/children", () => {
       sessionId: "child-b",
       title: "Rotate creds",
       status: "running",
-      assistantId: triage.id,
-      assistantName: "Sentinel",
     });
     expect(body.children[1]).toMatchObject({
       sessionId: "child-a",
       status: "settled",
-      assistantId: sentinel.id,
-      assistantName: "Sentinel",
     });
   });
 

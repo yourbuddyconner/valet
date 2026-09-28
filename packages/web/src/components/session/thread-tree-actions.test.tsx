@@ -79,7 +79,7 @@ vi.mock("~/api/settings", async (importOriginal) => {
 });
 
 vi.mock("~/api/orchestrator", () => ({
-  useOrchestratorInfo: () => ({ data: { sessionId: "orchestrator:user-1" } }),
+  useWorkspaceRuntimeInfo: () => ({ data: { sessionId: "orchestrator:user-1" } }),
   useOrchestratorChildren: () => ({ data: { children }, refetch: vi.fn() }),
   useDismissChild: () => ({ mutateAsync: dismissMutateAsync, isPending: false }),
 }));

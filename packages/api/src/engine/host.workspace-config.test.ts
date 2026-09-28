@@ -1,19 +1,6 @@
+import { setPluginEntitlement } from "../services/plugin-entitlements.js";
 import { seedWorkspaceAssistant } from "../test-helpers/assistant-fixture.js";
-/**
- * Per-assistant behavior threads all the way to a built session
- * (`docs/specs/2026-08-18-assistant-editor-design.md`).
- *
- * `buildAssistantSession` reads the row's `behavior` and `personality` and
- * applies them: the integration allowlist shapes the tool list, the skills
- * allowlist shapes both plugin skills and the `skillsProvider` re-read, and
- * the row personality wins over the memory-file fallback in the persona
- * prefix. These tests hold that seam end to end, from an `assistants` row to
- * `session.options`, the engine's public seam for a built session.
- *
- * Two fixture services with distinct action ids let one behavior admit one
- * service and drop the other; a fixture plugin skill plus a stored skill let
- * the allowlist keep one of each and drop the rest.
- */
+/** Workspace capabilities and persona use owner configuration. */
 import { describe, it, expect, afterEach } from "vitest";
 import { Type } from "typebox";
 import type {
@@ -33,7 +20,7 @@ import type {
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
 import { ensureDefaultAssistantSession } from "../assistants/service.js";
 import { createSkill } from "../services/skills.js";
-import type { AssistantBehavior } from "../wire/types.js";
+import { writeFile } from "../services/memory.js";
 
 const USER = "local-user";
 const ORG = "local-org";
@@ -85,10 +72,9 @@ function makeAction(id: string): PluginAction {
   };
 }
 
-/** Two routing services, each with two actions, plus two plugin skills. The
- * behavior below admits `github` (minus one action) and drops `slack`. */
+/** Two services and plugin skills exercise the workspace capability catalog. */
 const fixturePlugin: ValetPlugin = {
-  name: "behavior-fixture",
+  name: "workspace-fixture",
   version: "0.0.1",
   actions: [
     {
@@ -106,7 +92,7 @@ const fixturePlugin: ValetPlugin = {
   ],
 };
 
-describe("assistant behavior on a built session", () => {
+describe("workspace runtime configuration", () => {
   let api: TestApi | undefined;
 
   afterEach(async () => {
@@ -114,12 +100,10 @@ describe("assistant behavior on a built session", () => {
     api = undefined;
   });
 
-  it("shapes the tool list and skillsProvider from the row's behavior", async () => {
+  it("exposes all owner-accessible actions and skills without a profile filter", async () => {
     api = await bootTestApi({ plugins: [fixturePlugin] });
     const { db, engineHost } = api.providers;
 
-    // A stored skill on the allowlist and one off it, to prove the
-    // skillsProvider re-read (not just the plugin-skill half) is filtered.
     await createSkill(db, { userId: USER, orgId: ORG }, {
       name: "gh-triage",
       description: "How to triage.",
@@ -131,44 +115,28 @@ describe("assistant behavior on a built session", () => {
       content: "# Deploy\n",
     });
 
-    const behavior: AssistantBehavior = {
-      skills: { mode: "allowlist", names: ["gh-triage"] },
-      integrations: {
-        mode: "allowlist",
-        entries: [{ service: "github", excludeActions: ["github.delete_repo"] }],
-      },
-    };
-    const row = await seedWorkspaceAssistant(db, ORG, { type: "user", id: USER }, "Triage", {
-      behavior,
-    });
+    const row = await seedWorkspaceAssistant(db, ORG, { type: "user", id: USER });
     const { session } = await ensureDefaultAssistantSession({ db, engineHost }, { type: row.ownerType, id: row.ownerId }, {
       actorUserId: USER,
       orgId: ORG,
     });
 
     const listed = await listToolIds(session.options.tools);
-    // The allowlisted service keeps its non-excluded action.
     expect(listed).toContain("github.create_issue");
-    // The excluded action id is gone.
-    expect(listed).not.toContain("github.delete_repo");
-    // The non-allowlisted service's action is gone.
-    expect(listed).not.toContain("slack.post_message");
-    expect(listed).toContain("excluded_by_assistant");
+    expect(listed).toContain("github.delete_repo");
+    expect(listed).toContain("slack.post_message");
+    expect(listed).not.toContain("excluded_by_assistant");
 
-    // The skillsProvider re-read returns only allowlisted skills, across both
-    // the plugin skill and the stored skill.
     const provider = session.options.skillsProvider;
     expect(provider).toBeDefined();
     const provided = await provider!();
     const providedNames = provided.map((s) => s.name).sort();
-    expect(providedNames).toEqual(["gh-triage"]);
+    expect(providedNames).toEqual(["deploy", "gh-triage", "slack-notes"]);
   });
 
-  it("never gates pinned workflow actions: an allowlist without 'workflows' keeps the pins", async () => {
+  it("keeps workflow pins and ordinary owner-accessible actions", async () => {
     // The workflow editor panel depends on the pinned
     // workflows.get_workflow/patch_workflow pair (plugins/pinned-actions.ts);
-    // the spec lists pins under "Never gated". A user who allowlists their
-    // default assistant to github-only must not lose workflow saves.
     const workflowsPlugin: ValetPlugin = {
       name: "workflows-fixture",
       version: "0.0.1",
@@ -186,11 +154,7 @@ describe("assistant behavior on a built session", () => {
     api = await bootTestApi({ plugins: [fixturePlugin, workflowsPlugin] });
     const { db, engineHost } = api.providers;
 
-    const row = await seedWorkspaceAssistant(db, ORG, { type: "user", id: USER }, "Gated", {
-      behavior: {
-        integrations: { mode: "allowlist", entries: [{ service: "github" }] },
-      },
-    });
+    const row = await seedWorkspaceAssistant(db, ORG, { type: "user", id: USER });
     const { session } = await ensureDefaultAssistantSession({ db, engineHost }, { type: row.ownerType, id: row.ownerId }, {
       actorUserId: USER,
       orgId: ORG,
@@ -200,27 +164,36 @@ describe("assistant behavior on a built session", () => {
     const toolNames = (session.options.tools ?? []).map((t) => t.name);
     expect(toolNames).toContain("workflows__get_workflow");
     expect(toolNames).toContain("workflows__patch_workflow");
-    // ...while the rest of the non-allowlisted service stays gated.
     const listed = await listToolIds(session.options.tools);
-    expect(listed).not.toContain("workflows.save_workflow");
-    expect(listed).not.toContain("slack.post_message");
+    expect(listed).toContain("workflows.save_workflow");
+    expect(listed).toContain("slack.post_message");
     expect(listed).toContain("github.create_issue");
   });
 
-  it("prefixes the persona with the row personality, not the memory file", async () => {
+  it("reads persona directly from owner memory without a profile name", async () => {
     api = await bootTestApi({ plugins: [] });
     const { db, engineHost } = api.providers;
 
-    const row = await seedWorkspaceAssistant(db, ORG, { type: "user", id: USER }, "Nova", {
-      personality: "You are terse and cite sources.",
-    });
+    await writeFile(db, { owner: { type: "user", id: USER }, actorUserId: USER }, { path: "assistant/personality.md", content: "You are terse and cite sources." });
+    const row = await seedWorkspaceAssistant(db, ORG, { type: "user", id: USER });
     const { session } = await ensureDefaultAssistantSession({ db, engineHost }, { type: row.ownerType, id: row.ownerId }, {
       actorUserId: USER,
       orgId: ORG,
     });
 
     expect(session.options.systemPrompt).toContain(
-      "You are Nova. You are terse and cite sources.",
+      "You are terse and cite sources.",
     );
   });
+  it("keeps organization plugin restrictions after profile filters are removed", async () => {
+    api = await bootTestApi({ plugins: [{ ...fixturePlugin, gate: { label: "Fixture", description: "Test access" } }] });
+    const { db, engineHost } = api.providers;
+    await setPluginEntitlement(db, ORG, fixturePlugin.name, { mode: "off", teamIds: [] });
+    const { session } = await ensureDefaultAssistantSession({ db, engineHost }, { type: "user", id: USER }, { actorUserId: USER, orgId: ORG });
+    const listed = await listToolIds(session.options.tools);
+    expect(listed).toContain("disabled_by_org");
+    expect(listed).not.toContain("github.create_issue");
+    expect(await session.options.skillsProvider?.()).toEqual([]);
+  });
+
 });

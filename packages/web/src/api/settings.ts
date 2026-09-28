@@ -28,7 +28,6 @@ import type {
   GetOrgReasoningResponse,
   GetSlackAppResponse,
   JoinSuggestedTeamResponse,
-  ListAssistantsResponse,
   ListLlmProvidersResponse,
   ListModelsResponse,
   ListSuggestedTeamsResponse,
@@ -482,7 +481,7 @@ export function usePatchOrgReasoning() {
  * or `/chat` treats the new team as empty until the next list fetch.
  */
 export function teamCreateQueryKeys() {
-  return [qkSettings.teams(), qk.assistants()] as const;
+  return [qkSettings.teams()] as const;
 }
 
 export function useJoinSuggestedTeam() {
@@ -492,7 +491,6 @@ export function useJoinSuggestedTeam() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qkSettings.suggestedTeams() });
       qc.invalidateQueries({ queryKey: qkSettings.teams() });
-      qc.invalidateQueries({ queryKey: qk.assistants() });
     },
   });
 }
@@ -502,17 +500,6 @@ export function useCreateTeam() {
   return useMutation<CreateTeamResponse, Error, CreateTeamRequest>({
     mutationFn: (body) => api.createTeam(body),
     onSuccess: (created) => {
-      // Write the seeded row into a WARM cache only, same as
-      // `usePatchAssistant`. A cold cache stays cold and the invalidation
-      // below fetches the real list: a one-row list seeded here would
-      // satisfy every "list resolved" gate with the caller's own
-      // assistants missing until the refetch landed.
-      qc.setQueryData<ListAssistantsResponse>(qk.assistants(), (prev) => {
-        if (prev === undefined) return prev;
-        const row = created.defaultAssistant;
-        if (prev.assistants.some((a) => a.id === row.id)) return prev;
-        return { assistants: [...prev.assistants, row] };
-      });
       for (const queryKey of teamCreateQueryKeys()) {
         qc.invalidateQueries({ queryKey });
       }

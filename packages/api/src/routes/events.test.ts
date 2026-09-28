@@ -1478,9 +1478,9 @@ describe("event-subscription assistant target", () => {
   async function seedAssistants(a: TestApi): Promise<{ mine: string; foreign: string }> {
     const db = a.providers.db;
     // The first create for a principal takes the default slot.
-    await seedWorkspaceAssistant(db, "local-org", { type: "user", id: "local-user" }, "Primary");
-    const mine = await seedWorkspaceAssistant(db, "local-org", { type: "user", id: "local-user" }, "Ops");
-    const foreign = await seedWorkspaceAssistant(db, "local-org", { type: "user", id: "someone-else" }, "Theirs");
+    await seedWorkspaceAssistant(db, "local-org", { type: "user", id: "local-user" });
+    const mine = await seedWorkspaceAssistant(db, "local-org", { type: "user", id: "local-user" });
+    const foreign = await seedWorkspaceAssistant(db, "local-org", { type: "user", id: "someone-else" });
     return { mine: mine.id, foreign: foreign.id };
   }
 

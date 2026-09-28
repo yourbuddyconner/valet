@@ -11,27 +11,12 @@
  * read the query the badge would navigate with.
  */
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { ListAssistantsResponse, ListTeamsResponse } from "@valet/api/wire";
+import type { ListTeamsResponse } from "@valet/api/wire";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "~/components/primitives";
 
 let teamsData: ListTeamsResponse = { teams: [] };
-/** The badge links by assistant id, so it needs the list that maps an owner
- * to one. A team with no listed assistant has nothing to link to. */
-function teamAssistants(): ListAssistantsResponse {
-  return {
-    assistants: [
-      {
-        id: "asst_team_1",
-        owner: { type: "team", id: "team_1" },
-        sessionId: "assistant:asst_team_1",
-        createdAt: 1,
-      },
-    ],
-  };
-}
-let assistantsData: ListAssistantsResponse = teamAssistants();
 
 vi.mock("~/api/settings", () => ({
   useTeams: () => ({ data: teamsData, isLoading: false, error: null }),
@@ -81,7 +66,6 @@ function show(ownerType: "user" | "team" | "org", ownerId: string) {
 
 beforeEach(() => {
   teamsData = { teams: [] };
-  assistantsData = teamAssistants();
 });
 
 describe("OwnerBadge", () => {
@@ -132,7 +116,6 @@ describe("OwnerBadge", () => {
 
   it("still names the owner when the team has no assistant to link to", () => {
     teamsData = { teams: [team()] };
-    assistantsData = { assistants: [] };
     const { container } = show("team", "team_1");
 
     expect(screen.getByText("Design")).toBeTruthy();

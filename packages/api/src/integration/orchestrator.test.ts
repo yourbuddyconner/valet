@@ -1,9 +1,9 @@
 /**
  * Integration test: the caller's default assistant (Phase 4 Task 7).
  *
- *   - POST /api/orchestrator is idempotent: two calls, one engine session
+ *   - POST /api/workspaces/user/runtime is idempotent: two calls, one engine session
  *     row, one `assistants` row.
- *   - GET /api/orchestrator probes without creating.
+ *   - GET /api/workspaces/user/runtime probes without creating.
  *   - The ensured session is `queueMode: 'steer'` (user principal, decision
  *     17) and its `systemContext` carries the assembled memory snapshot —
  *     asserted via `Session.options` (a public field on the engine's own
@@ -20,7 +20,7 @@ import { driveTurn } from "./_test-utils.js";
 import { EngineHost } from "../engine/host.js";
 import { internalToken } from "../lib/internal-auth.js";
 import { agentSessions, assistants } from "../schema/index.js";
-import type { EnsureOrchestratorResponse, GetOrchestratorResponse } from "../wire/types.js";
+import type { EnsureWorkspaceRuntimeResponse, WorkspaceRuntimeResponse } from "../wire/types.js";
 
 let api: TestApi | undefined;
 
@@ -33,11 +33,11 @@ describe("api integration: default assistant lifecycle", () => {
   // The probe reports no session id at all before the first ensure. The id
   // used to be derivable from the caller; it no longer is, because an
   // assistant addresses its session by its OWN id.
-  it("GET /api/orchestrator before any ensure reports exists: false and a null sessionId", async () => {
+  it("GET /api/workspaces/user/runtime before any ensure reports exists: false and a null sessionId", async () => {
     api = await bootTestApi();
-    const res = await fetch(`${api.baseUrl}/api/orchestrator`);
+    const res = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as GetOrchestratorResponse;
+    const body = (await res.json()) as WorkspaceRuntimeResponse;
     expect(body.exists).toBe(false);
     expect(body.sessionId).toBeNull();
 
@@ -46,17 +46,17 @@ describe("api integration: default assistant lifecycle", () => {
     expect(assistantRows).toHaveLength(0);
   });
 
-  it("POST /api/orchestrator is idempotent — two calls, one session row, one assistant row", async () => {
+  it("POST /api/workspaces/user/runtime is idempotent — two calls, one session row, one assistant row", async () => {
     api = await bootTestApi();
 
-    const first = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
+    const first = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST" });
     expect(first.status).toBe(200);
-    const firstBody = (await first.json()) as EnsureOrchestratorResponse;
+    const firstBody = (await first.json()) as EnsureWorkspaceRuntimeResponse;
     expect(firstBody.sessionId).toMatch(/^assistant:asst_/);
 
-    const second = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
+    const second = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST" });
     expect(second.status).toBe(200);
-    const secondBody = (await second.json()) as EnsureOrchestratorResponse;
+    const secondBody = (await second.json()) as EnsureWorkspaceRuntimeResponse;
     expect(secondBody.sessionId).toBe(firstBody.sessionId);
 
     const { db } = api.providers;
@@ -78,8 +78,8 @@ describe("api integration: default assistant lifecycle", () => {
     expect(assistantRows[0]?.ownerId).toBe("local-user");
     expect(await db.select().from(assistants)).toHaveLength(1);
 
-    const probe = await fetch(`${api.baseUrl}/api/orchestrator`);
-    const probeBody = (await probe.json()) as GetOrchestratorResponse;
+    const probe = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`);
+    const probeBody = (await probe.json()) as WorkspaceRuntimeResponse;
     expect(probeBody.exists).toBe(true);
     expect(probeBody.sessionId).toBe(firstBody.sessionId);
   });
@@ -106,8 +106,8 @@ describe("api integration: default assistant lifecycle", () => {
     });
     expect(writeRes.status).toBe(200);
 
-    const ensureRes = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
-    const { sessionId } = (await ensureRes.json()) as EnsureOrchestratorResponse;
+    const ensureRes = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST" });
+    const { sessionId } = (await ensureRes.json()) as EnsureWorkspaceRuntimeResponse;
 
     const session = api.providers.engineHost.liveSession(sessionId);
     expect(session).not.toBeNull();
@@ -131,9 +131,9 @@ describe("api integration: default assistant lifecycle", () => {
 
     // Create the assistant via the real ensure path first (so an engine row
     // + assistant row exist to restore from).
-    const ensureRes = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
+    const ensureRes = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST" });
     expect(ensureRes.status).toBe(200);
-    const { sessionId } = (await ensureRes.json()) as EnsureOrchestratorResponse;
+    const { sessionId } = (await ensureRes.json()) as EnsureWorkspaceRuntimeResponse;
 
     // Simulate boot restore: a *second* EngineHost, sharing the same
     // stores/db, with a cold in-process cache. `main.ts`'s boot-restore
@@ -212,9 +212,9 @@ describeIfKey("api integration: assistant sandbox-less wake", () => {
       const counter = new CreateCountingSandboxProvider();
       api = await bootTestApi({ sandboxProvider: counter });
 
-      const ensureRes = await fetch(`${api.baseUrl}/api/orchestrator`, { method: "POST" });
+      const ensureRes = await fetch(`${api.baseUrl}/api/workspaces/user/runtime`, { method: "POST" });
       expect(ensureRes.status).toBe(200);
-      const { sessionId } = (await ensureRes.json()) as EnsureOrchestratorResponse;
+      const { sessionId } = (await ensureRes.json()) as EnsureWorkspaceRuntimeResponse;
 
       await driveTurn({
         baseUrl: api.baseUrl,

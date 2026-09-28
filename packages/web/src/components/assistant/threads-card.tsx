@@ -1,8 +1,7 @@
-import { orchestratorName } from "~/lib/assistant-name";
 import { Link } from "@tanstack/react-router";
 import type { OrchestratorChildSummary, ThreadSummary } from "@valet/api/wire";
 import { Spinner } from "~/components/primitives";
-import { useOrchestratorChildren, useOrchestratorInfo } from "~/api/orchestrator";
+import { useOrchestratorChildren, useWorkspaceRuntimeInfo } from "~/api/orchestrator";
 import { useThreads } from "~/api/queries";
 import { relativeTime } from "~/lib/relative-time";
 import { threadOriginBucket, type ThreadOriginBucket } from "~/lib/thread-origin";
@@ -77,9 +76,8 @@ function OriginPill({ thread }: { thread: Pick<ThreadSummary, "key"> }) {
 }
 
 export function ThreadsCard() {
-  const info = useOrchestratorInfo();
+  const info = useWorkspaceRuntimeInfo("user");
   const sessionId = info.data?.sessionId;
-  const name = orchestratorName(info.data?.name);
 
   const threadsQ = useThreads(sessionId ?? "");
   const childrenQ = useOrchestratorChildren();
@@ -114,7 +112,7 @@ export function ThreadsCard() {
         )}
         {!threadsQ.isLoading && !threadsQ.error && rows.length === 0 && (
           <p className="px-4 py-3 text-sm text-muted">
-            No threads yet — open the chat and say hello to {name}.
+            No threads yet — open the chat to start a conversation.
           </p>
         )}
         <ul>

@@ -68,7 +68,7 @@ describe("settings workspace routing", () => {
     expect(directoryRead).not.toHaveBeenCalled();
   });
 
-  it.each(["/settings/profile", "/settings/appearance", "/settings/assistant"])("keeps personal forms reachable at %s in team scope", (path) => {
+  it.each(["/settings/profile", "/settings/appearance", "/settings/threads"])("keeps personal forms reachable at %s in team scope", (path) => {
     teamId = "team_1";
     pathname = path;
     render(<SettingsLayout />);

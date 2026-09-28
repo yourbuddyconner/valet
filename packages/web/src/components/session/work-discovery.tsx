@@ -1,3 +1,4 @@
+import { WorkspaceArtifactGallery } from "./workspace-artifact-gallery";
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useInfiniteQuery } from "@tanstack/react-query";
@@ -21,12 +22,14 @@ export function WorkDiscovery() {
 
 function ScopedWork({ owner }: { owner: OwnerFilter }) {
   const [newOpen, setNewOpen] = useState(false);
+  const [showGallery, setShowGallery] = useState(false);
   const work = useInfiniteQuery({
     queryKey: ["workspace-work", owner.ownerType, owner.ownerId],
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => api.listWork(owner, pageParam),
     getNextPageParam: page => page.nextCursor ?? undefined,
-    refetchInterval: 10_000,
+    enabled: !showGallery,
+    refetchInterval: showGallery ? false : 10_000,
   });
   const rows = work.error ? [] : work.data?.pages.flatMap(page => page.sessions) ?? [];
   return <div className="flex-1 overflow-y-auto p-4 sm:p-6">
@@ -34,8 +37,12 @@ function ScopedWork({ owner }: { owner: OwnerFilter }) {
       <h1 className="text-lg font-semibold">Work and artifacts</h1>
       <Button size="sm" onClick={() => setNewOpen(true)}>New work</Button>
     </div>
+    <div className="mb-4 flex gap-2" aria-label="Work and artifact views">
+      <Button size="sm" variant="secondary" aria-pressed={!showGallery} onClick={() => setShowGallery(false)}>Work</Button>
+      <Button size="sm" variant="secondary" aria-pressed={showGallery} onClick={() => setShowGallery(true)}>All workspace artifacts</Button>
+    </div>
+    {showGallery ? <WorkspaceArtifactGallery /> : <>
     <p className="mb-4 text-sm text-muted">Standalone work and child executions in this workspace, newest first.</p>
-    <Link to="/artifacts" className="text-sm underline">All workspace artifacts</Link>
     {work.isLoading && <LoadingRow label="Loading work…" />}
     {work.error && <ErrorRow>Could not load work. <button onClick={() => void work.refetch()} className="underline">Retry</button></ErrorRow>}
     {!work.isLoading && !work.error && rows.length === 0 && <EmptyRow>No work yet. Select New work to start.</EmptyRow>}
@@ -52,6 +59,7 @@ function ScopedWork({ owner }: { owner: OwnerFilter }) {
     {!work.error && work.hasNextPage && <Button className="mt-4" variant="secondary" disabled={work.isFetchingNextPage} onClick={() => void work.fetchNextPage()}>
       {work.isFetchingNextPage ? "Loading…" : "Load more work"}
     </Button>}
+    </>}
     <NewSessionDialog open={newOpen} onOpenChange={setNewOpen} />
   </div>;
 }

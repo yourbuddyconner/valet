@@ -545,13 +545,10 @@ describe("buildActionInvoker", () => {
     }
   });
 
-  it("workflow slack.send_message posts as the owner's configured assistant", async () => {
+  it("workflow slack.send_message uses org credentials and the bot identity for a personal owner", async () => {
     const db = await makeDb();
-    const assistant = await seedWorkspaceAssistant(db, "org1", { type: "user", id: "u1" }, "Release bot");
-    await db
-      .update(assistants)
-      .set({ avatarUrl: "https://cdn.example.com/release-bot.png" })
-      .where(eq(assistants.id, assistant.id));
+    const assistant = await seedWorkspaceAssistant(db, "org1", { type: "user", id: "u1" });
+
 
     const store = new FakeCredentialStore();
     store.seed({ type: "org", id: "org1" }, "slack", { type: "bot_token", accessToken: "org-bot" });
@@ -581,9 +578,10 @@ describe("buildActionInvoker", () => {
       expect(JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string)).toMatchObject({
         channel: "C1",
         text: "Deploy complete",
-        username: "Release bot",
-        icon_url: "https://cdn.example.com/release-bot.png",
       });
+      const sent = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string) as Record<string, unknown>;
+      expect(sent.username).toBeUndefined();
+      expect(sent.icon_url).toBeUndefined();
     } finally {
       vi.unstubAllGlobals();
     }

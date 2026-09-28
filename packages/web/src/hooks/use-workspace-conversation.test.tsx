@@ -3,16 +3,13 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { AssistantSummary } from "@valet/api/wire";
 import { useWorkspaceConversation } from "./use-workspace-conversation";
 
 const personal = vi.fn(); const team = vi.fn(); const legacy = vi.fn();
 let scope = { key: "user", teamId: undefined as string | undefined };
 let search: { assistant?: string; workspace?: string } = {};
-let rows: AssistantSummary[] = [];
 vi.mock("~/api/client", () => ({ api: {
-  ensureOrchestrator: (...args: unknown[]) => personal(...args),
-  ensureTeamOrchestrator: (...args: unknown[]) => team(...args),
+  ensureWorkspaceRuntime: (workspace: string) => workspace === "user" ? personal() : team(workspace),
   ensureAssistantSession: (...args: unknown[]) => legacy(...args),
 } }));
 vi.mock("~/lib/workspace-scope", () => ({ useWorkspaceScope: () => scope }));
@@ -22,7 +19,7 @@ function harness() {
   return ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 beforeEach(() => {
-  vi.clearAllMocks(); scope = { key: "user", teamId: undefined }; search = {}; rows = [];
+  vi.clearAllMocks(); scope = { key: "user", teamId: undefined }; search = {};
   personal.mockResolvedValue({ sessionId: "personal-session" });
   team.mockResolvedValue({ sessionId: "team-session" });
   legacy.mockResolvedValue({ sessionId: "legacy-session" });

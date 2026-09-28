@@ -16,7 +16,7 @@ import { teamMembers } from "../schema/index.js";
 import type {
   CreateTeamApiKeyResponse,
   CreateTeamResponse,
-  EnsureOrchestratorResponse,
+  EnsureWorkspaceRuntimeResponse,
   SessionDetail,
 } from "../wire/types.js";
 
@@ -191,26 +191,34 @@ describe("team API key reach", () => {
     expect(team).toEqual({ kind: "frame", type: "init" });
   });
 
-  it("reaches its own team's default assistant and no other orchestrator surface", async () => {
+  it("reaches its own workspace runtime and refuses other workspace runtimes", async () => {
     const f = await bootFixture();
     const headers = { "x-api-key": f.teamKey };
 
     // The key survives the admin leaving: membership is not re-checked.
     await api!.providers.db.delete(teamMembers);
-    const own = await fetch(`${f.baseUrl}/api/teams/${f.teamId}/orchestrator`, { method: "POST", headers });
+    const own = await fetch(`${f.baseUrl}/api/workspaces/${f.teamId}/runtime`, { method: "POST", headers });
     expect(own.status).toBe(200);
-    const { sessionId } = (await own.json()) as EnsureOrchestratorResponse;
+    const { sessionId } = (await own.json()) as EnsureWorkspaceRuntimeResponse;
     const detail = await fetch(`${f.baseUrl}/api/sessions/${sessionId}`, { headers });
     expect(detail.status).toBe(200);
     expect(((await detail.json()) as SessionDetail).owner).toEqual({ type: "team", id: f.teamId });
 
     const otherTeamId = await createTeam(f.baseUrl, f.cookie, "Other");
-    const other = await fetch(`${f.baseUrl}/api/teams/${otherTeamId}/orchestrator`, { method: "POST", headers });
+    const other = await fetch(`${f.baseUrl}/api/workspaces/${otherTeamId}/runtime`, { method: "POST", headers });
     expect(other.status).toBe(403);
-    const personal = await fetch(`${f.baseUrl}/api/orchestrator`, { method: "POST", headers });
+    const personal = await fetch(`${f.baseUrl}/api/workspaces/user/runtime`, { method: "POST", headers });
     expect(personal.status).toBe(403);
-    const probe = await fetch(`${f.baseUrl}/api/teams/${f.teamId}/orchestrator`, { headers });
-    expect(probe.status).toBe(403);
+    const probe = await fetch(`${f.baseUrl}/api/workspaces/${f.teamId}/runtime`, { headers });
+    expect(probe.status).toBe(200);
+    const info = await fetch(`${f.baseUrl}/api/workspaces/${f.teamId}/runtime/info`, { headers });
+    expect(info.status).toBe(200);
+    expect(await info.json()).toMatchObject({ sessionId });
+    for (const workspace of ["user", otherTeamId]) {
+      for (const suffix of ["runtime", "runtime/info"]) {
+        expect((await fetch(`${f.baseUrl}/api/workspaces/${workspace}/${suffix}`, { headers })).status).toBe(403);
+      }
+    }
   });
 
   // The always-allow check used to read the creating admin's user id, so a

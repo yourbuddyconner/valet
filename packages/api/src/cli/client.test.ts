@@ -55,7 +55,7 @@ describe("InstanceClient auth header", () => {
 });
 
 describe("InstanceClient.ensureOrchestrator", () => {
-  it("posts /api/orchestrator for a personal identity", async () => {
+  it("posts /api/workspaces/user/runtime for a personal identity", async () => {
     const calls: string[] = [];
     handler = (req, res) => {
       calls.push(`${req.method} ${req.url}`);
@@ -68,7 +68,7 @@ describe("InstanceClient.ensureOrchestrator", () => {
     };
     const client = new InstanceClient({ url: baseUrl, apiKey: "vlt_personal" });
     expect((await client.ensureOrchestrator()).sessionId).toBe("assistant:u1");
-    expect(calls).toContain("POST /api/orchestrator");
+    expect(calls).toContain("POST /api/workspaces/user/runtime");
     expect(calls.some((c) => c.startsWith("POST /api/teams/"))).toBe(false);
   });
 
@@ -85,8 +85,8 @@ describe("InstanceClient.ensureOrchestrator", () => {
     };
     const client = new InstanceClient({ url: baseUrl, apiKey: "vlt_team" });
     expect((await client.ensureOrchestrator()).sessionId).toBe("assistant:team_1");
-    expect(calls).toContain("POST /api/teams/team_1/orchestrator");
-    expect(calls).not.toContain("POST /api/orchestrator");
+    expect(calls).toContain("POST /api/workspaces/team_1/runtime");
+    expect(calls).not.toContain("POST /api/workspaces/user/runtime");
   });
 });
 

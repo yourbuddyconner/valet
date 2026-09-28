@@ -13,7 +13,7 @@
  * `?assistant=` — `/skills`, `/workflows` and `/events` all read as personal
  * no matter which workspace the reader was in.
  */
-import type { AssistantSummary, TeamSummary } from "@valet/api/wire";
+import type { TeamSummary } from "@valet/api/wire";
 import { describe, expect, it } from "vitest";
 import {
   PERSONAL,

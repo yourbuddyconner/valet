@@ -550,9 +550,9 @@ describe("pluginCatalogTools: capability boundaries", () => {
     const { plugin } = makeMockPlugin();
     const unavailable = [{
       service: "github",
-      state: "excluded_by_assistant" as const,
-      reason: "this assistant excludes the service",
-      fix: "This assistant's configuration excludes github; edit the assistant's Integrations settings on its editor page (/assistants/$assistantId).",
+      state: "disabled_by_org" as const,
+      reason: "the organization disabled this service",
+      fix: "Ask an organization administrator to enable github.",
     }];
     const [listTool] = pluginCatalogTools({
       plugins: [plugin],
@@ -568,7 +568,7 @@ describe("pluginCatalogTools: capability boundaries", () => {
     expect(payload.tools).toEqual([]);
     expect(payload.warnings).toContainEqual(expect.objectContaining({
       service: "github",
-      state: "excluded_by_assistant",
+      state: "disabled_by_org",
     }));
     expect(result.text).not.toContain("github.create_issue");
   });
@@ -1943,7 +1943,7 @@ describe("pluginCatalogTools: availability failure containment", () => {
     const { plugin } = makeMockPlugin();
     const other: ActionPlugin = { ...plugin, service: "linear", actions: plugin.actions.map((action) => ({ ...action, id: action.id.replace("github", "linear") })) };
     const [listTool] = pluginCatalogTools({ plugins: [plugin, other], serviceAvailability: [
-      { service: "github", state: "excluded_by_assistant", reason: "excluded" },
+      { service: "github", state: "disabled_by_org", reason: "excluded" },
       { service: "linear", state: "load_failed", reason: "failed" },
     ] });
     const payload = decode((await listTool.execute({ service: "github" }, makeCtx())).text) as { warnings: Array<{ service: string }> };

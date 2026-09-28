@@ -28,7 +28,7 @@ import { relativeTime } from "~/lib/relative-time";
 // ── feed (pure, exported for tests) ───────────────────────────────────────
 
 export interface TeamFeedItem {
-  kind: "assistant-run" | "workflow-run";
+  kind: "child-run" | "workflow-run";
   key: string;
   /** Child session id, or run id — the link target. */
   targetId: string;
@@ -50,11 +50,11 @@ export function mergeTeamFeed(
   const items: TeamFeedItem[] = [
     ...children.map(
       (c): TeamFeedItem => ({
-        kind: "assistant-run",
+        kind: "child-run",
         key: `child:${c.sessionId}`,
         targetId: c.sessionId,
         title: c.title,
-        actor: c.assistantName ?? "Assistant",
+        actor: "Team work",
         statusLabel: c.status,
         tone: c.status === "running" ? "running" : "done",
         createdAt: c.createdAt,
@@ -112,12 +112,6 @@ export function TeamDashboard({ teamId }: { teamId: string }) {
   const children = childrenQ.data?.children ?? [];
   const feed = mergeTeamFeed(children, runsQ.data?.runs ?? []);
 
-  // An assistant with an unsettled child is working — presence derives from
-  // the feed's own read, not a live-session probe.
-  const workingAssistantIds = new Set(
-    children.filter((c) => c.status === "running").map((c) => c.assistantId),
-  );
-
   // The workflows query gates the runs query, so "still loading" includes
   // it — otherwise a team whose activity is all workflow runs flashes the
   // empty state before the runs arrive.
@@ -174,7 +168,7 @@ export function TeamDashboard({ teamId }: { teamId: string }) {
             <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line">
               {feed.map((item) => (
                 <li key={item.key}>
-                  {item.kind === "assistant-run" ? (
+                  {item.kind === "child-run" ? (
                     <Link
                       to="/sessions/$sessionId"
                       params={{ sessionId: item.targetId }}
