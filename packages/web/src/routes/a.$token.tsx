@@ -10,6 +10,7 @@ import {
 } from "~/api/artifacts";
 import { ApiError } from "~/api/client";
 import { useMe } from "~/api/settings";
+import { RevokeArtifact } from "~/components/artifact/revoke-artifact";
 import { ArtifactFrame, type ArtifactPick } from "~/components/artifact/artifact-frame";
 import {
   ArtifactPins,
@@ -39,7 +40,7 @@ export const Route = createFileRoute("/a/$token")({
   component: ArtifactPage,
 });
 
-function ArtifactPage() {
+export function ArtifactPage() {
   const { token } = Route.useParams();
   const theme = useThemeAttribute();
   const artifactQ = useArtifact(token);
@@ -50,6 +51,7 @@ function ArtifactPage() {
   const addComment = useAddArtifactComment(token);
   const resolveComment = useResolveArtifactComment(token);
 
+  const [revokedToken, setRevokedToken] = useState<string>();
   const [picking, setPicking] = useState(false);
   const [pendingPick, setPendingPick] = useState<ArtifactPick | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -80,6 +82,12 @@ function ArtifactPage() {
       document.title = previous;
     };
   }, [title, icon]);
+
+  if (revokedToken === token) {
+    return <div className="flex min-h-screen items-center justify-center p-8 text-center">
+      <div className="space-y-2"><h1 className="font-display text-xl">This link is revoked.</h1><p className="text-sm text-muted">Publish the artifact again to get a new link.</p></div>
+    </div>;
+  }
 
   if (artifactQ.isLoading) {
     return (
@@ -171,6 +179,7 @@ function ArtifactPage() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
+            {doc.management && !meQ.error && <RevokeArtifact key={doc.management.id} id={doc.management.id} title={doc.title} token={token} onRevoked={() => setRevokedToken(token)} />}
             {canComment && (
               <button
                 type="button"

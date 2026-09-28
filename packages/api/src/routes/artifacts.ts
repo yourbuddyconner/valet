@@ -337,6 +337,7 @@ export function buildArtifactsPublicRouter(auth: ValetAuth | null): Hono<AppEnv>
 
     const served = await resolveServedVersion(db, artifact);
     const body: GetArtifactResponse = {
+      ...(await hasArtifactManagerRole(db, artifact, user) ? { management: { id: artifact.id } } : {}),
       title: served.title,
       content: served.content,
       rendered: served.rendered,
@@ -693,6 +694,11 @@ artifactsRouter.get("/", async (c) => {
 
 /** Sharer-or-admin gate for managing one artifact. Wrong org or no row →
  * 404 (existence-hiding); right org but neither sharer nor admin → 403. */
+async function hasArtifactManagerRole(db: AppDb, row: ArtifactRow, user: AuthUser | undefined): Promise<boolean> {
+  return !!user && row.orgId === user.orgId &&
+    (row.actorUserId === user.id || await isOrgAdmin(db, user.orgId, user.id));
+}
+
 async function loadManagedArtifact(
   c: Context<AppEnv>,
   user: AuthUser,
@@ -702,7 +708,7 @@ async function loadManagedArtifact(
   if (!row || row.orgId !== user.orgId || !(await hasArtifactTeamAccess(db, row, user))) {
     return { error: c.json({ error: "not found" }, 404) };
   }
-  if (row.actorUserId !== user.id && !(await isOrgAdmin(db, user.orgId, user.id))) {
+  if (!(await hasArtifactManagerRole(db, row, user))) {
     return { error: c.json({ error: "only the sharer or an org admin can manage this artifact" }, 403) };
   }
   return { row };

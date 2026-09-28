@@ -332,3 +332,14 @@ open, merged, or review state. Live PR status synchronization remains separate.
 Freshness is checked on demand while the page is open. This is a workspace cache,
 not a background scheduler or a persistent per-goal index. Changed evidence still
 regenerates the bounded workspace synthesis; unchanged page reads do not call a model.
+
+The old workspace artifact gallery, assistant activity strip, and assistant thread
+card are removed. They had no production callers after Briefing replaced the
+workspace dashboard. Briefing keeps source links and optional activity details.
+
+Each refactor pass checks adjacent setup pages, callback destinations, activation
+requirements, and old ownership assumptions. A listed capability must have a
+working setup path or explain what is missing before it can be activated.
+
+Remaining adjacent gap: GitHub event triggers do not yet check App and webhook
+readiness before activation. Apply the existing GitHub setup status to that path.

@@ -154,9 +154,13 @@ describe("team API key on the public artifact router", () => {
 
     const asTeamKey = await fetch(f.readUrl, { headers: { "x-api-key": f.teamKey } });
     expect(asTeamKey.status).toBe(200);
-    const body = (await asTeamKey.json()) as { sharedBy?: string; canComment: boolean };
+    const body = (await asTeamKey.json()) as { sharedBy?: string; canComment: boolean; management?: { id: string } };
     expect(body.sharedBy).toBeUndefined();
     expect(body.canComment).toBe(false);
+    expect(body.management).toBeUndefined();
+    const anonymous = await fetch(f.readUrl);
+    expect(anonymous.status).toBe(200);
+    expect(await anonymous.json()).not.toHaveProperty("management");
   });
 
   it("is refused on every comment route, public artifact or not", async () => {

@@ -43,6 +43,19 @@ async function setup() {
 }
 
 describe("team artifact privacy", () => {
+  it("offers management only to a sharer or admin with current team access", async () => {
+    const { db, row, request } = await setup();
+    expect(await (await request(`/${row.token}`, "local-user")).json()).toMatchObject({ management: { id: row.id } });
+    const reader = await request(`/${row.token}`, "test-member");
+    expect(reader.status).toBe(200);
+    expect(await reader.json()).not.toHaveProperty("management");
+    expect((await request(`/${row.token}`, "test-admin")).status).toBe(404);
+    await db.insert(teamMembers).values({ teamId: "private-team", userId: "test-admin", role: "member" });
+    expect(await (await request(`/${row.token}`, "test-admin")).json()).toMatchObject({ management: { id: row.id } });
+    await db.delete(teamMembers).where(eq(teamMembers.userId, "local-user"));
+    expect((await request(`/${row.token}`, "local-user")).status).toBe(404);
+  });
+
   it("does not offer comment delivery across organization boundaries", async () => {
     const { db, row, request } = await setup();
     await db.insert(agentSessions).values({

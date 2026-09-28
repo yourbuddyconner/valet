@@ -725,3 +725,11 @@ implements against.
   never compiles; it renders what the api stored.
 - `ArtifactFrame` remounts on a `srcDoc` change — a republished page must not
   keep the previous document's script state.
+
+### Reader management
+
+The artifact reader exposes Revoke to its sharer or an organization admin when
+that caller can access the artifact. The read API supplies this capability after
+the existing organization and team checks. Anonymous readers and other viewers
+receive no management capability. Revocation uses the existing endpoint and
+confirmation dialog; the reader then shows that the link is revoked.

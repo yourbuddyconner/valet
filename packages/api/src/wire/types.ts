@@ -3215,6 +3215,8 @@ export interface ShareArtifactResponse {
  * version (the pinned `sharedVersion`, else the latest) and takes no
  * version parameter: a link holder must not walk the history. */
 export interface GetArtifactResponse {
+  /** Present only when this caller may revoke or manage this artifact. */
+  management?: { id: string };
   /** Team ownership restricts the audience regardless of stored visibility. */
   ownerType: string;
   title: string;
