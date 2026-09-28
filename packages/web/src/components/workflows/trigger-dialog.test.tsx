@@ -38,6 +38,8 @@ vi.mock("~/api/workflows", () => ({
   useTriggerCatalog: () => ({
     data: {
       catalog: [
+        { service: "linear", readiness: { ready: false, reason: "Ask an organization admin to connect Linear events." },
+          entries: [{ key: "linear.issue.update", description: "Issue updated in Linear", filters: [] }] },
         {
           service: "github",
           entries: [
@@ -239,4 +241,18 @@ describe("TriggerDialog", () => {
     const callArg = updateEventMutateAsync.mock.calls[updateEventMutateAsync.mock.calls.length - 1][0];
     expect(callArg.body.filters).toEqual([]);
   });
+});
+
+it("distinguishes Linear events from actions and blocks an unconfigured event source", () => {
+  createEventTriggerMutateAsync.mockClear();
+  render(<TriggerDialog open onOpenChange={() => {}} workflowId="wf_1" />);
+  fireEvent.click(screen.getByText(/^Event$/));
+  fireEvent.change(screen.getByLabelText(/event/i), { target: { value: "linear.issue.update" } });
+  expect(screen.getByRole("option", { name: "Issue updated in Linear" })).toBeTruthy();
+  expect(screen.getByText(/Ask an organization admin to connect Linear events/)).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Linear event setup" }).getAttribute("href")).toBe("/settings/organization/linear");
+  const button = screen.getByRole("button", { name: "Create" });
+  expect(button.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(button);
+  expect(createEventTriggerMutateAsync).not.toHaveBeenCalled();
 });

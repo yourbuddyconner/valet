@@ -1,3 +1,4 @@
+import linearEventPlugin from "@valet/plugin-linear/plugin";
 import { generateKeyPairSync } from "node:crypto";
 /**
  * Workflow template aggregation and install.
@@ -27,7 +28,7 @@ import { bundledPlugins } from "../plugins/registry.gen.js";
 import { freshTestPgDb } from "../test-helpers/pg-test-db.js";
 import type { AppDb } from "../lib/drizzle.js";
 import type { PgDb } from "@valet/store-postgres";
-import { githubInstallations, eventSubscriptions, orgs, teamMembers, teams, workflowDefinitions, workflowSchedules, workflowVersions } from "../schema/index.js";
+import { linearInstallations, githubInstallations, eventSubscriptions, orgs, teamMembers, teams, workflowDefinitions, workflowSchedules, workflowVersions } from "../schema/index.js";
 import { setApprovedModels } from "../services/approved-models.js";
 import { assemblePlugins } from "../plugins/assemble.js";
 import {
@@ -874,6 +875,21 @@ describe("bakeInputs", () => {
 // ─── Install ─────────────────────────────────────────────────────────────
 
 describe("installWorkflowTemplate", () => {
+  it("requires organization ingress before arming a Linear template", async () => {
+    const template: WorkflowTemplate = {
+      id: "linear-event-test", name: "Linear event", description: "Responds to Linear.", category: "Work", apps: [], steps: ["Stop"],
+      definition: definition([{ id: "start", type: "trigger" }, { id: "stop", type: "stop" }], [{ from: "start", to: "stop" }]),
+      events: [{ name: "On issue", description: "When an issue changes", eventKeys: ["linear.issue.update"] }],
+    };
+    const scopedDeps = deps([{ ...linearEventPlugin, templates: [template] }]);
+    expect(await installWorkflowTemplate(scopedDeps,OWNER,template.id)).toMatchObject({ ok: false, code: "not_connected", error: expect.stringContaining("Linear events") });
+    expect(await db.select().from(workflowDefinitions)).toHaveLength(0);
+    await db.insert(linearInstallations).values({ id: "template-install", orgId: OWNER.orgId, workspaceId: "linear-org", workspaceName: "Linear", webhookId: "webhook", connectedBy: OWNER.userId, createdAt: 1, updatedAt: 1 });
+    await credentials.save({ type: "org", id: OWNER.orgId },"linear",{ type: "oauth2", accessToken: "token", metadata: { webhookSecret: "secret" } });
+    expect(await installWorkflowTemplate(scopedDeps,OWNER,template.id)).toMatchObject({ ok: true });
+    expect(await db.select().from(eventSubscriptions)).toHaveLength(1);
+  });
+
   it("writes the definition, its first version, and the schedule", async () => {
     await connect("gmail");
     const result = await installWorkflowTemplate(deps(), OWNER, "gmail-sweep");

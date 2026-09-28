@@ -300,6 +300,32 @@ semantics.
 | `GITHUB_APP_PRIVATE_KEY` | Yes | The App's private key PEM, raw or base64-encoded |
 | `GITHUB_APP_WEBHOOK_SECRET` | No | Webhook HMAC secret. Leave unset for a webhook-less App |
 
+## Linear events
+
+Personal Linear connections enable MCP tools. Organization event triggers use a
+separate native OAuth app configured on the API server.
+
+| Variable | Description |
+|----------|-------------|
+| `LINEAR_CLIENT_ID` | Native Linear OAuth app client ID |
+| `LINEAR_CLIENT_SECRET` | Native Linear OAuth app client secret |
+| `VALET_PUBLIC_URL` | Reachable HTTPS API base URL for callbacks and webhook delivery |
+
+1. Provision the Linear OAuth app for the intended workspace.
+2. Register `{public API URL}/api/org/linear/callback` as its redirect URI.
+3. Set the variables above and restart the API server.
+4. As an organization admin, open Settings > Organization > Linear events and connect.
+
+The server requests `read,write,admin` with `actor=app`. After authorization, it
+registers `{public API URL}/webhooks/events/linear` and stores a generated signing
+secret with the organization credential. No webhook secret environment variable
+is needed. Local development needs a public tunnel for webhook delivery.
+
+For Helm, supply these variables through an external Secret referenced by
+`api.extraEnvFrom`. Restart the API after changing that Secret; the chart cannot
+automatically detect changes to externally managed Secrets. Keep secret values
+out of committed values files.
+
 ## Channels
 
 | Variable | Description |

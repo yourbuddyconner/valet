@@ -489,3 +489,19 @@ that thread reach the assistant through the follow router
 the default body. Only the deliveries the subscription matches render its
 templates. The form states this where a rule follows a thread, so a reader
 does not expect an instruction to hold for the whole conversation.
+
+### Linear event connection readiness
+
+Personal Linear OAuth enables MCP tools, including `linear.save_issue`. It does
+not install a webhook. Events such as `linear.issue.update` require the separate
+organization connection. Organization settings expose the existing Linear OAuth
+setup, which registers that webhook. The callback returns to this settings page.
+
+Trigger catalogs show incoming event labels and organization readiness. Readiness
+requires an installation, an organization credential with a signing secret, and a
+registered webhook ID. It does not prove that Linear delivered a particular event.
+Creation and activation report missing setup instead of accepting an event source
+that cannot receive events. Template installation uses the same check. Repository
+imports keep workflow definitions but leave missing-ingress triggers unarmed with
+a setup warning. Existing rules can still be disabled. Non-admins get
+an instruction to ask an organization admin; credentials remain admin-only.

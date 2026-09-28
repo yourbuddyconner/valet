@@ -111,9 +111,10 @@ export function TriggerDialog({
   // each entry's filter fields so the Filters box can show which fields the
   // selected event actually declares.
   const catalogEntries = (catalogQ.data?.catalog ?? []).flatMap((svc) =>
-    svc.entries.map((e) => ({ key: e.key, label: `${e.key} — ${e.description}`, filters: e.filters })),
+    svc.entries.map((e) => ({ key: e.key, label: e.description, filters: e.filters, readiness: svc.readiness })),
   );
   const selectedEntry = catalogEntries.find((e) => e.key === eventKey);
+  const missingSetup = kind === "event" && selectedEntry?.readiness?.ready === false;
 
   // Populate fields when editing.
   useEffect(() => {
@@ -186,6 +187,10 @@ export function TriggerDialog({
     setServerError(null);
     setFormError(null);
     setInputJsonError(null);
+    if (missingSetup) {
+      setFormError(selectedEntry?.readiness?.reason ?? "Ask an organization admin to connect this event source.");
+      return;
+    }
 
     // Client-side: require a workflow selection on create when the workflowId
     // prop is absent and a workflow target is needed.
@@ -529,6 +534,7 @@ export function TriggerDialog({
               {/* Event key select — from useTriggerCatalog() */}
               <div className="grid gap-1">
                 <Label htmlFor="trigger-event-key">Event</Label>
+                <p className="text-xs text-muted">Run when an event arrives. Actions are configured inside the workflow.</p>
                 <select
                   id="trigger-event-key"
                   value={eventKey}
@@ -556,6 +562,10 @@ export function TriggerDialog({
               </div>
 
               {/* Filters — field/op/value rows from the event catalog */}
+              {eventKey.startsWith("linear.") && <p className="text-xs text-muted">
+                {missingSetup ? selectedEntry?.readiness?.reason : "Requires the organization’s Linear event connection. Personal tool access is separate."}{" "}
+                <a className="underline" href="/settings/organization/linear">Linear event setup</a>
+              </p>}
               <div className="grid gap-1.5">
                 <Label>Filters</Label>
                 {selectedEntry ? (
@@ -617,7 +627,7 @@ export function TriggerDialog({
           >
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={isPending}>
+          <Button onClick={() => void submit()} disabled={isPending || missingSetup}>
             {isPending ? (isEditing ? "Saving…" : "Creating…") : isEditing ? "Save" : "Create"}
           </Button>
         </DialogFooter>

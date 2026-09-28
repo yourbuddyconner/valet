@@ -57,7 +57,7 @@ describe("updateWorkflowTrigger", () => {
     if (!created.ok) throw new Error(created.error);
     const triggerId = created.trigger.triggerId;
 
-    const updated = await updateWorkflowTrigger(db, [githubPlugin], OWNER, triggerId, {
+    const updated = await updateWorkflowTrigger(armDeps(), OWNER, triggerId, {
       name: "renamed",
       enabled: false,
     });
@@ -77,7 +77,7 @@ describe("updateWorkflowTrigger", () => {
     if (!created.ok) throw new Error(created.error);
     const triggerId = created.trigger.triggerId;
 
-    const updated = await updateWorkflowTrigger(db, [githubPlugin], OWNER, triggerId, {
+    const updated = await updateWorkflowTrigger(armDeps(), OWNER, triggerId, {
       eventKeys: ["github.no_such_event"],
     });
     expect(updated.ok).toBe(false);
@@ -86,7 +86,7 @@ describe("updateWorkflowTrigger", () => {
 
   it("404s for unknown ids, cross-org rows, and non-workflow subscriptions", async () => {
     // Unknown id
-    const missing = await updateWorkflowTrigger(db, [githubPlugin], OWNER, "nope", {
+    const missing = await updateWorkflowTrigger(armDeps(), OWNER, "nope", {
       name: "x",
     });
     expect(missing.ok).toBe(false);
@@ -100,8 +100,7 @@ describe("updateWorkflowTrigger", () => {
     });
     if (!created.ok) throw new Error(created.error);
     const crossOrg = await updateWorkflowTrigger(
-      db,
-      [githubPlugin],
+      armDeps(),
       { userId: OWNER.userId, orgId: "org_other" },
       created.trigger.triggerId,
       { name: "x" },
@@ -126,7 +125,7 @@ describe("updateWorkflowTrigger", () => {
       createdAt: now,
       updatedAt: now,
     });
-    const orchUpdate = await updateWorkflowTrigger(db, [githubPlugin], OWNER, orchId, {
+    const orchUpdate = await updateWorkflowTrigger(armDeps(), OWNER, orchId, {
       name: "should-fail",
     });
     expect(orchUpdate.ok).toBe(false);

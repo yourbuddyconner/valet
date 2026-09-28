@@ -7,6 +7,7 @@
  * BEFORE `workflowsRouter`, whose `GET /:id` would otherwise swallow
  * `/triggers` as a workflow id.
  */
+import { getLinearIngressStatus } from "../services/linear-ingress.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { AppEnv } from "../env.js";
@@ -118,9 +119,13 @@ workflowTriggersRouter.get("/triggers", async (c) => {
   return c.json(resp);
 });
 
-workflowTriggersRouter.get("/trigger-catalog", (c) => {
+workflowTriggersRouter.get("/trigger-catalog", async (c) => {
+  const { db, engineCredentials, plugins } = c.var.providers;
+  const catalog = listEventTypes(plugins);
+  const linear = catalog.some(item => item.service === "linear")
+    ? await getLinearIngressStatus(db,engineCredentials,c.var.user.orgId) : undefined;
   const resp: GetWorkflowTriggerCatalogResponse = {
-    catalog: listEventTypes(c.var.providers.plugins),
+    catalog: catalog.map(item => item.service === "linear" && linear ? { ...item, readiness: { ready: linear.ready, ...(linear.reason ? { reason: linear.reason } : {}) } } : item),
   };
   return c.json(resp);
 });
@@ -270,7 +275,7 @@ workflowTriggersRouter.patch("/event-triggers/:id", async (c) => {
     return c.json({ error: "Request body must be a JSON object." }, 400);
   }
   const owner = ownerFrom(c);
-  const result = await updateWorkflowTrigger(db, plugins, owner, c.req.param("id"), body);
+  const result = await updateWorkflowTrigger(armDeps(c), owner, c.req.param("id"), body);
   if (!result.ok) {
     const msg =
       result.status === 404

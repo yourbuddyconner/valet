@@ -1,3 +1,4 @@
+import type { GetLinearConnectionResponse } from "@valet/api/wire";
 import type { ListTeamDeletionRequestsParams, ListTeamDeletionRequestsResponse, ListTeamDeletionTargetsResponse, SubmitTeamDeletionRequest } from "@valet/api/wire";
 /**
  * Typed REST client. Routes are documented inline; types come from
@@ -1417,6 +1418,9 @@ export const api = {
   listSourceBakes: (id: string) => request<ListBakesResponse>("GET", `/org/sources/${encodeURIComponent(id)}/bakes`),
 
   // org GitHub App setup (GitHub/repo integration plan, Task 5) — admin-gated
+  getLinearConnection: () => request<GetLinearConnectionResponse>("GET", "/org/linear"),
+  postLinearConnect: () => request<{ url: string }>("POST", "/org/linear/connect"),
+  deleteLinearConnection: () => request<undefined>("DELETE", "/org/linear"),
   getGithubApp: () => request<GetGithubAppResponse>("GET", "/org/github-app"),
   postGithubAppManifest: (body: PostGithubAppManifestRequest = {}) =>
     request<PostGithubAppManifestResponse>("POST", "/org/github-app/manifest", body),

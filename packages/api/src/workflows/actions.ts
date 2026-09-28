@@ -1120,8 +1120,7 @@ export function workflowsActionPlugin(getDeps: () => WorkflowServiceDeps): Actio
       if (!owner) return NO_OWNER;
       const deps = getDeps();
       const result = await updateWorkflowTrigger(
-        deps.db,
-        deps.plugins ?? [],
+        armDepsFrom(deps),
         owner,
         trigger_id,
         { name, eventKeys: event_keys, filters, enabled, anyChannel: any_channel },

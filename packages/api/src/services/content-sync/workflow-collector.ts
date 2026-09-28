@@ -1,3 +1,4 @@
+import { linearEventArmBlock } from "../linear-ingress.js";
 /**
  * Workflow definitions mirrored from a repository, on the rail
  * `content-sync/collector.ts` defines. Read that file first: it states the
@@ -258,6 +259,7 @@ class WorkflowPass implements CollectorPass {
     /** Files whose readiness check failed. Left as they were, and reported
      * deferred so the next poll checks them again at this commit. */
     const unchecked: string[] = [];
+    const ingressPending: string[] = [];
 
     const incoming = new Map<string, { file: WorkflowFile; plan: TriggerPlan }>();
     for (const candidate of this.candidates) {
@@ -303,6 +305,7 @@ class WorkflowPass implements CollectorPass {
       // it must not disarm a trigger that was armed: the file is left as it
       // was and deferred, so the next poll checks it again.
       let gated: string | null;
+      let ingressPlan = parsed.plan;
       try {
         gated = await teamTriggerGate(
           { db, credentials: this.credentials, plugins: this.plugins, onePassword: this.onePassword },
@@ -310,6 +313,16 @@ class WorkflowPass implements CollectorPass {
           parsed.file,
           definitions,
         );
+        if (gated === null) {
+          const ingressBlocked = await linearEventArmBlock(db,this.credentials,source.orgId,
+            parsed.plan.subscriptions.flatMap(subscription => subscription.eventKeys));
+          if (ingressBlocked) {
+            warnings.push(`${candidate.path}: Linear event triggers remain off. ${ingressBlocked} Valet checks again on the next sync.`);
+            ingressPending.push(candidate.path);
+            ingressPlan = { ...parsed.plan, subscriptions: parsed.plan.subscriptions.filter(subscription =>
+              !subscription.eventKeys.some(key => key.startsWith("linear."))) };
+          }
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         warnings.push(
@@ -320,7 +333,7 @@ class WorkflowPass implements CollectorPass {
       }
       if (gated !== null) warnings.push(`${candidate.path}: ${gated}`);
 
-      plans.set(candidate.path, gated === null ? parsed.plan : NO_TRIGGERS);
+      plans.set(candidate.path, gated === null ? ingressPlan : NO_TRIGGERS);
     }
 
     return async (db) => {
@@ -406,7 +419,7 @@ class WorkflowPass implements CollectorPass {
           deleted: 0,
           keptStale: stale.map((row) => row.name),
           warnings,
-          deferred: unchecked,
+          deferred: [...unchecked, ...ingressPending],
         };
       }
 
@@ -460,7 +473,7 @@ class WorkflowPass implements CollectorPass {
         deleted,
         keptStale: [],
         warnings,
-        deferred: [...disarmed, ...unchecked],
+        deferred: [...disarmed, ...unchecked, ...ingressPending],
       };
     };
   }

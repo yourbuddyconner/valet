@@ -1,3 +1,4 @@
+import { linearEventArmBlock } from "../services/linear-ingress.js";
 /**
  * Workflow templates — the gallery's server half.
  *
@@ -1278,6 +1279,8 @@ export async function installWorkflowTemplate(
         errors: [write.error],
       };
     }
+    const ingressBlocked = await linearEventArmBlock(deps.db,deps.credentials,owner.orgId,event.eventKeys);
+    if (ingressBlocked) return { ok: false, code: "not_connected", error: ingressBlocked };
     subscriptions.push({ name, eventKeys: event.eventKeys, filters: write.filters });
   }
 

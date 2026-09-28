@@ -114,7 +114,7 @@ export const linearTriggerDefs: TriggerDef[] = LINEAR_TYPES.map((type) => ({
   toEvent,
   catalog: ACTIONS.map((action) => ({
     key: `linear.${type.toLowerCase()}.${action}`,
-    description: `Linear ${type} ${action}`,
+    description: `${type.replace(/([a-z])([A-Z])/g, "$1 $2")} ${{ create: "created", update: "updated", remove: "removed" }[action]} in Linear`,
     filters: FILTERS[type] ?? [],
   })),
 }));

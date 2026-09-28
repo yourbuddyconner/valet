@@ -1,3 +1,4 @@
+import { getLinearIngressStatus, linearEventArmBlock } from "../services/linear-ingress.js";
 /**
  * Event feed, catalog, and subscriptions CRUD (event-system plan, Task 7).
  *
@@ -194,11 +195,12 @@ function collisionBlockMessage(report: CollisionReport<NarrowedSubscriptionRow>)
 
 // ── Catalog ─────────────────────────────────────────────────────────────────
 
-eventsRouter.get("/events/catalog", (c) => {
-  const { plugins } = c.var.providers;
+eventsRouter.get("/events/catalog", async (c) => {
+  const { plugins, db, engineCredentials } = c.var.providers;
   const services = [...new Set(plugins.flatMap((p) => p.triggers ?? []).map((t) => t.service))];
+  const linear = services.includes("linear") ? await getLinearIngressStatus(db,engineCredentials,c.var.user.orgId) : undefined;
   const resp: GetEventCatalogResponse = {
-    services: services.map((service) => ({ service, entries: catalogForService(plugins, service) })),
+    services: services.map((service) => ({ service, entries: catalogForService(plugins, service), ...(service === "linear" && linear ? { readiness: { ready: linear.ready, ...(linear.reason ? { reason: linear.reason } : {}) } } : {}) })),
   };
   return c.json(resp);
 });
@@ -677,6 +679,10 @@ eventsRouter.post("/event-subscriptions", async (c) => {
   // compare as the disjoint rules they are. A disabled create skips the
   // check — the row cannot fire, and enabling it later re-runs it.
   const enabled = body.enabled ?? true;
+  if (enabled) {
+    const ingressBlocked = await linearEventArmBlock(db,c.var.providers.engineCredentials,user.orgId,body.eventKeys);
+    if (ingressBlocked) return c.json({ error: ingressBlocked },400);
+  }
   let collisions: EventSubscriptionCollisionsWire | undefined;
   if (enabled) {
     const report = await collisionsForWrite(db, plugins, user.orgId, {
@@ -902,6 +908,8 @@ eventsRouter.patch("/event-subscriptions/:id", async (c) => {
   const arming = body.enabled === true && !row.enabled;
   let collisions: EventSubscriptionCollisionsWire | undefined;
   if (willBeEnabled && (matchChanged || arming)) {
+    const ingressBlocked = await linearEventArmBlock(db,c.var.providers.engineCredentials,user.orgId,merged.eventKeys as string[]);
+    if (ingressBlocked) return c.json({ error: ingressBlocked },400);
     const report = await collisionsForWrite(
       db,
       plugins,
@@ -946,7 +954,7 @@ eventsRouter.patch("/event-subscriptions/:id", async (c) => {
       enabled: willBeEnabled,
       updatedAt: Date.now(),
     })
-    .where(eq(eventSubscriptions.id, id))
+    .where(and(eq(eventSubscriptions.id, id), eq(eventSubscriptions.orgId, user.orgId)))
     .returning();
 
   const resp: PatchEventSubscriptionResponse = {
@@ -971,6 +979,6 @@ eventsRouter.delete("/event-subscriptions/:id", async (c) => {
     return c.json({ error: "subscription not found" }, 404);
   }
 
-  await db.delete(eventSubscriptions).where(eq(eventSubscriptions.id, id));
+  await db.delete(eventSubscriptions).where(and(eq(eventSubscriptions.id, id), eq(eventSubscriptions.orgId, user.orgId)));
   return c.body(null, 204);
 });

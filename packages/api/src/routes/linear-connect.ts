@@ -31,6 +31,7 @@ import { deriveSecretKey } from "../lib/secret-crypto.js";
 import { isRecord, signState, verifyState, STATE_TTL_MS } from "../lib/oauth-state.js";
 import { resolveReturnOrigin } from "./credential-connect.js";
 import { createLinearService, resolveLinearOauthUrl, type LinearService } from "../services/linear.js";
+import { getLinearIngressStatus } from "../services/linear-ingress.js";
 import { linearInstallations } from "../schema/index.js";
 
 export const linearConnectRouter = new Hono<AppEnv>();
@@ -242,20 +243,8 @@ linearConnectRouter.get("/", async (c) => {
   const gate = await requireOrgAdmin(c);
   if (gate) return gate;
 
-  const orgId = c.var.user.orgId;
   const { db, engineCredentials } = c.var.providers;
-  const cred = await engineCredentials.get({ type: "org", id: orgId }, LINEAR_CREDENTIAL_SERVICE);
-  const [install] = await db
-    .select()
-    .from(linearInstallations)
-    .where(eq(linearInstallations.orgId, orgId))
-    .limit(1);
-
-  return c.json({
-    connected: cred !== null && install !== undefined,
-    workspaceName: install?.workspaceName,
-    webhookConfigured: typeof install?.webhookId === "string",
-  });
+  return c.json(await getLinearIngressStatus(db,engineCredentials,c.var.user.orgId));
 });
 
 linearConnectRouter.delete("/", async (c) => {

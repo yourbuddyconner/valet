@@ -260,7 +260,7 @@ describe("GET /api/org/linear", () => {
     api = await bootTestApi();
     const res = await fetch(`${api.baseUrl}/api/org/linear`, { headers: HEADERS });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ connected: false, webhookConfigured: false });
+    expect(await res.json()).toMatchObject({ connected: false, webhookConfigured: false, ready: false });
   });
 
   it("reflects connected state after the callback", async () => {
@@ -270,7 +270,7 @@ describe("GET /api/org/linear", () => {
 
     const res = await fetch(`${api.baseUrl}/api/org/linear`, { headers: HEADERS });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ connected: true, workspaceName: "Turnkey", webhookConfigured: true });
+    expect(await res.json()).toMatchObject({ connected: true, workspaceName: "Turnkey", webhookConfigured: true, configured: true, ready: true });
   });
 });
 
@@ -299,7 +299,7 @@ describe("DELETE /api/org/linear", () => {
     expect(cred).toBeNull();
 
     const getRes = await fetch(`${api.baseUrl}/api/org/linear`, { headers: HEADERS });
-    expect(await getRes.json()).toEqual({ connected: false, webhookConfigured: false });
+    expect(await getRes.json()).toMatchObject({ connected: false, webhookConfigured: false, ready: false });
   });
 
   it("still disconnects (204) when the webhookDelete call fails", async () => {

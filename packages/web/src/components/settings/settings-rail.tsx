@@ -78,6 +78,7 @@ const ORGANIZATION_ITEMS = [
   { to: "/settings/organization/library", label: "Library" },
   { to: "/settings/organization/github", label: "GitHub" },
   { to: "/settings/organization/slack", label: "Slack" },
+  { to: "/settings/organization/linear", label: "Linear events" },
   { to: ORG_ONEPASSWORD_PATH, label: "1Password" },
   { to: "/settings/organization/sandbox-images", label: "Sandbox settings" },
   { to: "/settings/organization/policies", label: "Policies" },

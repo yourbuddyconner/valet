@@ -76,6 +76,7 @@ async function seedLinearOrg(a: TestApi): Promise<void> {
     orgId: "local-org",
     workspaceId: "lin-org-1",
     workspaceName: "Linear Test Workspace",
+    webhookId: "linear-test-webhook",
     connectedBy: "local-user",
     createdAt: now,
     updatedAt: now,

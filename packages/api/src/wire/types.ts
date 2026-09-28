@@ -2536,8 +2536,16 @@ export interface WorkflowTriggerCatalogEntry {
   filters: { field: string; description: string }[];
 }
 
+export interface EventIngressReadiness { ready: boolean; reason?: string; }
+export interface GetLinearConnectionResponse extends EventIngressReadiness {
+  configured: boolean;
+  connected: boolean;
+  webhookConfigured: boolean;
+  workspaceName?: string;
+}
+
 export interface GetWorkflowTriggerCatalogResponse {
-  catalog: { service: string; entries: WorkflowTriggerCatalogEntry[] }[];
+  catalog: { service: string; entries: WorkflowTriggerCatalogEntry[]; readiness?: EventIngressReadiness }[];
 }
 
 export interface GetMemoryTreeResponse {
@@ -4297,7 +4305,7 @@ export interface EventCatalogEntryWire {
 }
 
 export interface GetEventCatalogResponse {
-  services: { service: string; entries: EventCatalogEntryWire[] }[];
+  services: { service: string; entries: EventCatalogEntryWire[]; readiness?: EventIngressReadiness }[];
 }
 
 /** Mirrors `events/match.ts`'s `SubscriptionFilter`. */
