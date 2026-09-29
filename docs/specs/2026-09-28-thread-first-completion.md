@@ -34,39 +34,40 @@ The acceptance work corrected missing runtime creation for new teams, approval b
 
 ## Validation
 
-The full command was `mise x node@22 -- make e2e E2E_ARGS="--verbose"`.
-The recorded run ended with **22 stages passed, 6 failed, and 9 skipped**.
-It exposed stale test contracts in earlier UI refactor changes. Those tests now
-exercise the current controls and scope boundaries; a checkpoint link was also
-changed to use its Thread address.
+The latest full command was `mise x node@22 -- make e2e E2E_ARGS="--verbose"`.
+The run ended with **27 stages passed, 1 failed, and 9 skipped**.
+The full log is `/tmp/valet-wrapup-e2e.log`.
 
-| Check | Final evidence |
+| Check | Evidence |
 | --- | --- |
-| Root test sweep after repairs | 816 files passed, 17 skipped, 1 failed. 11,117 tests passed, 65 skipped; the only failure was the live Kubernetes build remaining in `building`. The attempted CLI exclude did not remove that project test, so it ran again. |
-| CLI with a real local server | 9 passed, 3 credential-dependent cases skipped. Verifies legacy handoff, canonical receipt URL, `status --thread`, and continuing `handoff --thread` in the same conversation. |
-| API integration | 202 passed, 4 skipped in the full scorecard. |
-| Real PostgreSQL | Initial stage could not bind occupied port 5433. Repeated its store and API commands against a fresh temporary database on a free loopback port: 282 store and 180 API tests passed. The temporary container was stopped. |
-| Static/build | Root typecheck, web production build, API bundle, conventions, and docs checks passed. Typecheck and docs checks passed again after the final repairs. |
-| Other scorecard stages | Engine, workflow, browser runtime, gateway, plugins, local sandbox, PGlite, Helm, Docker workspace preparation/prebuild, and Keycloak stages passed. A passing stage can contain internally skipped tests. |
-| Docker browser | Reproduced failure in the nested Docker check: `busybox:stable echo` exits 255 with `exec /bin/echo: invalid argument`. The scenario without nested Docker passed. This script and sandbox implementation have no changes in this PR. The failure remains unresolved. |
-| Kubernetes | Lifecycle readiness failed and the image build could not schedule on the disk-pressure node. After recording evidence, the blocked sandbox stage and repeated build stage were interrupted and remain failed. No cluster data cleanup was attempted. |
-| Credential-dependent stages | Nine stages skipped for missing provider credentials or opt-in. They are not passing evidence. |
+| Root test sweep | 817 files passed, 17 skipped; 11,118 tests passed, 65 skipped. |
+| Static/build | Typecheck, web build, API bundle, conventions, and docs checks passed. |
+| Docker | Browser, sandbox, workspace preparation, and prebuild stages passed. Nested execution now probes filesystem execution before selecting fuse-overlayfs. |
+| Kubernetes | Lifecycle, execution, provider, conformance, and real image build stages passed after local disk repair and expansion. The image test requires a successful push. |
+| PostgreSQL | Store and API stages passed using an isolated temporary database and a free loopback port. |
+| Gateway | One WebSocket handshake failed with `socket hang up`. A targeted rerun and 20 subsequent complete gateway runs passed. The intermittent failure remains unexplained. |
+| Credential-dependent stages | Nine stages skipped for missing credentials or opt-in. A passing stage can also contain skipped tests; the nested-Docker-specific suite skipped its tests. |
+| Bounded rollback | Four processes exercised old code, current code, old code again, and current verification against one isolated database. See the rollback record. |
 
-Logs:
+## Deployment
 
-- Full scorecard: `/tmp/valet-final-refactor-e2e.log`
-- Root follow-up: `/tmp/valet-final-unit-rerun.log`
-- CLI follow-up: `/tmp/valet-final-cli-rerun.log`
-- PostgreSQL follow-up: `/tmp/valet-final-postgres-rerun.log`
-- Docker browser follow-up: `/tmp/valet-final-browser-rerun.log`
-- Node scheduling evidence: `/tmp/valet-scorecard-k8s-blocker.txt`
+Railway builds the committed snapshot with the shared API Dockerfile and a service-specific cache ID.
+A clean production build found an undeclared `zod` import in the web package.
+The web package now declares this dependency directly; existing local dependencies had concealed the missing declaration.
 
 ## Evidence boundaries
 
-Live Slack delivery and a real Slack button interaction were not exercised. Local signed-request and transport fixtures establish routing and authorization, not installation permissions or provider availability. Older-binary rollback was not exercised.
+Live Slack delivery and a real Slack button interaction remain unverified pending installation of the XORS app.
+Local signed-request and transport fixtures prove routing and authorization, not live provider availability.
 
-Local browser verification remains blocked by an invalid checkpoint record in the existing PGlite database, reproduced on a preserved copy at `/tmp/valet-refactor-pg-backup-1790654216`. Fresh test databases boot. The original database remains untouched; recovery is not verified.
+The rollback harness exercises actual prior service and storage code in separate processes.
+It does not exercise a complete prior API and web deployment.
+See [bounded rollback validation](2026-09-29-thread-rollback.md).
 
-The local Kubernetes node reports `node.kubernetes.io/disk-pressure`, preventing pods from scheduling. Infrastructure outcomes must remain distinct from the refactor's deterministic acceptance results. A build test that accepts a terminal failure does not prove a successful image build.
+Local browser verification remains blocked by an invalid checkpoint record in the existing PGlite database.
+Fresh test databases boot. The original database remains untouched; recovery is not verified.
 
-Ticket coverage must follow these boundaries. Passing typechecks or transport fixtures alone must not be reported as full live-provider or rollback acceptance.
+The local Kubernetes disk now has free space and reports `DiskPressure=False`.
+The repaired disk has a retained backup. No user containers or volumes were deleted.
+
+Ticket coverage must follow these boundaries. Do not report skipped checks or local fixtures as live-provider acceptance.

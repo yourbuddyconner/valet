@@ -42,6 +42,7 @@
     "simple-icons": "^16",
     "tailwind-merge": "^2.5.4",
     "yaml": "^2.9.0",
+    "zod": "^4.4.3",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
