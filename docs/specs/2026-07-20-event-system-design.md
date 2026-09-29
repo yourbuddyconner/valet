@@ -515,7 +515,7 @@ Native event authorization does not currently replace MCP-backed action tools.
 
 ## Organization Linear application setup (2026-09-29)
 
-Organization admins can configure their Linear application in Organization settings > Linear events.
+Organization admins can configure their Linear application in Organization settings > Linear app.
 `PUT /api/org/linear/app` stores the client secret in the encrypted `linear_app` credential for the authenticated organization.
 The client ID is metadata. Status returns the client ID, configuration source, and redirect URI, but never the secret.
 Organization credentials override `LINEAR_CLIENT_ID` and `LINEAR_CLIENT_SECRET`. Those variables remain a deployment fallback.
@@ -527,3 +527,5 @@ No database migration is required. Existing environment-configured deployments c
 App credentials are excluded from agent and workflow credential resolution. Generic credential mutation routes cannot change them.
 Application updates and callback persistence lock the organization row. The callback rechecks credentials after provider requests, before storing the installation.
 The clean deployment build validates credential input narrowing independently of local incremental TypeScript caches.
+
+The Linear app page links directly to Linear’s application creation form. It shows Client ID and Client secret entry even when deployment defaults exist. Configure the redirect URI in Linear, save the credentials in Valet, then connect. A separate App ID is not required.

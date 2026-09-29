@@ -17,35 +17,37 @@ export function OrganizationLinearPage() {
   const [clientSecret, setClientSecret] = useState("");
   const [editing, setEditing] = useState(false);
   const data = status.data;
-  return <Section title="Linear events" description="Receive Linear events to start workflows. Personal Linear connections provide tool access only.">
+  return <Section title="Linear app" description="Set up your organization’s Linear application, then connect your Linear workspace. Personal tool connections remain separate.">
     {status.isPending ? <LoadingRow label="Loading Linear connection…" />
       : status.isError || !data ? <ErrorRow>Could not load Linear setup. <button className="underline" onClick={() => void status.refetch()}>Retry</button></ErrorRow>
       : <div className="space-y-4">
         <div className="flex items-center gap-3">
           <span>{data.workspaceName ?? "Linear workspace"}</span>
-          <Badge variant={data.ready ? "success" : "neutral"}>{data.ready ? "Events connected" : "Events not connected"}</Badge>
+          <Badge variant={data.ready ? "success" : "neutral"}>{data.ready ? "Connected" : "Not connected"}</Badge>
         </div>
         <div className="space-y-3 rounded border p-4">
           <h3 className="font-medium">Linear application</h3>
-          <p className="text-sm text-muted">{data.appSource === "organization" ? "Using your organization's application." : data.configured ? "Using the deployment's default application." : "Configure an application, then connect your Linear workspace."}</p>
+          <p className="text-sm text-muted">{data.appSource === "organization" ? "Your organization’s app credentials are saved." : data.configured ? "A default app is available. Enter your own app credentials below to use it for this organization." : "Create a Linear application, then enter its credentials below."}</p>
+          <Button asChild variant="secondary"><a href="https://linear.app/settings/api/applications/new" target="_blank" rel="noreferrer">Create app in Linear</a></Button>
+          <p className="text-sm text-muted">Copy the redirect URI into the new app. Return here with its Client ID and Client secret. No separate App ID is required.</p>
           {data.redirectUri && <label className="block space-y-1 text-sm">Redirect URI<Input readOnly value={data.redirectUri} onFocus={event => event.target.select()} /></label>}
-          {(!data.configured || editing) && !data.connected ? <form className="space-y-3" onSubmit={event => {
+          {(data.appSource !== "organization" || editing) && !data.connected ? <form className="space-y-3" onSubmit={event => {
             event.preventDefault();
             save.mutate({ clientId: (clientId ?? data.clientId ?? "").trim(), clientSecret: clientSecret.trim() }, {
-              onSuccess: () => { setClientSecret(""); setEditing(false); },
+              onSuccess: () => { setClientSecret(""); setClientId(undefined); setEditing(false); },
             });
           }}>
-            <p className="text-sm text-muted">Create an application in Linear developer settings with the redirect URI above. Valet configures the event webhook when you connect.</p>
+            <p className="text-sm text-muted">Save your app credentials in Valet, then connect below. Valet configures the event webhook during connection.</p>
             <label className="block space-y-1 text-sm">Client ID<Input required autoComplete="off" value={clientId ?? data.clientId ?? ""} onChange={event => setClientId(event.target.value)} /></label>
             <label className="block space-y-1 text-sm">Client secret<Input required type="password" autoComplete="new-password" value={clientSecret} onChange={event => setClientSecret(event.target.value)} /></label>
             <p className="text-sm text-muted">Credentials are encrypted and stored for this organization. The secret is never displayed again.</p>
-            <Button type="submit" disabled={save.isPending || !(clientId ?? data.clientId ?? "").trim() || !clientSecret.trim()}>{save.isPending ? "Saving…" : "Save application"}</Button>
+            <Button type="submit" disabled={save.isPending || !(clientId ?? data.clientId ?? "").trim() || !clientSecret.trim()}>{save.isPending ? "Saving…" : "Save app credentials"}</Button>
             {save.error && <ErrorRow>{apiErrorMessage(save.error)}</ErrorRow>}
-          </form> : data.connected ? <p className="text-sm text-muted">Disconnect events before changing the application.</p> : <Button variant="secondary" onClick={() => setEditing(true)}>Configure application</Button>}
+          </form> : data.connected ? <p className="text-sm text-muted">Disconnect events before changing the application.</p> : <Button variant="secondary" onClick={() => setEditing(true)}>Change app credentials</Button>}
         </div>
         <div className="flex gap-2">
-          <Button disabled={!data.configured || connect.isPending || disconnect.isPending || save.isPending} onClick={() => connect.mutate()}>
-            {connect.isPending ? "Connecting…" : data.connected ? "Reconnect events" : "Connect events"}
+          <Button disabled={!data.configured || !!clientSecret || clientId !== undefined && clientId !== data.clientId || connect.isPending || disconnect.isPending || save.isPending} onClick={() => connect.mutate()}>
+            {connect.isPending ? "Connecting…" : data.connected ? "Reconnect Linear" : "Connect Linear"}
           </Button>
           {data.connected && <Button variant="secondary" disabled={disconnect.isPending || connect.isPending} onClick={() => { disconnect.reset(); setConfirm(true); }}>Disconnect</Button>}
         </div>

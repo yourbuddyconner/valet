@@ -109,7 +109,7 @@ linearConnectRouter.post("/connect", async (c) => {
 
   const config = await loadLinearAppConfig(c.var.providers.engineCredentials, c.var.user.orgId);
   if (!config) {
-    return c.json({ error: "Configure the Linear app in Organization settings > Linear events, or set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET." }, 503);
+    return c.json({ error: "Configure the Linear app in Organization settings > Linear app." }, 503);
   }
 
   const user = c.var.user;
@@ -147,7 +147,7 @@ linearConnectRouter.get("/callback", async (c) => {
 
   const config = await loadLinearAppConfig(c.var.providers.engineCredentials, c.var.user.orgId);
   if (!config) {
-    return c.json({ error: "Configure the Linear app in Organization settings > Linear events, or set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET." }, 503);
+    return c.json({ error: "Configure the Linear app in Organization settings > Linear app." }, 503);
   }
 
   const user = c.var.user;

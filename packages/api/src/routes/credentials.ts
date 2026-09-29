@@ -342,7 +342,7 @@ credentialsRouter.put("/:service", async (c) => {
   const { engineCredentials, onePassword, db, plugins } = c.var.providers;
   const user = c.var.user;
   const service = c.req.param("service");
-  if (service === "linear_app") return c.json({ error: "Configure the Linear application in Organization settings > Linear events." }, 400);
+  if (service === "linear_app") return c.json({ error: "Configure the Linear application in Organization settings > Linear app." }, 400);
 
   let body: PutCredentialRequest;
   try {
@@ -795,7 +795,7 @@ credentialsRouter.delete("/:service", async (c) => {
   if (ownerOrErr instanceof Response) return ownerOrErr;
   const owner = ownerOrErr;
   const service = c.req.param("service");
-  if (service === "linear_app") return c.json({ error: "Configure the Linear application in Organization settings > Linear events." }, 400);
+  if (service === "linear_app") return c.json({ error: "Configure the Linear application in Organization settings > Linear app." }, 400);
   if (service === ONEPASSWORD_SERVICE && owner.type === "team") {
     const ok = await mutateTeamOnePassword(db, c.var.providers.encryptionKey,
       { orgId: user.orgId, userId: user.id, teamId: owner.id }, { kind: "token", token: null });
