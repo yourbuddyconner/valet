@@ -121,6 +121,7 @@ export function SubscriptionsPanel() {
   // An owner-less request lists every subscription in the org, so hold the
   // query until the owner resolves. Same gate the feed uses.
   const subsQ = useEventSubscriptions(owner, {
+    refetchInterval: 5_000,
     enabled: owner !== undefined,
   });
   const workflowsQ = useWorkflows();
@@ -267,6 +268,7 @@ function SubscriptionRow({
           ))}
           <span className="text-xs text-muted">
             → {describeTarget(sub.target, workflowNames, teamNames)}
+            {!sub.enabled && sub.target.kind === "orchestrator" && sub.target.overlapPausedAt && <span role="status" className="mt-2 block text-warning-600">Paused because a team subscription matched an event. Review delivery preferences, then turn this subscription back on.</span>}
           </span>
           {channelScope && <span className="text-xs text-muted">· {channelScope}</span>}
           {audienceScope && <span className="text-xs text-muted">· {audienceScope}</span>}

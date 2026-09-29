@@ -13,6 +13,7 @@ const DELIVERY_VARIANT: Record<EventDeliveryWire["status"], "neutral" | "success
   delivered: "success",
   failed: "warning",
   dead: "danger",
+  skipped: "neutral",
 };
 
 /**
@@ -48,7 +49,7 @@ export function DeliveryList({
               <span className="text-xs text-muted">delivered {formatWhen(d.deliveredAt)}</span>
             )}
           </div>
-          {d.lastError != null && d.lastError.length > 0 && (
+          {d.status !== "skipped" && d.lastError != null && d.lastError.length > 0 && (
             // Never truncated. The error string is the one field a reader
             // needs whole to act on it.
             <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-danger-500">

@@ -31,6 +31,7 @@ import type { AppDb } from "../lib/drizzle.js";
 import { eventDeliveries, events, eventSubscriptions, workflowDefinitions, workflowRuns } from "../schema/index.js";
 import { definitionVersionId } from "../workflows/definition-version.js";
 import { findFollowedThread, upsertFollowedThread } from "./followed-threads.js";
+import { hasTeamCoverage } from "./delivery-policy.js";
 import { allCatalogEntries } from "./ingest.js";
 import { buildPromptValues, hasPromptConfig, renderEventPrompt } from "./prompt-template.js";
 import {
@@ -115,6 +116,8 @@ interface SubscriptionTarget {
   /** When true, an orchestrator channel delivery follows the thread: later
    * messages route to the assistant without a re-mention. */
   follow?: boolean;
+  pauseOnOverlap?: boolean;
+  overlapPausedAt?: number;
   /** Standing instruction rendered above the event. Absent → no instruction. */
   systemPrompt?: string;
   /** The event message, in place of the default body. Absent → the default. */
@@ -186,7 +189,7 @@ export class EventDispatcher {
   private async deliverOne(deliveryId: string): Promise<void> {
     const { db } = this.deps;
     const [delivery] = await db.select().from(eventDeliveries).where(eq(eventDeliveries.id, deliveryId)).limit(1);
-    if (!delivery || delivery.status === "delivered" || delivery.status === "dead") return;
+    if (!delivery || delivery.status === "delivered" || delivery.status === "dead" || delivery.status === "skipped") return;
     const [event] = await db.select().from(events).where(eq(events.id, delivery.eventId)).limit(1);
     const [sub] = await db
       .select()
@@ -207,6 +210,24 @@ export class EventDispatcher {
       // is Record<string, string>). Same narrowing convention as ingest.ts.
       const target = sub.target as SubscriptionTarget;
       const refs = event.refs as Record<string, string>;
+      if (event.orgId !== sub.orgId) throw new Error("Event and subscription organizations differ.");
+      const covered = sub.enabled && await hasTeamCoverage(db, sub, event, allCatalogEntries(this.deps.plugins ?? []));
+      if (!sub.enabled || covered) {
+        let paused = false;
+        if (covered && target.pauseOnOverlap) {
+          const changed = await db.update(eventSubscriptions)
+            .set({ enabled: false, target: { ...target, overlapPausedAt: Date.now() }, updatedAt: Math.max(Date.now(), sub.updatedAt + 1) })
+            .where(and(eq(eventSubscriptions.id, sub.id), eq(eventSubscriptions.orgId, event.orgId),
+              eq(eventSubscriptions.updatedAt, sub.updatedAt), eq(eventSubscriptions.enabled, true)))
+            .returning({ id: eventSubscriptions.id });
+          paused = changed.length > 0;
+        }
+        await db.update(eventDeliveries).set({ status: "skipped", lastError: covered
+          ? `Skipped — matching team subscription.${paused ? " Personal subscription paused until you re-enable it." : ""}`
+          : "Skipped — subscription is disabled." }).where(and(eq(eventDeliveries.id, delivery.id), eq(eventDeliveries.eventId, event.id)));
+        return;
+      }
+
       if (target.kind === "workflow" && target.workflowId) {
         await this.startWorkflow(target.workflowId, sub.id, delivery.id, event, refs);
       } else if (target.kind === "orchestrator") {

@@ -1,3 +1,4 @@
+import type { DeliveryPreferencesValue } from "./delivery-preferences";
 /**
  * The pure diff behind the edit-subscription dialog: compare the form state
  * against the stored row and build the PATCH body of only the changed
@@ -43,6 +44,7 @@ export function buildSubscriptionPatch(
     filters: EventSubscriptionFilterWire[];
     anyChannel: boolean;
     prompts?: PromptFieldsValue;
+    deliveryPreferences?: DeliveryPreferencesValue;
   },
 ): PatchEventSubscriptionRequest | null {
   const body: PatchEventSubscriptionRequest = {};
@@ -72,6 +74,12 @@ export function buildSubscriptionPatch(
       if (next === stored) continue;
       body[field] = next.length > 0 ? next : null;
     }
+  }
+
+  if (form.deliveryPreferences && sub.ownerType === "user" && sub.target.kind === "orchestrator") {
+    const next = form.deliveryPreferences;
+    if (next.deliveryPolicy !== (sub.target.deliveryPolicy ?? "always")) body.deliveryPolicy = next.deliveryPolicy;
+    if (next.deliveryPolicy !== "always" && next.pauseOnOverlap !== (sub.target.pauseOnOverlap ?? false)) body.pauseOnOverlap = next.pauseOnOverlap;
   }
 
   return Object.keys(body).length === 0 ? null : body;

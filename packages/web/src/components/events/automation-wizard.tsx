@@ -1,3 +1,4 @@
+import { DeliveryPreferences, type DeliveryPreferencesValue } from "./delivery-preferences";
 /**
  * AutomationWizard — one flow for the creation surfaces that used to be
  * separate: an event subscription, a workflow event trigger, and a schedule.
@@ -177,6 +178,7 @@ export function AutomationWizard({
   // no audience at all.
   const [audience, setAudience] = useState<EventSubscriptionAudienceWire>("organization");
   const [follow, setFollow] = useState(true);
+  const [deliveryPreferences, setDeliveryPreferences] = useState<DeliveryPreferencesValue>({ deliveryPolicy: "always", pauseOnOverlap: true });
   const [error, setError] = useState<string | null>(null);
   // The collision report of the last create attempt (TKAI-294).
   // `committed: false` — the server refused (409): show the colliding rules
@@ -340,7 +342,7 @@ export function AutomationWizard({
           // The reply step collects the same optional templates the Then step
           // collects for the other assistant outcomes. Empty fields are left
           // off, so the rule posts the target it always did.
-          target: { ...mentionTarget, follow, ...promptFieldsToTarget(promptTemplates) },
+          target: { ...mentionTarget, follow, ...promptFieldsToTarget(promptTemplates), ...(mentionTarget.orchestrator === "user" ? deliveryPreferences : {}) },
           // Only a team assistant has an audience; the server refuses one
           // on any other target.
           ...(mentionTarget.orchestrator === "team" ? { audience } : {}),
@@ -374,9 +376,9 @@ export function AutomationWizard({
       const templates = promptFieldsToTarget(promptTemplates);
       const eventTarget: EventSubscriptionTarget =
         outcome === "notify"
-          ? { ...orchestratorTargetFrom(target), follow: false, ...templates }
+          ? { ...orchestratorTargetFrom(target), follow: false, ...templates, ...(target.kind === "orchestrator" && target.orchestrator === "user" ? deliveryPreferences : {}) }
           : target.kind === "orchestrator"
-            ? { ...target, ...templates }
+            ? { ...target, ...templates, ...(target.orchestrator === "user" ? deliveryPreferences : {}) }
             : target;
       createSubscription.mutate(
         {
@@ -504,6 +506,10 @@ export function AutomationWizard({
             />
           )}
 
+          {isLastStep && !isSchedule && target.kind === "orchestrator" && target.orchestrator === "user" && (
+            <DeliveryPreferences value={deliveryPreferences} onChange={setDeliveryPreferences} />
+          )}
+
           {isLastStep && (
             <ReviewStep
               name={name}
@@ -580,6 +586,8 @@ export function AutomationWizard({
 type EventSubscriptionTarget =
   | { kind: "workflow"; workflowId: string }
   | (OrchestratorChoice & {
+      deliveryPolicy?: DeliveryPreferencesValue["deliveryPolicy"];
+      pauseOnOverlap?: boolean;
       follow?: boolean;
       systemPrompt?: string;
       userPromptTemplate?: string;

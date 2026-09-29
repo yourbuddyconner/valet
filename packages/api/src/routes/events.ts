@@ -847,6 +847,18 @@ eventsRouter.patch("/event-subscriptions/:id", async (c) => {
     return c.json({ error: "Assistant selection is not supported. Choose the subscription workspace instead." }, 400);
   }
   let patchedTarget = row.target as EventSubscriptionTargetWire;
+  if (body.deliveryPolicy !== undefined || body.pauseOnOverlap !== undefined) {
+    if (row.ownerType !== "user" || patchedTarget.kind !== "orchestrator") return c.json({ error: "Delivery preferences apply only to personal assistant subscriptions." }, 400);
+    patchedTarget = { ...patchedTarget,
+      ...(body.deliveryPolicy !== undefined ? { deliveryPolicy: body.deliveryPolicy } : {}),
+      ...(body.pauseOnOverlap !== undefined ? { pauseOnOverlap: body.pauseOnOverlap } : {}),
+    };
+  }
+  if (body.enabled === true && patchedTarget.kind === "orchestrator") {
+    const { overlapPausedAt: _pause, ...rest } = patchedTarget;
+    patchedTarget = rest;
+  }
+
 
   // The prompt templates are the other part of `target` a patch may rewrite,
   // and only on an orchestrator target. `null` clears the field, so the rule
@@ -952,10 +964,12 @@ eventsRouter.patch("/event-subscriptions/:id", async (c) => {
       target: patchedTarget,
       audience,
       enabled: willBeEnabled,
-      updatedAt: Date.now(),
+      updatedAt: Math.max(Date.now(), row.updatedAt + 1),
     })
-    .where(and(eq(eventSubscriptions.id, id), eq(eventSubscriptions.orgId, user.orgId)))
+    .where(and(eq(eventSubscriptions.id, id), eq(eventSubscriptions.orgId, user.orgId), eq(eventSubscriptions.updatedAt, row.updatedAt)))
     .returning();
+
+  if (!updated[0]) return c.json({ error: "This subscription changed while you were editing it. Refresh and try again." }, 409);
 
   const resp: PatchEventSubscriptionResponse = {
     ...rowToSubscription(updated[0]),

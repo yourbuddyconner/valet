@@ -1,3 +1,4 @@
+import { DeliveryPreferences, type DeliveryPreferencesValue } from "./delivery-preferences";
 /**
  * EditSubscriptionDialog — edit an existing event subscription: name, event
  * keys, filters, and, for an assistant target, its prompt templates. The
@@ -67,6 +68,10 @@ export function EditSubscriptionDialog({
   const patch = usePatchEventSubscription();
   const services = catalogQ.data?.services ?? [];
 
+  const [deliveryPreferences, setDeliveryPreferences] = useState<DeliveryPreferencesValue>({
+    deliveryPolicy: sub.target.kind === "orchestrator" ? sub.target.deliveryPolicy ?? "always" : "always",
+    pauseOnOverlap: sub.target.kind === "orchestrator" ? sub.target.pauseOnOverlap ?? true : true,
+  });
   const [name, setName] = useState(sub.name);
   const [keys, setKeys] = useState<Set<string>>(() => new Set(sub.eventKeys));
   const [filterRows, setFilterRows] = useState<UiFilterRow[]>(() => fromWireFilters(sub.filters));
@@ -139,6 +144,7 @@ export function EditSubscriptionDialog({
       filters,
       anyChannel,
       prompts,
+      ...(sub.ownerType === "user" && sub.target.kind === "orchestrator" ? { deliveryPreferences } : {}),
     });
     if (body === null) {
       onOpenChange(false);
@@ -219,6 +225,8 @@ export function EditSubscriptionDialog({
               />
             )}
           </div>
+
+          {sub.ownerType === "user" && sub.target.kind === "orchestrator" && <DeliveryPreferences value={deliveryPreferences} onChange={setDeliveryPreferences} />}
 
           {collisions !== null && (
             <CollisionNotice

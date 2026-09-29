@@ -4360,6 +4360,8 @@ export interface FilterOptionsResponse {
 // `{ kind: "signal" }` (wake parked workflow runs) is intentionally absent:
 // no workflow node parks on the event-signal shape yet, so the CRUD
 // validator rejects it — see routes/events.ts TARGET_KINDS.
+export type EventDeliveryPolicy = "always" | "ignoreIfMyTeamSubscribed" | "ignoreIfAnyTeamSubscribed";
+
 export type EventSubscriptionTargetWire =
   | { kind: "workflow"; workflowId: string }
   /** `teamId` is required when `orchestrator` is `"team"`, and refused
@@ -4371,6 +4373,10 @@ export type EventSubscriptionTargetWire =
       teamId?: string;
       /** Follow the thread: after this rule delivers a channel mention, later
        * messages in that thread route to the assistant without a re-mention. */
+      deliveryPolicy?: EventDeliveryPolicy;
+      pauseOnOverlap?: boolean;
+      /** Server-recorded reason for a paused personal subscription. */
+      overlapPausedAt?: number;
       follow?: boolean;
       /**
        * A standing instruction for this rule, rendered above the event in
@@ -4517,6 +4523,8 @@ export interface ListEventSubscriptionsResponse {
 }
 
 export interface PatchEventSubscriptionRequest {
+  deliveryPolicy?: EventDeliveryPolicy;
+  pauseOnOverlap?: boolean;
   name?: string;
   eventKeys?: string[];
   filters?: EventSubscriptionFilterWire[];
@@ -4575,7 +4583,7 @@ export interface ListEventsResponse {
 export interface EventDeliveryWire {
   id: string;
   subscriptionId: string;
-  status: "pending" | "delivered" | "failed" | "dead";
+  status: "pending" | "delivered" | "failed" | "dead" | "skipped";
   attempts: number;
   lastError: string | null;
   deliveredAt: number | null;

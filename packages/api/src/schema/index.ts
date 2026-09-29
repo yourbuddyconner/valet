@@ -2026,7 +2026,7 @@ export const eventDeliveries = pgTable(
     id: text("id").primaryKey(),
     eventId: text("event_id").notNull(),
     subscriptionId: text("subscription_id").notNull(),
-    status: text("status", { enum: ["pending", "delivered", "failed", "dead"] })
+    status: text("status", { enum: ["pending", "delivered", "failed", "dead", "skipped"] })
       .notNull()
       .default("pending"),
     attempts: integer("attempts").notNull().default(0),

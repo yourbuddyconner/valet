@@ -115,6 +115,53 @@ describe("EventDispatcher", () => {
     return row;
   }
 
+  it.each([
+    { policy: "always", member: true, enabled: true, sameOrg: true, expected: "delivered" },
+    { policy: "ignoreIfMyTeamSubscribed", member: true, enabled: true, sameOrg: true, expected: "skipped" },
+    { policy: "ignoreIfMyTeamSubscribed", member: false, enabled: true, sameOrg: true, expected: "delivered" },
+    { policy: "ignoreIfAnyTeamSubscribed", member: false, enabled: true, sameOrg: true, expected: "skipped" },
+    { policy: "ignoreIfAnyTeamSubscribed", member: true, enabled: false, sameOrg: true, expected: "delivered" },
+    { policy: "ignoreIfAnyTeamSubscribed", member: true, enabled: true, sameOrg: false, expected: "delivered" },
+  ])("evaluates current team coverage: $policy member=$member enabled=$enabled sameOrg=$sameOrg", async ({ policy, member, enabled, sameOrg, expected }) => {
+    const db = tdb.appDb;
+    const { deliveryId, subscriptionId } = await seedDelivery({ target: { kind: "orchestrator", deliveryPolicy: policy, pauseOnOverlap: true } });
+    const teamOrg = sameOrg ? ORG : "other-org";
+    await db.insert(teams).values({ id: "coverage-team", orgId: teamOrg, name: "Coverage", createdAt: Date.now() });
+    if (member) await db.insert(teamMembers).values({ teamId: "coverage-team", userId: "user-1", role: "member" });
+    await db.insert(eventSubscriptions).values({
+      id: "coverage-rule", orgId: teamOrg, ownerType: "team", ownerId: "coverage-team", name: "Team coverage",
+      eventKeys: ["github.issues.*"], filters: [], target: { kind: "orchestrator", orchestrator: "team", teamId: "coverage-team" },
+      enabled, createdBy: "user-1", createdAt: Date.now(), updatedAt: Date.now(),
+    });
+    const deliver = vi.fn<OrchestratorDeliverFn>(async () => {});
+    const dispatcher = new EventDispatcher({ db, workflowRunHost: fakeRunHost(), workflowStore: new PgWorkflowStore(tdb.pgdb), deliverToOrchestrator: deliver, plugins: [githubPlugin] });
+    await dispatcher.pollOnce();
+    expect((await getDelivery(deliveryId)).status).toBe(expected);
+    expect(deliver).toHaveBeenCalledTimes(expected === "delivered" ? 1 : 0);
+    const [personal] = await db.select().from(eventSubscriptions).where(eq(eventSubscriptions.id, subscriptionId));
+    expect(personal!.enabled).toBe(expected !== "skipped");
+    await dispatcher.pollOnce();
+    expect(deliver).toHaveBeenCalledTimes(expected === "delivered" ? 1 : 0);
+  });
+
+  it("skips only matching events without pausing and respects a later disabled team rule on retry", async () => {
+    const db = tdb.appDb;
+    const { deliveryId, subscriptionId } = await seedDelivery({ target: { kind: "orchestrator", deliveryPolicy: "ignoreIfAnyTeamSubscribed" }, status: "failed", attempts: 1 });
+    await db.insert(teams).values({ id: "retry-team", orgId: ORG, name: "Retry", createdAt: Date.now() });
+    await db.insert(eventSubscriptions).values({ id: "retry-rule", orgId: ORG, ownerType: "team", ownerId: "retry-team", name: "Coverage", eventKeys: ["github.issues.*"], filters: [], target: { kind: "orchestrator", orchestrator: "team", teamId: "retry-team" }, enabled: true, createdBy: "user-1", createdAt: Date.now(), updatedAt: Date.now() });
+    const deliver = vi.fn<OrchestratorDeliverFn>(async () => {});
+    const dispatcher = new EventDispatcher({ db, workflowRunHost: fakeRunHost(), workflowStore: new PgWorkflowStore(tdb.pgdb), deliverToOrchestrator: deliver, plugins: [githubPlugin] });
+    await dispatcher.pollOnce();
+    expect((await getDelivery(deliveryId)).status).toBe("skipped");
+    const [personal] = await db.select().from(eventSubscriptions).where(eq(eventSubscriptions.id, subscriptionId));
+    expect(personal!.enabled).toBe(true);
+    await db.update(eventSubscriptions).set({ enabled: false }).where(eq(eventSubscriptions.id, "retry-rule"));
+    // A deliberately redelivered event re-evaluates current coverage.
+    await db.update(eventDeliveries).set({ status: "pending", nextAttemptAt: 0 }).where(eq(eventDeliveries.id, deliveryId));
+    await dispatcher.pollOnce();
+    expect((await getDelivery(deliveryId)).status).toBe("delivered");
+  });
+
   it("delivers a workflow-target delivery: RunHost.start gets the event trigger payload; row -> delivered", async () => {
     const db = tdb.appDb;
     const now = Date.now();
