@@ -35,7 +35,7 @@ import type {
   ValetPlugin,
 } from "@valet/engine";
 import type { AppDb, AppQueryable } from "../lib/drizzle.js";
-import { agentSessions, actionInvocations, actionPolicies, actionPolicyOverrides, runtimeGrants } from "../schema/index.js";
+import { agentSessions, actionInvocations, actionPolicies, actionPolicyOverrides, runtimeGrants, workflowActionGrants, workflowDefinitions, workflowRuns } from "../schema/index.js";
 import { isOrgAdmin } from "../services/org.js";
 import {
   grantPolicyKey,
@@ -84,6 +84,7 @@ export function alwaysAllowPolicyId(orgId: string, actionId: string): string {
 }
 
 export interface PolicyRowScope {
+  workflowId?: string;
   orgId: string;
   teamId?: string;
   userId?: string;
@@ -172,7 +173,22 @@ export async function loadPolicyRows(db: AppQueryable, scope: PolicyRowScope): P
     }));
   }
 
-  return { policies, grants, overrides };
+  let workflowId = scope.workflowId;
+  if (!workflowId && scope.workflowExecutionId) {
+    const [run] = await db.select({ workflowId: workflowRuns.workflowId }).from(workflowRuns)
+      .innerJoin(workflowDefinitions, and(eq(workflowDefinitions.id, workflowRuns.workflowId), eq(workflowDefinitions.orgId, scope.orgId)))
+      .where(eq(workflowRuns.id, scope.workflowExecutionId)).limit(1);
+    workflowId = run?.workflowId;
+  }
+  const workflowGrants = workflowId ? await db.select({ id: workflowActionGrants.id, actionId: workflowActionGrants.actionId })
+    .from(workflowActionGrants)
+    .innerJoin(workflowDefinitions, and(eq(workflowDefinitions.id, workflowActionGrants.workflowId),
+      eq(workflowDefinitions.orgId, scope.orgId), eq(workflowDefinitions.ownerType, workflowActionGrants.ownerType),
+      eq(workflowDefinitions.ownerId, workflowActionGrants.ownerId)))
+    .where(and(eq(workflowActionGrants.orgId, scope.orgId), eq(workflowActionGrants.workflowId, workflowId),
+      eq(workflowActionGrants.ownerType, teamId ? "team" : "user"),
+      eq(workflowActionGrants.ownerId, teamId ?? scope.userId ?? ""))) : [];
+  return { policies, grants, overrides, workflowGrants };
 }
 
 function toGrantRow(r: {

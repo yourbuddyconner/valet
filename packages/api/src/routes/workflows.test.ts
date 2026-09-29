@@ -1332,25 +1332,16 @@ describe("resolveWorkflowApproval — outcome coverage", () => {
     expect(grants[0]).toMatchObject({ workflowExecutionId: runId, policyKey: "widgets.nuke" });
   });
 
-  it("policy gate + scope=always + admin → writes org policy + 200", async () => {
+  it("legacy always scope cannot create an org-wide grant for an undiscoverable action", async () => {
     const { localApi, runId } = await setupRun({ nodeType: "tool", service: "widgets", action: "nuke" });
     api = localApi;
-    await localApi.providers.workflowStore.parkRun(runId, 1, [
-      { kind: "signal", signalType: "approval:gate", nodeId: "gate" },
-    ]);
+    await localApi.providers.workflowStore.parkRun(runId, 1, [{ kind: "signal", signalType: "approval:gate", nodeId: "gate" }]);
     const res = await fetch(`${localApi.baseUrl}/api/workflows/runs/${runId}/approvals/gate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approved: true, scope: "always" }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approved: true, scope: "always" }),
     });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
-    // Assert action_policies row written with the deterministic id
-    const policies = await localApi.providers.db.select().from(actionPolicies);
-    expect(policies.some((p) => p.id === "pol:approval:local-org:widgets.nuke")).toBe(true);
-    // Assert runtime_grants row also written (scope=always implies scope=run grant too)
-    const grants = await localApi.providers.db.select().from(runtimeGrants);
-    expect(grants.some((g) => g.workflowExecutionId === runId && g.policyKey === "widgets.nuke")).toBe(true);
+    expect(res.status).toBe(403);
+    expect(await localApi.providers.db.select().from(actionPolicies)).toHaveLength(0);
+    expect(await localApi.providers.db.select().from(runtimeGrants)).toHaveLength(0);
   });
 
   it("policy gate + scope=always + non-admin → 403", async () => {
@@ -1389,7 +1380,7 @@ describe("resolveWorkflowApproval — outcome coverage", () => {
       body: JSON.stringify({ approved: true, scope: "always" }),
     });
     expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ error: expect.stringContaining("Ask an org admin") });
+    expect(await res.json()).toMatchObject({ error: expect.stringContaining("workflow permission cannot be saved") });
     // No policy row, no grant, no signal written on failure
     const signals = await localApi.providers.workflowStore.listSignals(memberRunId);
     expect(signals).toHaveLength(0);

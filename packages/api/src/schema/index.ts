@@ -2671,3 +2671,15 @@ export const workspaceBriefingCache = pgTable("workspace_briefing_cache", {
   leaseToken: text("lease_token"),
   leaseUntil: bigint("lease_until", { mode: "number" }).notNull().default(0),
 }, t => [primaryKey({ columns: [t.orgId,t.ownerType,t.ownerId] })]);
+
+/** Durable permissions confined to a workflow and its current owner. */
+export const workflowActionGrants = pgTable("workflow_action_grants", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull(),
+  workflowId: text("workflow_id").notNull(),
+  ownerType: text("owner_type").notNull(),
+  ownerId: text("owner_id").notNull(),
+  actionId: text("action_id").notNull(),
+  grantedBy: text("granted_by").notNull(),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+}, (t) => [index("workflow_action_grants_workflow").on(t.orgId, t.workflowId)]);

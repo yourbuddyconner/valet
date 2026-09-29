@@ -3,15 +3,14 @@
  * Rendered for each `WorkflowPendingGate` with `kind === "policy_gate"`.
  *
  * Split-button: "Approve once" (primary) + chevron trigger opening a
- * DropdownMenu with "Approve for rest of run" and "Always allow" (admin
- * only). Deny is a separate danger button. Note field rides whichever action
+ * DropdownMenu with "Approve for rest of run". Durable permission applies
+ * only to this workflow. Deny is a separate danger button. Note field rides whichever action
  * fires. On 409 the query key is invalidated so the stale card disappears.
  */
 import { type ReactElement, useState } from "react";
 import { ChevronDown, ShieldAlert } from "lucide-react";
 import type { WorkflowPendingGate } from "@valet/api/wire";
 import { useResolveApproval } from "~/api/workflows";
-import { useMe } from "~/api/settings";
 import { ApiError } from "~/api/client";
 import { apiErrorMessage } from "~/api/policies";
 import {
@@ -34,12 +33,9 @@ export interface PolicyGateCardProps {
 
 export function PolicyGateCard({ runId, gate, confirmActions = false }: PolicyGateCardProps): ReactElement {
   const [note, setNote] = useState("");
-  const [confirmAlways, setConfirmAlways] = useState(false);
-  const [busyScope, setBusyScope] = useState<"once" | "run" | "always" | "deny" | null>(null);
-  const [confirmation, setConfirmation] = useState<"once" | "run" | "deny" | null>(null);
+  const [busyScope, setBusyScope] = useState<"once" | "run" | "workflow" | "deny" | null>(null);
+  const [confirmation, setConfirmation] = useState<"once" | "run" | "workflow" | "deny" | null>(null);
   const resolve = useResolveApproval(runId);
-  const meQ = useMe();
-  const isAdmin = meQ.data?.orgRole === "admin";
 
   const service = gate.service ?? "";
   const action = gate.action ?? "";
@@ -47,15 +43,15 @@ export function PolicyGateCard({ runId, gate, confirmActions = false }: PolicyGa
 
   const busy = resolve.isPending;
 
-  function fireApprove(scope: "once" | "run" | "always") {
-    if (confirmActions && scope !== "always") {
+  function fireApprove(scope: "once" | "run" | "workflow") {
+    if (confirmActions || scope === "workflow") {
       setConfirmation(scope);
       return;
     }
     submitApprove(scope);
   }
 
-  function submitApprove(scope: "once" | "run" | "always") {
+  function submitApprove(scope: "once" | "run" | "workflow") {
     setBusyScope(scope);
     resolve.mutate({
       nodeId: gate.nodeId,
@@ -66,7 +62,6 @@ export function PolicyGateCard({ runId, gate, confirmActions = false }: PolicyGa
         iteration: gate.iteration,
       },
     });
-    setConfirmAlways(false);
     setConfirmation(null);
   }
 
@@ -89,7 +84,6 @@ export function PolicyGateCard({ runId, gate, confirmActions = false }: PolicyGa
         iteration: gate.iteration,
       },
     });
-    setConfirmAlways(false);
     setConfirmation(null);
   }
 
@@ -168,29 +162,9 @@ export function PolicyGateCard({ runId, gate, confirmActions = false }: PolicyGa
         )}
       />
 
-      {/* Always-allow confirm step */}
-      {confirmAlways && (
-        <div className="rounded border border-amber-400 bg-amber-100/80 dark:border-amber-600 dark:bg-amber-900/40 p-3 space-y-2">
-          <div className="text-xs font-medium text-ink">
-            Allows {serviceAction} for every user and run in this org.{" "}
-            <a href="/settings/organization/policies" className="underline text-moss hover:opacity-80">
-              Manage policies
-            </a>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" onClick={() => fireApprove("always")} disabled={busy}>
-              {busy && busyScope === "always" ? <Spinner size={12} /> : null}
-              Confirm
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setConfirmAlways(false)} disabled={busy}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      )}
-
       {/* Action buttons */}
       <div className="flex flex-wrap items-center gap-3">
+        <Button size="sm" onClick={() => fireApprove("workflow")} disabled={busy}>Allow for this workflow</Button>
         {/* Split-button: Approve once + dropdown */}
         <div className="flex items-center">
           <Button
@@ -226,21 +200,7 @@ export function PolicyGateCard({ runId, gate, confirmActions = false }: PolicyGa
                   </div>
                 </div>
               </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() => {
-                  if (isAdmin) setConfirmAlways(true);
-                }}
-                disabled={!isAdmin || busy}
-              >
-                <div>
-                  <div>
-                    Always allow{!isAdmin ? " (org admin only)" : ""}
-                  </div>
-                  <div className="text-xs text-muted">
-                    Writes a durable org-wide allow policy.
-                  </div>
-                </div>
-              </DropdownMenuItem>
+
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -262,7 +222,9 @@ export function PolicyGateCard({ runId, gate, confirmActions = false }: PolicyGa
         }}
         title={confirmation === "deny" ? "Deny this tool action?" : "Allow this tool action?"}
         description={
-          confirmation === "run"
+          confirmation === "workflow"
+            ? `Allow ${serviceAction} for future runs of this workflow only, until its saved permissions are reset. Existing policy restrictions remain in effect.`
+            : confirmation === "run"
             ? `Valet runs ${serviceAction} now and allows later calls in this run.`
             : confirmation === "deny"
               ? denyMicrocopy

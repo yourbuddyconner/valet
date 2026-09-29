@@ -447,3 +447,18 @@ describe("team action policies", () => {
     expect(resolvePolicyDecision(rows({ policies }), baseInput({ appliesIn: "workflow" }), "allow").mode).toBe("allow");
   });
 });
+
+
+describe("durable workflow grants", () => {
+  const workflowGrants = [{ id: "wf-grant", actionId: "gmail.send_email" }];
+  it("never applies to a chat", () => {
+    expect(resolvePolicyDecision(rows({ workflowGrants }), baseInput(), undefined).mode).toBe("require_approval");
+    expect(resolvePolicyDecision(rows({ workflowGrants }), baseInput({ appliesIn: "workflow" }), undefined).mode).toBe("allow");
+  });
+  it.each(["deny", "require_approval"] as const)("preserves explicit %s policy", (mode) => {
+    expect(resolvePolicyDecision(rows({ workflowGrants, policies: [orgPolicy({ actionId: "gmail.send_email", mode })] }), baseInput({ appliesIn: "workflow" }), undefined).mode).toBe(mode);
+  });
+  it("preserves a personal deny", () => {
+    expect(resolvePolicyDecision(rows({ workflowGrants, overrides: [override({ actionId: "gmail.send_email", mode: "deny" })] }), baseInput({ appliesIn: "workflow" }), undefined).mode).toBe("deny");
+  });
+});

@@ -2462,3 +2462,10 @@ CREATE TABLE IF NOT EXISTS "workspace_briefing_cache" (
   "lease_token" text, "lease_until" bigint NOT NULL DEFAULT 0,
   PRIMARY KEY ("org_id", "owner_type", "owner_id")
 );
+
+CREATE TABLE IF NOT EXISTS "workflow_action_grants" (
+  "id" text PRIMARY KEY, "org_id" text NOT NULL, "workflow_id" text NOT NULL,
+  "owner_type" text NOT NULL, "owner_id" text NOT NULL, "action_id" text NOT NULL,
+  "granted_by" text NOT NULL, "created_at" bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "workflow_action_grants_workflow" ON "workflow_action_grants" ("org_id", "workflow_id");

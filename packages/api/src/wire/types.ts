@@ -2001,9 +2001,9 @@ export interface ResolveWorkflowApprovalRequest {
   note?: string;
   /** Approve scope (policy gates): 'once' (default) authorizes only this
    * invocation; 'run' writes a run-scoped grant for the gated action;
-   * 'always' (org admin only) writes a durable org allow policy. Ignored on
+   * 'workflow' writes a durable workflow-only grant; 'always' is a legacy alias. Ignored on
    * approval-node gates and on denials. */
-  scope?: "once" | "run" | "always";
+  scope?: "once" | "run" | "always" | "workflow";
   /** Foreach-iteration disambiguation; omit or 0 for top-level nodes. */
   iteration?: number;
 }

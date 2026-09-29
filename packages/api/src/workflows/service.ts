@@ -1,3 +1,4 @@
+import { prepareWorkflowPermissions, persistWorkflowPermissions } from "./permissions.js";
 /**
  * Owner-scoped workflow definition/run operations, shared by the HTTP
  * routes (`routes/workflows.ts`) and the agent-facing action plugin
@@ -28,9 +29,7 @@ import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { AppDb, AppQueryable } from "../lib/drizzle.js";
 import type { RequestPrincipal } from "../lib/request-principal.js";
 import {
-  AlwaysAllowNotAdminError,
   updateInvocationOutcome,
-  writeAlwaysAllowPolicy,
   writeExecutionGrant,
 } from "../policies/service.js";
 import {
@@ -40,6 +39,7 @@ import {
   eventSubscriptions,
   sessionThreads,
   workflowDefinitions,
+  workflowSignals,
   workflowRuns,
   workflowSchedules,
   workflowVersions,
@@ -1617,7 +1617,7 @@ async function ownedRun(
 
 export type ResolveApprovalOutcome =
   | "ok" | "not_found" | "not_parked" | "already_resolved" | "timed_out"
-  | "forbidden_always" | "org_mismatch" | "human_only";
+  | "forbidden_always" | "forbidden_workflow" | "org_mismatch" | "human_only";
 
 /** Scan `definition` (unknown at runtime) for the node with `nodeId`. Searches
  * `definition.nodes` directly and, for each `type === "foreach"` node, also checks
@@ -1746,11 +1746,13 @@ export async function resolveWorkflowApproval(
     nodeId: string;
     approved: boolean;
     note?: string;
-    scope?: "once" | "run" | "always";
+    scope?: "once" | "run" | "always" | "workflow";
     iteration?: number;
     via: "web" | "agent";
   },
 ): Promise<ResolveApprovalOutcome> {
+  // Legacy workflow clients used "always" for org-wide approval. Narrow it to this workflow.
+  if (input.scope === "always") input = { ...input, scope: "workflow" };
   const run = await ownedRun(deps, owner, input.runId, "act");
   if (!run) return "not_found";
   const iter = input.iteration ?? 0;
@@ -1773,11 +1775,12 @@ export async function resolveWorkflowApproval(
   const isPolicyGate = node?.type === "tool";
   if (isPolicyGate && input.via === "agent") return "human_only";
 
-  // Auth check for "always" scope must happen BEFORE the signal insert so a
-  // forbidden_always response never writes anything (no signal, no grant).
-  if (input.approved && input.scope === "always" && isPolicyGate) {
-    const adminOk = await isOrgAdmin(deps.db, orgId, owner.userId);
-    if (!adminOk) return "forbidden_always";
+  let workflowPermission: Awaited<ReturnType<typeof prepareWorkflowPermissions>> = null;
+  if (input.approved && input.scope === "workflow") {
+    if (!isPolicyGate || !node || typeof node.service !== "string" || typeof node.action !== "string") return "forbidden_workflow";
+    const actionId = node.action.includes(".") ? node.action : `${node.service}.${node.action}`;
+    workflowPermission = await prepareWorkflowPermissions(deps, owner, run.params.workflowId, [actionId]);
+    if (!workflowPermission?.ok || !workflowPermission.result.allowed.includes(actionId)) return "forbidden_workflow";
   }
 
   // insertSignal is first-write-wins (ON CONFLICT DO NOTHING). Insert the signal
@@ -1793,7 +1796,7 @@ export async function resolveWorkflowApproval(
     scope: input.scope,
   };
   const signalId = `approval:${input.nodeId}${suffix}:resolution`;
-  const stored = await deps.workflowStore.insertSignal({
+  const signal = {
     runId: input.runId,
     signalId,
     signalType,
@@ -1805,7 +1808,21 @@ export async function resolveWorkflowApproval(
       resolvedVia: input.via,
     },
     createdAt: Date.now(),
-  });
+  };
+  const prepared = workflowPermission;
+  // The app and workflow store share Postgres. Commit the permanent grant,
+  // resolution, audit, and durable wake flag together so crash recovery cannot
+  // consume the approval without the permission it promised.
+  const stored = prepared?.ok ? await deps.db.transaction(async (tx) => {
+    const [inserted] = await tx.insert(workflowSignals).values(signal)
+      .onConflictDoNothing({ target: [workflowSignals.runId, workflowSignals.signalId] }).returning();
+    if (!inserted) return { payload: null };
+    await persistWorkflowPermissions(tx, prepared.grants);
+    await tx.update(actionInvocations).set({ status: "approved", resolvedBy: owner.userId })
+      .where(and(eq(actionInvocations.orgId, orgId), eq(actionInvocations.invocationId, `pol:wf:workflow:${input.runId}:${input.nodeId}${suffix}`)));
+    await tx.update(workflowRuns).set({ wakeRequested: true }).where(eq(workflowRuns.id, input.runId));
+    return inserted;
+  }) : await deps.workflowStore.insertSignal(signal);
   // Compare the returned row's payload to what we submitted. If another caller
   // won the race the stored payload will differ — do not stamp audit for the loser.
   const storedPayload = stored.payload as { approved?: boolean; resolvedBy?: string; scope?: string } | undefined;
@@ -1823,18 +1840,7 @@ export async function resolveWorkflowApproval(
     const action = typeof n.action === "string" ? n.action : "";
     const actionId = action.includes(".") ? action : `${service}.${action}`;
     const now = Date.now();
-    if (input.scope === "always") {
-      // Admin eligibility was already checked above (before the signal insert).
-      // AlwaysAllowNotAdminError should not fire here, but re-throw defensively
-      // for unexpected cases.
-      try {
-        await writeAlwaysAllowPolicy(deps.db, { orgId, actionId, grantedBy: owner.userId, now });
-      } catch (err) {
-        if (err instanceof AlwaysAllowNotAdminError) return "forbidden_always";
-        throw err;
-      }
-    }
-    if (input.scope === "always" || input.scope === "run") {
+    if (input.scope === "run") {
       await writeExecutionGrant(deps.db, input.runId, {
         orgId,
         service,
@@ -1845,7 +1851,7 @@ export async function resolveWorkflowApproval(
     }
   }
 
-  if (isPolicyGate) {
+  if (isPolicyGate && !prepared?.ok) {
     await updateInvocationOutcome(
       deps.db,
       `pol:wf:workflow:${input.runId}:${input.nodeId}${suffix}`,

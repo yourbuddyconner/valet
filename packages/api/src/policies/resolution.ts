@@ -92,6 +92,7 @@ export interface ActionPolicyOverrideRow {
 }
 
 export interface PolicyResolutionRows {
+  workflowGrants?: { id: string; actionId: string }[];
   policies: ActionPolicyRow[];
   grants: RuntimeGrantRow[];
   overrides: ActionPolicyOverrideRow[];
@@ -309,6 +310,13 @@ export function resolvePolicyDecision(
       },
     };
   }
+
+  // Durable workflow permission never weakens an explicit org/team rule.
+  const workflowGrant = input.appliesIn === "workflow" && !match
+    ? rows.workflowGrants?.find((row) => row.actionId === input.actionId) : undefined;
+  if (workflowGrant) return { mode: "allow", provenance: {
+    baseMode, matchedGrantId: workflowGrant.id, source: "workflow_grant",
+  } };
 
   // Rungs 3-5.
   return {

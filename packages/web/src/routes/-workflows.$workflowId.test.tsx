@@ -101,6 +101,7 @@ vi.mock("~/api/workflows", () => ({
   useUpdateWorkflow: () => ({ mutateAsync: updateMutateAsync, isPending: false }),
   useStartRun: () => ({ mutateAsync: startMutateAsync, isPending: false }),
   useWorkflowPermissions: () => ({ data: permissionsData, isLoading: false, error: null }),
+  useRevokeWorkflowPermissions: () => ({ mutate: vi.fn(), isPending: false, error: null }),
   useAllowWorkflowPermissions: () => ({
     mutateAsync: allowMutateAsync,
     isPending: false,
@@ -494,13 +495,12 @@ describe("WorkflowEditorPage — permissions badge and pre-approval", () => {
     };
   });
 
-  it("directs team workflows to team policies without a personal pre-approval action", () => {
+  it("offers workflow-scoped review for team workflows", () => {
     workflowData.ownerType = "team";
     workflowData.ownerId = "team-1";
     try {
       render(<WorkflowEditorPage workflowId="wf_1" />);
-      expect(screen.queryByTestId("workflow-gate-badge")).toBeNull();
-      expect(screen.getByText(/Team Policies · 1 action/).getAttribute("to")).toBe("/settings/policies");
+      expect(screen.getByTestId("workflow-gate-badge")).toBeTruthy();
       expect(screen.queryByText("Pre-approve actions")).toBeNull();
       expect(allowMutateAsync).not.toHaveBeenCalled();
     } finally { workflowData.ownerType = "user"; workflowData.ownerId = "u1"; }
@@ -509,7 +509,7 @@ describe("WorkflowEditorPage — permissions badge and pre-approval", () => {
   it("shows the header badge with the count of unique gating actions", () => {
     render(<WorkflowEditorPage workflowId="wf_1" />);
     const badge = screen.getByTestId("workflow-gate-badge");
-    expect(badge.textContent).toContain("1 action needs approval");
+    expect(badge.textContent).toContain("Review permissions");
   });
 
   it("hides the badge when nothing gates", () => {
@@ -527,7 +527,7 @@ describe("WorkflowEditorPage — permissions badge and pre-approval", () => {
     expect(within(list).queryByText("widgets.list")).toBeNull();
 
     fireEvent.click(screen.getByTestId("preapprove-confirm"));
-    await waitFor(() => expect(allowMutateAsync).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(allowMutateAsync).toHaveBeenCalledWith(["widgets.deploy"]));
     await waitFor(() => expect(screen.queryByTestId("preapprove-actions")).toBeNull());
     expect(screen.queryByTestId("preapprove-blocked")).toBeNull();
   });

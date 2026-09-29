@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { WorkflowActionRequiredItem } from "@valet/api/wire";
-import { ShieldAlert } from "lucide-react";
+import { ChevronRight, ShieldAlert } from "lucide-react";
 import { OwnerBadge } from "~/components/owner-badge";
 import { relativeTime } from "~/lib/relative-time";
 import { ApprovalCard } from "./approval-card";
@@ -66,6 +66,15 @@ export function WorkflowApprovalItem({
           </Link>
         </div>
       </div>
+      <details className="group" open={focused || undefined}>
+        <summary className="cursor-pointer list-none text-sm text-muted [&::-webkit-details-marker]:hidden">
+          <span className="flex min-w-0 items-center gap-2">
+            <ChevronRight className="h-4 w-4 shrink-0 group-open:rotate-90" aria-hidden />
+            <span className="shrink-0">Review request<span className="sr-only"> for {item.workflowName}</span></span>
+            <span className="truncate text-xs">{policy ? action : gate.prompt}</span>
+          </span>
+        </summary>
+        <div className="mt-3">
       {policy && <p className="mb-3 text-xs text-muted">{reason}</p>}
       {policy ? (
         <PolicyGateCard runId={item.runId} gate={gate} confirmActions />
@@ -80,6 +89,8 @@ export function WorkflowApprovalItem({
           confirmActions
         />
       )}
+        </div>
+      </details>
     </li>
   );
 }

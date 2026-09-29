@@ -1031,6 +1031,7 @@ export type PolicyProvenanceSource =
   | "org_policy"
   | "team_policy"
   | "runtime_grant"
+  | "workflow_grant"
   | "override"
   | "plugin_default"
   | "risk_default"

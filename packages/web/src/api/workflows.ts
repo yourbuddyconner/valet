@@ -39,7 +39,6 @@ import type {
   WorkflowScheduleResponse,
 } from "@valet/api/wire";
 import { api, ApiError, type OwnerFilter, type WorkflowRunFilter, type WorkflowRunPage } from "./client";
-import { qkPolicies } from "./policies";
 
 export const qkWorkflows = {
   /** The owner is a trailing element, so `["workflows"]` stays the prefix
@@ -330,18 +329,22 @@ export function useWorkflowPermissions(
   });
 }
 
-/** Pre-approves every gating action of the workflow: the server derives the
- * set from the stored definition and writes one per-user allow override per
- * action. Refreshes the predictions and the settings overrides list. */
+/** Persist permissions for this workflow only. */
 export function useAllowWorkflowPermissions(id: string) {
   const qc = useQueryClient();
-  return useMutation<AllowWorkflowPermissionsResponse, Error, void>({
-    mutationFn: () => api.allowWorkflowPermissions(id),
+  return useMutation<AllowWorkflowPermissionsResponse, Error, string[]>({
+    mutationFn: (actionIds) => api.allowWorkflowPermissions(id, { actionIds }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qkWorkflows.permissions(id) });
-      qc.invalidateQueries({ queryKey: qkPolicies.myOverrides() });
     },
   });
+}
+
+export function useRevokeWorkflowPermissions(id: string) {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: () => api.revokeWorkflowPermissions(id), onSuccess: () => {
+    qc.invalidateQueries({ queryKey: qkWorkflows.permissions(id) });
+  } });
 }
 
 export function useStartRun(id: string) {

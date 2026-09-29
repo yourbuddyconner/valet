@@ -995,6 +995,7 @@ export const api = {
       "GET",
       `/workflows/${encodeURIComponent(id)}/permissions`,
     ),
+  revokeWorkflowPermissions: (id: string) => request<{ ok: boolean }>("DELETE", `/workflows/${encodeURIComponent(id)}/permissions/allow`),
   allowWorkflowPermissions: (id: string, body: AllowWorkflowPermissionsRequest = {}) =>
     request<AllowWorkflowPermissionsResponse>(
       "POST",

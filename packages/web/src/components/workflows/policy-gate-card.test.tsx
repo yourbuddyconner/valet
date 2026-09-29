@@ -116,66 +116,14 @@ describe("PolicyGateCard", () => {
     });
   });
 
-  // ── Case 4: Always allow — non-admin ──────────────────────────────────────
-
-  it("non-admin: Always allow item is disabled with org-admin-only suffix", async () => {
+  it("confirms a persistent permission confined to this workflow", async () => {
     const user = userEvent.setup();
-    mockOrgRole = "member";
     render(<PolicyGateCard runId="wfrun_1" gate={makeGate()} />);
-
-    // Open the dropdown
-    await user.click(screen.getByRole("button", { name: "More approval options" }));
-
-    // The item text includes the "(org admin only)" suffix and is disabled
-    const item = screen.getByText(/org admin only/i);
-    expect(item).toBeTruthy();
-
-    // The menu item must be aria-disabled or have data-disabled
-    const menuItem = screen.getByRole("menuitem", { name: /Always allow/i });
-    const isDisabled =
-      menuItem.getAttribute("aria-disabled") === "true" ||
-      menuItem.dataset["disabled"] === "true" ||
-      menuItem.hasAttribute("disabled");
-    expect(isDisabled).toBe(true);
-  });
-
-  // ── Case 4 cont: Always allow — admin ─────────────────────────────────────
-
-  it("admin: Always allow is enabled; confirm step shows blast radius and policies link", async () => {
-    const user = userEvent.setup();
-    mockOrgRole = "admin";
-    const gate = makeGate();
-    render(<PolicyGateCard runId="wfrun_1" gate={gate} />);
-
-    // Open the dropdown
-    await user.click(screen.getByRole("button", { name: "More approval options" }));
-
-    const menuItem = screen.getByRole("menuitem", { name: /Always allow/i });
-    // admin sees enabled item (no disabled attribute)
-    expect(
-      menuItem.getAttribute("aria-disabled") === "true" ||
-      menuItem.dataset["disabled"] === "true",
-    ).toBe(false);
-
-    // Click to open confirm step
-    await user.click(menuItem);
-
-    // Blast radius copy
-    expect(
-      screen.getByText(/Allows linear\.save_issue for every user and run in this org/i),
-    ).toBeTruthy();
-
-    // Link to /settings/organization policies
-    const link = screen.getByRole("link", { name: /policies/i });
-    expect(link.getAttribute("href")).toContain("/settings/organization");
-
-    // Confirm fires scope=always
-    await user.click(screen.getByRole("button", { name: /Confirm/i }));
-
-    expect(mutate).toHaveBeenCalledWith({
-      nodeId: "node_1",
-      body: { approved: true, scope: "always", note: undefined, iteration: undefined },
-    });
+    await user.click(screen.getByRole("button", { name: "Allow for this workflow" }));
+    expect(screen.getByText(/future runs of this workflow only/i)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Allow action" }));
+    expect(mutate).toHaveBeenCalledWith({ nodeId: "node_1", body: { approved: true, scope: "workflow", note: undefined, iteration: undefined } });
+    expect(screen.queryByText("Always allow")).toBeNull();
   });
 
   // ── Case 5: Deny microcopy ────────────────────────────────────────────────
