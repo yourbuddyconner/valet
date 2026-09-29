@@ -104,9 +104,11 @@ export function Composer({
   replyTarget,
   onCancelReply,
   beforeSend,
+  submissionLock,
   onSent,
 }: {
-  beforeSend?: (text: string) => Promise<string>;
+  submissionLock?: { current: boolean };
+  beforeSend?: (text: string) => Promise<{ text: string; threadId: string }>;
   onSent?: () => void;
   sessionId: string;
   /**
@@ -133,7 +135,8 @@ export function Composer({
   const key = draftKey(sessionId, threadId);
   const { text, images, files, imageErrors, fileErrors } = useComposerDraft(key);
   const setText = (value: string) => useComposerDraftStore.getState().setText(key, value);
-  const submitting = useRef(false);
+  const localSubmissionLock = useRef(false);
+  const submitting = submissionLock ?? localSubmissionLock;
   const [preparing, setPreparing] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [selected, setSelected] = useState(false);
@@ -548,14 +551,14 @@ export function Composer({
     // the next WS init (page reload). The next init replaces this row with
     // the server's persisted copy. File chips are not rendered optimistically
     // — the server owns their sandbox paths; they appear on the next init.
-    const localId = addUserMessage(sessionId, t, threadId, attachments, replyTarget);
     submitting.current = true;
     setPreparing(true);
     try {
-      const preparedText = beforeSend ? await beforeSend(t) : t;
+      const target = beforeSend ? await beforeSend(t) : { text: t, threadId };
+      const localId = addUserMessage(sessionId, t, target.threadId, attachments, replyTarget);
       const res = await send.mutateAsync({
-        text: preparedText,
-        threadId,
+        text: target.text,
+        threadId: target.threadId,
         attachments,
         fileRefs: fileRefs.length > 0 ? fileRefs : undefined,
         ...(replyTarget ? { replyToMessageId: replyTarget.messageId } : {}),

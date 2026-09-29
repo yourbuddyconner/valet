@@ -40,7 +40,7 @@ import { useInvalidateMessagesOnCompaction } from "~/hooks/use-invalidate-messag
 import { usePendingGatesSeed } from "~/hooks/use-pending-gates-seed";
 import { Button, Spinner } from "~/components/primitives";
 import type { MessageReplyReference } from "@valet/api/wire";
-import { defaultThreadId } from "~/lib/thread-default";
+import { defaultThreadId, isAppAssistantThread } from "~/lib/thread-default";
 
 /**
  * Reusable session view (assistant-centered web UI, decisions 13/14):
@@ -72,13 +72,9 @@ export function SessionView({
   onTabChange,
   enableReplies = false,
   scopeNotice,
-  introduction,
-  beforeSend,
-  onSent,
+  chatOnly = false,
 }: {
-  introduction?: React.ReactNode;
-  beforeSend?: (text: string) => Promise<string>;
-  onSent?: () => void;
+  chatOnly?: boolean;
   scopeNotice?: string;
   sessionId: string;
   /** Renders the compact slide-over header instead of `SessionHeader`. */
@@ -122,7 +118,6 @@ export function SessionView({
   // and this refetch is what pulls it into the transcript.
   useInvalidateMessagesOnCompaction(sessionId);
   const [localTab, setLocalTab] = useState<SandboxTabId>("chat");
-  const tab = activeTab ?? localTab;
   const setTab = onTabChange ?? setLocalTab;
   const viewRef = useRef<HTMLDivElement>(null);
   const restoreTabFocus = useRef(false);
@@ -134,13 +129,6 @@ export function SessionView({
     if (tab === "browser" && next !== "browser") browserWatch.open();
     setTab(next);
   }
-  useLayoutEffect(() => {
-    if (!restoreTabFocus.current) return;
-    restoreTabFocus.current = false;
-    // Chat owns the sliding strip; gateway tabs own the fixed strip.
-    // Keep keyboard focus on the selected replacement when it moves.
-    viewRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
-  }, [tab]);
   const threads = useThreads(sessionId);
   // Open the WS — pipes events into the store keyed by sessionId.
   useSessionWebSocket(sessionId);
@@ -148,6 +136,16 @@ export function SessionView({
 
   // The shared default keeps an omitted ?thread aligned with the sidebar, regardless of its sort mode.
   const effectiveThreadId = activeThreadId ?? defaultThreadId(threads.data?.threads ?? []);
+  const helperThread = threads.data?.threads.find((thread) => thread.id === effectiveThreadId);
+  const hideBrowser = chatOnly || Boolean(helperThread && isAppAssistantThread(helperThread));
+  const tab = hideBrowser ? "chat" : activeTab ?? localTab;
+  useLayoutEffect(() => {
+    if (!restoreTabFocus.current) return;
+    restoreTabFocus.current = false;
+    // Chat owns the sliding strip; gateway tabs own the fixed strip.
+    // Keep keyboard focus on the selected replacement when it moves.
+    viewRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
+  }, [tab]);
   const [replyTarget, setReplyTarget] = useState<MessageReplyReference>();
   useEffect(() => setReplyTarget(undefined), [effectiveThreadId]);
 
@@ -298,7 +296,7 @@ export function SessionView({
       summaryControl={summaryControl}
     />
   );
-  const sandboxTabs = (
+  const sandboxTabs = !hideBrowser && (
     <SandboxTabs
       sessionId={sessionId}
       profile={session.data.profile}
@@ -312,9 +310,9 @@ export function SessionView({
   return (
     <ComposerDropContext.Provider value={dropChannel}>
     <div ref={viewRef} className="flex-1 flex flex-col min-h-0 min-w-0">
-      {!introduction && (panel || tab !== "chat") && (
+      {(panel || tab !== "chat") && (
         <>
-          {panel ? (!hidePanelHeader && <div className="flex items-center"><PanelHeader sessionId={sessionId} title={session.data.title} onClose={onClose} />{summaryControl}</div>) : sessionHeader}
+          {panel ? (!hidePanelHeader && <div className="flex items-center"><PanelHeader sessionId={sessionId} threadId={effectiveThreadId} title={session.data.title} onClose={onClose} />{summaryControl}</div>) : sessionHeader}
           {sandboxTabs}
         </>
       )}
@@ -323,7 +321,7 @@ export function SessionView({
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <PageDropTarget>
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            {introduction ?? <MessageList
+            <MessageList
               header={panel ? undefined : <>{sessionHeader}{sandboxTabs}</>}
               messages={stream.messages}
               threadId={effectiveThreadId}
@@ -332,8 +330,8 @@ export function SessionView({
               pendingIds={threadQueueState?.pendingIds}
               viewerId={me.data?.id}
               onReply={enableReplies ? setReplyTarget : undefined}
-            />}
-            {(browserWatch.mode === "open" || browserWatch.mode === "minimized") && (
+            />
+            {!hideBrowser && (browserWatch.mode === "open" || browserWatch.mode === "minimized") && (
               <BrowserOverlay
                 key={JSON.stringify([sessionId, effectiveThreadId])}
                 sessionId={sessionId}
@@ -367,8 +365,6 @@ export function SessionView({
               a thread switch swaps the draft without a remount (a remount
               would orphan in-flight uploads). */}
           <Composer
-            beforeSend={beforeSend}
-            onSent={onSent}
             sessionId={sessionId}
             threadId={effectiveThreadId}
             agentStatus={threadStatus.status}
@@ -389,10 +385,12 @@ export function SessionView({
 
 function PanelHeader({
   sessionId,
+  threadId,
   title,
   onClose,
 }: {
   sessionId: string;
+  threadId?: string;
   title?: string;
   onClose?: () => void;
 }) {
@@ -406,6 +404,7 @@ function PanelHeader({
       <Link
         to="/sessions/$sessionId"
         params={{ sessionId }}
+        search={{ thread: threadId }}
         className="inline-flex items-center gap-1 text-xs text-muted hover:text-moss"
         aria-label="Open full page"
       >

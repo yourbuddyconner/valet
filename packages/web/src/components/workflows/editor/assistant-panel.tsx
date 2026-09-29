@@ -99,7 +99,7 @@ export function WorkflowAssistantPanel({
           {assistant.stage === "session" ? "Opening your assistant…" : "Starting the conversation…"}
         </div>
       ) : (
-        <SessionView panel sessionId={assistant.sessionId} activeThreadId={assistant.threadId} />
+        <SessionView chatOnly panel sessionId={assistant.sessionId} activeThreadId={assistant.threadId} />
       )}
     </aside>
   );

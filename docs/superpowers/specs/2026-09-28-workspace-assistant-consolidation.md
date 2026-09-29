@@ -97,3 +97,7 @@ Do not delete legacy subsystems, stored workflows, event logs, or subscriptions 
 The Workflows empty state now hosts SessionView with its standard composer and a short introduction. On first send it saves a minimal unscheduled workflow, sends the request in the durable workspace helper Thread, then opens the existing editor. The existing assistant panel and patch watcher drive real saved canvas updates. No parallel chat or canvas implementation was added. Manual setup no longer maintains presets; import/manual entry points moved to overflow.
 
 The shell save is not an enforced draft lifecycle: there is still no server-side prohibition on a later agent enabling a schedule. First-send instructions ask the agent to wait for explicit activation. A failed send can leave an unscheduled shell in the list, available to resume. Creation retries retain the shell id while the creation view stays mounted; reloading does not recover that transient association. Visual validation passed for the first-send handoff and actual node updates; full validation is deferred.
+
+### Revised reuse boundary
+
+The shared runtime and UI components are reused, but workflow history is no longer shared across workflows. Each workflow/viewer pair has a durable Thread; the general Ask Valet Thread stays separate. Creation uses a client draft until it can resolve the new workflow's conversation. Chat-only helper views remove Browser controls without changing regular Threads. This supersedes the earlier checkpoint's single helper Thread across all workflow editors.

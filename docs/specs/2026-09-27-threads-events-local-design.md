@@ -448,3 +448,11 @@ Workflows opens with the existing SessionView composer. Its first successful sen
 Import and manual setup live in the overflow menu. The old preset picker and preset builders were removed; manual setup uses the same minimal definition. The workflow list shows the latest outcome and links to a failed run only when the latest run failed.
 
 Visual check on localhost: a personal text-only demo moved from the first-message composer into the editor and added a Set values node through real tool patches. No workflow execution or scheduling occurred. The model initially guessed incorrect node schemas before correcting them; tool schema guidance remains a follow-up. Full validation and regression tests remain deferred at the user's request.
+
+## Workflow conversation isolation and chat-only helpers
+
+Workflow conversations now use `workflow:<workflow id>:<viewer id>` in the owner runtime, rather than the general `app-assistant:<viewer id>` Thread. Reopening a workflow reuses its conversation; a different workflow starts fresh. Both helper kinds remain hidden from ordinary Recents/search. Older general assistant history is retained, not copied or deleted.
+
+The creation composer uses an isolated local draft and resolves the workflow Thread before posting its first message. Its submission lock survives opening/closing the global dock. Ask Valet and workflow panels are chat-only; helper Threads also suppress Browser when opened directly. Ordinary Threads retain browser access.
+
+Local visual checks confirmed a clean new-workflow composer, first-send routing into an isolated conversation, and no Browser tab in the workflow panel. Full validation remains deferred.

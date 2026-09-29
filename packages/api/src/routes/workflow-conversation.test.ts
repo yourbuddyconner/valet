@@ -24,15 +24,15 @@ describe("workflow editor conversation", () => {
     expect(new Set(opened.map(row => row.threadId)).size).toBe(1);
     expect(await open(api.baseUrl, wf.id)).toEqual(opened[0]);
     const threads = await api.providers.engineStore.listThreads(opened[0]!.sessionId);
-    expect(threads.filter(thread => thread.key === "app-assistant:local-user")).toHaveLength(1);
+    expect(threads.filter(thread => thread.key === `workflow:${wf.id}:local-user`)).toHaveLength(1);
     expect(await api.providers.engineStore.getEntries(opened[0]!.sessionId, opened[0]!.threadId)).toEqual([]);
     const other = await workflow(api.baseUrl);
-    expect((await open(api.baseUrl, other.id)).threadId).toBe(opened[0]!.threadId);
+    expect((await open(api.baseUrl, other.id)).threadId).not.toBe(opened[0]!.threadId);
     const appConversation = await fetch(`${api.baseUrl}/api/workspaces/user/conversation`, { method: "POST" });
     expect(appConversation.status).toBe(200);
-    expect(await appConversation.json()).toEqual(opened[0]);
+    expect(await appConversation.json()).toEqual(expect.objectContaining({ sessionId: opened[0]!.sessionId, threadId: expect.not.stringMatching(opened[0]!.threadId) }));
   });
-  it("keeps each viewer’s app thread in the team runtime and rejects unrelated workflows", async () => {
+  it("keeps each viewer’s workflow thread in the team runtime and rejects unrelated workflows", async () => {
     api = await bootTestApi();
     const team = await createTeam(api.providers.db, { orgId: "local-org", name: "Editors", creatorUserId: "local-user" });
     await addMember(api.providers.db, { teamId: team.id, userId: "test-member", role: "member" });
