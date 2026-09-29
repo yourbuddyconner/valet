@@ -1,3 +1,4 @@
+import { AutomationReview } from "./automation-review";
 import { DeliveryPreferences, type DeliveryPreferencesValue } from "./delivery-preferences";
 /**
  * EditSubscriptionDialog — edit an existing event subscription: name, event
@@ -56,6 +57,7 @@ export function EditSubscriptionDialog({
   onOpenChange,
   sub,
   targetLabel,
+  review = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -63,6 +65,7 @@ export function EditSubscriptionDialog({
   /** The stored target as a display sentence (the row already resolves
    * workflow and team names); the dialog only shows it. */
   targetLabel: string;
+  review?: boolean;
 }) {
   const catalogQ = useEventCatalog();
   const patch = usePatchEventSubscription();
@@ -138,7 +141,7 @@ export function EditSubscriptionDialog({
       }
     }
 
-    const body = buildSubscriptionPatch(sub, {
+    let body = buildSubscriptionPatch(sub, {
       name,
       eventKeys: [...keys],
       filters,
@@ -146,6 +149,7 @@ export function EditSubscriptionDialog({
       prompts,
       ...(sub.ownerType === "user" && sub.target.kind === "orchestrator" ? { deliveryPreferences } : {}),
     });
+    if (review && !sub.enabled) body = { ...body, enabled: true };
     if (body === null) {
       onOpenChange(false);
       return;
@@ -178,8 +182,8 @@ export function EditSubscriptionDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        title={`Edit ${sub.name}`}
-        description="Change what this automation matches. A save keeps its target."
+        title={`${review ? "Review" : "Edit"} ${sub.name}`}
+        description={review ? (sub.enabled ? "This subscription is already enabled. Review its current configuration." : "Review the saved proposal. It stays paused until you enable it.") : "Change what this automation matches. A save keeps its target."}
         className="max-w-lg"
       >
         <div className="space-y-4">
@@ -228,6 +232,9 @@ export function EditSubscriptionDialog({
 
           {sub.ownerType === "user" && sub.target.kind === "orchestrator" && <DeliveryPreferences value={deliveryPreferences} onChange={setDeliveryPreferences} />}
 
+          <AutomationReview follow={sub.target.kind === "orchestrator" ? sub.target.follow : undefined} audience={sub.audience} workflowId={sub.target.kind === "workflow" ? sub.target.workflowId : undefined} when={[...keys].join(", ")} scope={filterRows.map(row => `${row.field} ${row.op} ${row.label || row.value}`).join("; ") || "All matching events"}
+            result={sub.target.kind === "orchestrator" ? prompts.userPromptTemplate || "Deliver matching events to the workspace assistant" : targetLabel}
+            destination={targetLabel} />
           {collisions !== null && (
             <CollisionNotice
               report={collisions.report}
@@ -256,7 +263,7 @@ export function EditSubscriptionDialog({
                 Cancel
               </Button>
               <Button type="button" onClick={() => save()} disabled={patch.isPending}>
-                {patch.isPending ? "Saving…" : "Save"}
+                {patch.isPending ? "Saving…" : review && !sub.enabled ? "Enable subscription" : "Save"}
               </Button>
               {collisions !== null && collisions.report.blocking.length > 0 && (
                 <Button
@@ -265,7 +272,7 @@ export function EditSubscriptionDialog({
                   onClick={() => save(true)}
                   disabled={patch.isPending}
                 >
-                  Save anyway
+                  {review ? "Enable anyway" : "Save anyway"}
                 </Button>
               )}
             </>

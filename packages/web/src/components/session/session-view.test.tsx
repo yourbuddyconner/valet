@@ -92,12 +92,14 @@ function renderInRouter(sessionId: string, panel: boolean, onClose?: () => void)
 
 describe("SessionView header chrome", () => {
   it("watches from chat, suspends in the full pane, restores, and returns focus on close", async () => {
+    fullProfile = true;
     renderInRouter("sess-1", false);
-    fireEvent.click(await screen.findByRole("button", { name: "Watch browser" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Browser" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
     expect(screen.getByText("visible feed")).toBeTruthy();
     fireEvent.click(screen.getByText("minimize preview"));
     expect(screen.getByText("minimized feed")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Watch browser" }));
+    fireEvent.click(screen.getByText("restore preview"));
     expect(screen.getByText("visible feed")).toBeTruthy();
     fireEvent.click(screen.getByText("expand preview"));
     expect(screen.queryByRole("region", { name: "Browser preview" })).toBeNull();
@@ -107,7 +109,7 @@ describe("SessionView header chrome", () => {
     expect(screen.getByText("visible feed")).toBeTruthy();
     fireEvent.click(screen.getByText("close preview"));
     expect(screen.queryByRole("region", { name: "Browser preview" })).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Watch browser" }));
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Chat" }));
   });
   it("without panel: renders the standard SessionHeader", async () => {
     renderInRouter("sess-1", false);

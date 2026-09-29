@@ -41,12 +41,12 @@ it("briefs one goal across conversations and runs with one concise summary", asy
   expect(screen.getAllByRole("article")).toHaveLength(1);
   expect(within(article).getByText(briefing.summary)).toBeTruthy();
   expect(within(article).queryByText("Next step")).toBeNull();
-  expect(within(article).getByRole("link", { name: "Latest thread" }).getAttribute("href")).toBe("/sessions/runtime?thread=rollout-review");
-  expect(within(article).getByRole("link", { name: "Routing design" }).getAttribute("href")).toBe("/sessions/runtime?thread=design");
+  expect(within(article).getByRole("link", { name: "Latest thread" }).getAttribute("href")).toBe("/threads/rollout-review");
+  expect(within(article).getByRole("link", { name: "Routing design" }).getAttribute("href")).toBe("/threads/design");
   expect(within(article).getByRole("link", { name: "TKAI-42 routing PR" }).getAttribute("href")).toBe("https://github.com/acme/app/pull/42");
   expect(within(article).getByRole("link", { name: "Replay report" }).getAttribute("href")).toBe("/a/replay-report");
   expect(within(article).getByRole("list", { name: "Sources" }).querySelector("a")?.textContent).toBe("TKAI-42 routing PR");
-  expect(screen.queryByText("Detailed activity")).toBeNull();
+  expect(screen.getByText("Detailed activity")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Replay verification" }).closest("details")?.open).toBe(false);
   fireEvent.click(screen.getByText("1 more source"));
   expect(screen.getByRole("link", { name: "Replay verification" }).closest("details")?.open).toBe(true);
@@ -100,12 +100,11 @@ it("shows a retry state when generation is unavailable without inventing context
   expect(screen.getByText("One outcome from recent conversations and workflow runs.")).toBeTruthy();
   expect(screen.queryByRole("article")).toBeNull();
 });
-it("keeps activity details closed and mounts them only on request", async () => {
+it("shows activity alongside the briefing", async () => {
   setup();
   await screen.findByText(briefing.summary);
-  expect(screen.queryByText("Detailed activity")).toBeNull();
-  fireEvent.click(screen.getByText("Activity details"));
-  await waitFor(() => expect(screen.getByText("Detailed activity")).toBeTruthy());
+  expect(screen.getByText("Detailed activity")).toBeTruthy();
+  expect(screen.queryByText("Activity details")).toBeNull();
 });
 it("shows an honest briefing when no source links are available", async () => {
   vi.mocked(api.getWorkspaceBriefings).mockResolvedValue({ briefings: [{ ...briefing, latestThread: null, sources: [] }], generatedAt: 100, coverage: "recent" });

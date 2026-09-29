@@ -214,7 +214,7 @@ describe("SourcesSection", () => {
     sourcesData = { sources: [], builderAvailable: true };
     render(<SourcesSection />);
     expect(
-      screen.getByText("Repository images appear automatically when a session binds a repo."),
+      screen.getByText("Repository images appear automatically when a runtime binds a repo."),
     ).toBeTruthy();
   });
 

@@ -11,7 +11,7 @@ describe("upload command", () => {
     it("requires session id and at least one path", () => {
       const result = parseUploadArgs({ rest: [], flags: {}, json: false });
       expect(typeof result).toBe("string");
-      expect(result).toMatch(/session id and at least one file path/);
+      expect(result).toMatch(/--thread <id> and at least one file path/);
     });
 
     it("parses session id and single file", () => {
@@ -200,5 +200,42 @@ describe("upload command", () => {
     it("shortens bare sha256", () => {
       expect(shortSha256("9f2c1a3b...")).toBe("9f2c1a3b");
     });
+  });
+});
+
+describe("thread-addressed uploads", () => {
+  it("parses explicit thread and legacy runtime flags without consuming a file path", () => {
+    expect(parseUploadArgs(parseGlobalFlags(["--thread", "t1", "file.txt"]))).toMatchObject({ threadId: "t1", paths: ["file.txt"] });
+    expect(parseUploadArgs(parseGlobalFlags(["--session", "s1", "file.txt"]))).toMatchObject({ sessionId: "s1", paths: ["file.txt"] });
+    expect(typeof parseUploadArgs(parseGlobalFlags(["file.txt", "--thread"]))).toBe("string");
+  });
+
+  it("uploads to the resolved runtime and sends attachments to the requested thread", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "valet-thread-upload-"));
+    const file = join(dir, "report.txt");
+    await writeFile(file, "report");
+    const { runUpload } = await import("./upload.js");
+    const { vi } = await import("vitest");
+    const uploadFiles = vi.fn().mockResolvedValue({ files: [{ path: "/workspace/uploads/report.txt", attachmentRef: "ref:report", bytes: 6, sha256: "sha256:12345678" }] });
+    const sendPrompt = vi.fn().mockResolvedValue({ messageId: "message", threadId: "t1", activityAt: 1 });
+    const stream = vi.fn(() => (async function* () {
+      yield { seq: 1, ts: 1, type: "submission.settled" as const, sessionId: "s1", threadId: "t1", queueItemId: "message", outcome: "completed" as const };
+    })());
+    const code = await runUpload({ client: { getThread: async () => ({ sessionId: "s1" }), uploadFiles, sendPrompt }, stream, url: "http://x" }, { threadId: "t1", paths: [file], message: "Read this", json: true });
+    expect(code).toBe(ExitCode.OK);
+    expect(uploadFiles).toHaveBeenCalledWith("s1", expect.any(Array));
+    expect(sendPrompt).toHaveBeenCalledWith("s1", { threadId: "t1", text: "Read this", fileRefs: [{ ref: "ref:report" }] });
+    expect(stream).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "s1" }));
+  });
+
+  it("rejects conflicting runtime before uploading or sending", async () => {
+    const { runUpload } = await import("./upload.js");
+    const { vi } = await import("vitest");
+    const uploadFiles = vi.fn();
+    const sendPrompt = vi.fn();
+    const code = await runUpload({ client: { getThread: async () => ({ sessionId: "other" }), uploadFiles, sendPrompt }, stream: () => (async function* () {})(), url: "http://x" }, { threadId: "t1", sessionId: "s1", paths: ["missing.txt"] });
+    expect(code).toBe(ExitCode.Usage);
+    expect(uploadFiles).not.toHaveBeenCalled();
+    expect(sendPrompt).not.toHaveBeenCalled();
   });
 });

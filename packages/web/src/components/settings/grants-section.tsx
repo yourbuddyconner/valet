@@ -32,7 +32,7 @@ export function GrantsList({ grants, title, canEdit, pending, revoke }: {
   const [rowError, setRowError] = useState<string | null>(null);
 
   return (
-    <Section title={title} description="Runtime grants for the current session or workflow run.">
+    <Section title={title} description="Runtime grants for the current runtime or workflow run.">
       {grants.length === 0 && (
         <p className="py-4 text-sm text-muted">No active grants.</p>
       )}
@@ -42,7 +42,7 @@ export function GrantsList({ grants, title, canEdit, pending, revoke }: {
             <div className="min-w-0 flex-1 break-all">
               <span className="text-sm font-medium text-[--fg]">{g.policyKey}</span>
               <p className="text-xs text-muted">
-                {g.sessionId ? `session ${g.sessionId}` : `workflow run ${g.workflowExecutionId}`}
+                {g.sessionId ? `runtime ${g.sessionId}` : `workflow run ${g.workflowExecutionId}`}
               </p>
             </div>
             <Button
@@ -62,7 +62,7 @@ export function GrantsList({ grants, title, canEdit, pending, revoke }: {
         );
       })}
       <ConfirmDialog open={selected !== null && canEdit} onOpenChange={open => { if (!open) setSelected(null); }}
-        title="Revoke grant?" description="This session or run will need approval again when policy requires it." confirmLabel="Revoke grant"
+        title="Revoke grant?" description="This runtime or run will need approval again when policy requires it." confirmLabel="Revoke grant"
         pending={pending} error={rowError} onConfirm={() => {
           if (selected && canEdit) void revoke(selected).then(() => setSelected(null), err => setRowError(apiErrorMessage(err)));
         }} />

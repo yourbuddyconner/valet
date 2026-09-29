@@ -229,7 +229,7 @@ const mockSessionItems: UsageDrillResponse = {
     },
     {
       id: "sess_child1",
-      label: "Child session",
+      label: "Child thread",
       useCase: "session",
       isChild: true,
       parentId: "sess_parent1",
@@ -464,7 +464,7 @@ describe("UsagePage — tool work", () => {
     render(<UsagePage />);
     expect(screen.getByText("Tool work per model token")).toBeTruthy();
     const rows = screen.getAllByRole("row");
-    const session = rows.find((row) => row.textContent?.includes("Sessions") && row.textContent?.includes("80"));
+    const session = rows.find((row) => row.textContent?.includes("Runtimes") && row.textContent?.includes("80"));
     const workflow = rows.find((row) => row.textContent?.includes("Workflows") && row.textContent?.includes("20"));
     expect(session?.textContent).toContain("10,000");
     expect(session?.textContent).toContain("8,000");
@@ -675,7 +675,7 @@ describe("UsagePage — by-use-case table", () => {
   it("renders all four use-case labels", () => {
     render(<UsagePage />);
     expect(screen.getByText("Orchestrator")).toBeTruthy();
-    expect(screen.getAllByText("Sessions").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Runtimes").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Workflows").length).toBeGreaterThan(0);
     expect(screen.getByText("Proxy (external tools)")).toBeTruthy();
   });
@@ -709,28 +709,28 @@ describe("UsagePage — by-use-case table", () => {
   it("expanding Sessions row shows parent and child items", async () => {
     render(<UsagePage />);
     const sessRow = screen.getByRole("button", {
-      name: /Sessions — expand items/,
+      name: /Runtimes — expand items/,
     });
     fireEvent.click(sessRow);
     await waitFor(() => {
       expect(screen.getByText("Parent session")).toBeTruthy();
-      expect(screen.getByText("Child session")).toBeTruthy();
+      expect(screen.getByText("Child thread")).toBeTruthy();
     });
   });
 
   it("child session row is indented with pl-8 class", async () => {
     const { container } = render(<UsagePage />);
     const sessRow = screen.getByRole("button", {
-      name: /Sessions — expand items/,
+      name: /Runtimes — expand items/,
     });
     fireEvent.click(sessRow);
     await waitFor(() => {
-      expect(screen.getByText("Child session")).toBeTruthy();
+      expect(screen.getByText("Child thread")).toBeTruthy();
     });
     const childRows = Array.from(container.querySelectorAll(".pl-8"));
     expect(childRows.length).toBeGreaterThan(0);
     const childText = childRows.some((el) =>
-      el.textContent?.includes("Child session"),
+      el.textContent?.includes("Child thread"),
     );
     expect(childText).toBe(true);
   });
@@ -738,7 +738,7 @@ describe("UsagePage — by-use-case table", () => {
   it("regular session item renders as an anchor (links to sessions route)", async () => {
     render(<UsagePage />);
     const sessRow = screen.getByRole("button", {
-      name: /Sessions — expand items/,
+      name: /Runtimes — expand items/,
     });
     fireEvent.click(sessRow);
     await waitFor(() => {
@@ -972,7 +972,7 @@ describe("UsagePage — expanded drill rows across the me/org toggle", () => {
       isLoading: false,
     };
     render(<UsagePage />);
-    fireEvent.click(screen.getByRole("button", { name: /Sessions — expand items/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Runtimes — expand items/ }));
     await waitFor(() => {
       expect(screen.getByText("Parent session")).toBeTruthy();
     });

@@ -7,7 +7,7 @@
  * isolate-from-the-network pattern the other web suites use: `~/api/*` is
  * mocked to record what its mutations receive.
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type {
   CreateEventSubscriptionRequest,
   CreateWorkflowScheduleRequest
@@ -132,6 +132,40 @@ function pickOutcome(label: RegExp) {
 }
 
 describe("AutomationWizard", () => {
+  it("reviews a Slack thread permalink before creating an exact thread subscription", () => {
+    render(<AutomationWizard open onOpenChange={() => {}} />);
+    pickOutcome(/Subscribe to thread/);
+    expect(createSubscription).not.toHaveBeenCalled();
+    clickNext();
+    expect((screen.getByRole("button", { name: /^Next$/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Slack thread link"), {
+      target: { value: "https://acme.slack.com/archives/C123ABC/p1750000000123456" },
+    });
+    expect(createSubscription).not.toHaveBeenCalled();
+    clickNext();
+    expect((screen.getByLabelText(/Notify your personal workspace/) as HTMLInputElement).checked).toBe(true);
+    expect(createSubscription).not.toHaveBeenCalled();
+    clickNext();
+    const review = within(screen.getByLabelText("Automation review"));
+    expect(review.getByText("When").nextElementSibling?.textContent).toBe("slack.message");
+    expect(review.getByText("Scope").nextElementSibling?.textContent).toContain("C123ABC");
+    expect(review.getByText("Scope").nextElementSibling?.textContent).toContain("1750000000.123456");
+    expect((screen.getByRole("button", { name: /Create automation/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "Follow rollout thread" } });
+    expect(createSubscription).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Create automation/ }));
+    expect(createSubscription).toHaveBeenCalledTimes(1);
+    expect(createSchedule).not.toHaveBeenCalled();
+    const body = createSubscription.mock.calls[0][0] as CreateEventSubscriptionRequest;
+    expect(body.name).toBe("Follow rollout thread");
+    expect(body.eventKeys).toEqual(["slack.message"]);
+    expect(body.filters).toEqual([
+      { field: "channel", op: "eq", value: "C123ABC" },
+      { field: "thread_ts", op: "eq", value: "1750000000.123456" },
+    ]);
+    expect(body.target).toEqual({ kind: "orchestrator", orchestrator: "user", follow: false, deliveryPolicy: "always", pauseOnOverlap: true });
+  });
+
   /** Adds a channel through the reply step's free-text fallback (the mocked
    * options source returns a reason, so no picker list renders). */
   function addReplyChannel(id: string) {
@@ -259,7 +293,9 @@ describe("AutomationWizard", () => {
     // The review describes the selected team's member scope.
     addReplyChannel("C123");
     clickNext();
-    expect(screen.getByText(/notify Platform/)).toBeTruthy();
+    const review = within(screen.getByLabelText("Automation review"));
+    expect(review.getByText("Destination").nextElementSibling?.textContent).toBe("notify Platform's assistant");
+    expect(review.getByText("Result").nextElementSibling?.textContent).toContain("notify Platform's assistant");
   });
 
   it("a personal reply rule in a team workspace keeps creator-only copy and target", () => {
@@ -273,7 +309,7 @@ describe("AutomationWizard", () => {
     expect(screen.getByText(/Mentions by other people do not fire it/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "Personal" } });
     fireEvent.click(screen.getByRole("button", { name: /Create automation/ }));
-    expect(createSubscription.mock.calls[0][0].target).toEqual({ kind: "orchestrator", orchestrator: "user", follow: true });
+    expect(createSubscription.mock.calls[0][0].target).toEqual({ kind: "orchestrator", orchestrator: "user", follow: true, deliveryPolicy: "always", pauseOnOverlap: true });
   });
 
   it("a team reply rule keeps the selected assistant through review and create", () => {
@@ -342,7 +378,7 @@ describe("AutomationWizard", () => {
     expect(body.filters).toEqual([]);
     expect(body.anyChannel).toBe(true);
     // Personal workspace, so the default target is the user's assistant.
-    expect(body.target).toEqual({ kind: "orchestrator", orchestrator: "user", follow: false });
+    expect(body.target).toEqual({ kind: "orchestrator", orchestrator: "user", follow: false, deliveryPolicy: "always", pauseOnOverlap: true });
   });
 
   it("blocks Next on the reply step until a channel is picked or Any channel is set", () => {
@@ -378,7 +414,7 @@ describe("AutomationWizard", () => {
     fireEvent.change(screen.getByLabelText("Automation name"), { target: { value: "PR ping" } });
     fireEvent.click(screen.getByRole("button", { name: /Create automation/ }));
     const body = createSubscription.mock.calls[0][0] as CreateEventSubscriptionRequest;
-    expect(body.target).toEqual({ kind: "orchestrator", orchestrator: "user", follow: false });
+    expect(body.target).toEqual({ kind: "orchestrator", orchestrator: "user", follow: false, deliveryPolicy: "always", pauseOnOverlap: true });
   });
 
   it("workflow outcome posts a subscription with a workflow target", () => {
@@ -471,6 +507,8 @@ describe("AutomationWizard", () => {
     expect(body.target).toEqual({
       kind: "orchestrator",
       orchestrator: "user",
+      deliveryPolicy: "always",
+      pauseOnOverlap: true,
       follow: true,
       systemPrompt: "Answer in one sentence.",
       userPromptTemplate: "Mention: {{event.body}}",
@@ -502,6 +540,8 @@ describe("AutomationWizard", () => {
     expect(body.target).toEqual({
       kind: "orchestrator",
       orchestrator: "user",
+      deliveryPolicy: "always",
+      pauseOnOverlap: true,
       follow: false,
       systemPrompt: "Triage it. Answer in one sentence.",
       userPromptTemplate: "{{event.summary}} on {{refs.repo}}",

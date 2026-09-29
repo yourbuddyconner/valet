@@ -368,7 +368,7 @@ export function BrowserPane({ sessionId }: { sessionId: string }) {
 
       {!data.settings.enabled ? (
         <div className="grid flex-1 place-content-center gap-3 p-6 text-center text-sm text-muted">
-          <p>Browser access is disabled for this session.</p>
+          <p>Browser access is disabled for this runtime.</p>
           {data.canAdminister ? (
             <Button
               onClick={() =>
@@ -379,7 +379,7 @@ export function BrowserPane({ sessionId }: { sessionId: string }) {
               Enable browser
             </Button>
           ) : (
-            <p>Ask the session owner to enable browser access.</p>
+            <p>Ask the runtime owner to enable browser access.</p>
           )}
         </div>
       ) : runtime?.state !== "ready" ? (
@@ -391,7 +391,7 @@ export function BrowserPane({ sessionId }: { sessionId: string }) {
           )}
           <p>
             {runtime?.correctiveAction ??
-              "Start the browser when you need it. Your coding session stays open."}
+              "Start the browser when you need it. Your thread stays open."}
           </p>
           <Button
             disabled={

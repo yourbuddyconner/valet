@@ -15,7 +15,7 @@ export function truncateBody(text: string, max = BODY_PREVIEW_LEN): string {
 
 /** Pure: child card title — `attributes.title`, falling back to the child id. */
 export function childCardTitle(signal: MessageSignal): string {
-  return signal.attributes?.title || signal.senderSessionId || "child session";
+  return signal.attributes?.title || signal.senderSessionId || "child runtime";
 }
 
 /**

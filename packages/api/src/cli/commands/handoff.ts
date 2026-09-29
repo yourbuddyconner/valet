@@ -1,5 +1,5 @@
 /**
- * `valet handoff <file> [--session <id> | --new-session] [--repo <o/n>]
+ * `valet handoff <file> [--thread <id> | --session <id> | --new-session] [--repo <o/n>]
  *                [--title <t>] [--wait] [--json]`
  *
  * Hands work off from a local coding agent to Valet. The agent writes a
@@ -33,6 +33,7 @@ import type {
 
 /** The subset of `InstanceClient` the `handoff` command needs. */
 export interface HandoffClient {
+  getThread(id: string): Promise<{ sessionId: string }>;
   ensureOrchestrator(): Promise<EnsureWorkspaceRuntimeResponse>;
   createSession(body: CreateSessionRequest): Promise<CreateSessionResponse>;
   sendPrompt(id: string, body: SendPromptRequest): Promise<SendPromptResponse>;
@@ -118,7 +119,7 @@ function printReceipt(receipt: Receipt, json: boolean): void {
   if (json) {
     printJson(receipt);
   } else {
-    printLine(`handed off to ${receipt.sessionId}`);
+    printLine(`handed off to thread ${receipt.threadId}`);
     printLine(receipt.url);
   }
 }
@@ -129,6 +130,15 @@ export async function runHandoff(deps: HandoffDeps, flags: ParsedFlags): Promise
   const wait = takeBooleanFlag(flags, "wait");
   const sessionFlag = typeof flags.flags.session === "string" ? flags.flags.session : undefined;
 
+  const threadFlag = typeof flags.flags.thread === "string" ? flags.flags.thread : undefined;
+  if (flags.flags.thread === true || flags.flags.session === true || threadFlag === "" || sessionFlag === "") {
+    printErr("valet handoff: provide an id after --thread or --session.");
+    return ExitCode.Usage;
+  }
+  if (threadFlag !== undefined && newSession) {
+    printErr("valet handoff: use --thread or --new-session, not both.");
+    return ExitCode.Usage;
+  }
   if (sessionFlag !== undefined && newSession) {
     printErr("valet handoff: --session and --new-session are mutually exclusive");
     return ExitCode.Usage;
@@ -151,7 +161,13 @@ export async function runHandoff(deps: HandoffDeps, flags: ParsedFlags): Promise
   }
 
   let sessionId: string;
-  if (sessionFlag !== undefined) {
+  if (threadFlag !== undefined) {
+    sessionId = (await deps.client.getThread(threadFlag)).sessionId;
+    if (sessionFlag !== undefined && sessionFlag !== sessionId) {
+      printErr("The thread does not belong to the specified runtime. Use its runtime or omit --session.");
+      return ExitCode.Usage;
+    }
+  } else if (sessionFlag !== undefined) {
     sessionId = sessionFlag;
   } else if (newSession) {
     const repoFlag = typeof flags.flags.repo === "string" ? flags.flags.repo : undefined;
@@ -180,7 +196,7 @@ export async function runHandoff(deps: HandoffDeps, flags: ParsedFlags): Promise
   const text = `${provenanceHeader(deps.env)}\n\n${doc}`;
   let sent: SendPromptResponse;
   try {
-    sent = await deps.client.sendPrompt(sessionId, { text });
+    sent = await deps.client.sendPrompt(sessionId, { text, ...(threadFlag ? { threadId: threadFlag } : {}) });
   } catch (err) {
     if (newSession) {
       printErr(`session ${sessionId} was created but the handoff was not delivered.`);
@@ -193,7 +209,7 @@ export async function runHandoff(deps: HandoffDeps, flags: ParsedFlags): Promise
     sessionId,
     threadId: sent.threadId,
     messageId: sent.messageId ?? "",
-    url: `${deps.url}/sessions/${sessionId}`,
+    url: `${deps.url}/threads/${encodeURIComponent(sent.threadId)}`,
   };
   printReceipt(receipt, flags.json);
 

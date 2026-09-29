@@ -43,7 +43,7 @@ export function ReasoningSection() {
   return (
     <Section
       title="Reasoning"
-      description="Set the default and maximum extended-thinking levels for sessions in this organization."
+      description="Set the default and maximum extended-thinking levels for runtimes in this organization."
     >
       {reasoningQ.isLoading && (
         <div className="flex items-center gap-2 py-4 text-sm text-muted">

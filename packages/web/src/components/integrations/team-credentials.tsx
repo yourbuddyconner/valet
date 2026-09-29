@@ -61,7 +61,7 @@ export function TeamCredentials({
       return `This deletes the ${service} credential stored on ${team.name}. Team Integrations cannot recreate this connection. ` +
         "An organization admin manages organization access in Organization settings. Its permissions can differ from this stored connection.";
     }
-    const loss = `Sessions and workflows that run as ${team.name} lose access to ${service}.`;
+    const loss = `Runtimes and workflows that run as ${team.name} lose access to ${service}.`;
     return row.delegatedFrom
       ? `${loss} This removes the team's link only. ${nameFor(row.delegatedFrom)} keeps their own ` +
           `${service} connection and can share it with the team again from Integrations.`
@@ -101,7 +101,7 @@ export function TeamCredentials({
                 <p className="text-xs text-muted">
                   {row.delegatedFrom
                     ? `Team actions use ${nameFor(row.delegatedFrom)}’s account. Access ends if they stop sharing or leave the team.`
-                    : "Used by team sessions and workflows."}
+                    : "Used by team runtimes and workflows."}
                 </p>
                 {row.referenceBroken && (
                   <p className="text-xs text-danger-500">

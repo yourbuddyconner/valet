@@ -136,11 +136,13 @@ describe("workspace briefing evidence", () => {
     const definition = { version: "dag/v1", nodes: [{ id: "finish", type: "stop" }, { id: "review", type: "approval", prompt: "Approve concurrent verification for TKAI-559" }], edges: [] };
     await db.insert(workflowDefinitions).values([
       { id: "wf", orgId: "local-org", ownerType: "user", ownerId: "local-user", name: "TKAI-559", definition, createdAt: 1, updatedAt: 1 },
+      { id: "failed-wf", orgId: "local-org", ownerType: "user", ownerId: "local-user", name: "Failed verification", definition, createdAt: 1, updatedAt: 1 },
+      { id: "timer-wf", orgId: "local-org", ownerType: "user", ownerId: "local-user", name: "Delayed verification", definition, createdAt: 1, updatedAt: 1 },
       { id: "foreign-wf", orgId: "other-org", ownerType: "user", ownerId: "local-user", name: "Foreign", definition, createdAt: 1, updatedAt: 1 },
     ]);
     await db.insert(workflowRuns).values([
       { id: "run", workflowId: "wf", definitionVersionId: "v", definition, params: {}, ownerType: "user", ownerId: "local-user", status: "parked", waitingOn: [{ kind: "signal", nodeId: "review", signalType: "approval:review" }], createdAt: 1, updatedAt: 10 },
-      { id: "failed", workflowId: "wf", definitionVersionId: "v", definition, params: {}, ownerType: "user", ownerId: "local-user", status: "settled", outcome: "failed", createdAt: 1, updatedAt: 11 },
+      { id: "failed", workflowId: "failed-wf", definitionVersionId: "v", definition, params: {}, ownerType: "user", ownerId: "local-user", status: "settled", outcome: "failed", createdAt: 1, updatedAt: 11 },
       { id: "foreign-run", workflowId: "foreign-wf", definitionVersionId: "v", definition, params: {}, ownerType: "user", ownerId: "local-user", status: "settled", createdAt: 1, updatedAt: 12 },
     ]);
     await db.insert(workflowCheckpoints).values([
@@ -148,7 +150,7 @@ describe("workspace briefing evidence", () => {
       { runId: "failed", nodeId: "finish", status: "failed", attempt: 1, error: "Concurrent deliveries duplicated a task.", createdAt: 11 },
       { runId: "foreign-run", nodeId: "finish", status: "completed", attempt: 1, result: { output: "PRIVATE OUTPUT" }, createdAt: 12 },
     ]);
-    await db.insert(workflowRuns).values({ id: "timer", workflowId: "wf", definitionVersionId: "v", definition, params: {}, ownerType: "user", ownerId: "local-user", status: "parked", waitingOn: [{ kind: "timer", nodeId: "delay", wakeAt: 10000 }], createdAt: 1, updatedAt: 13 });
+    await db.insert(workflowRuns).values({ id: "timer", workflowId: "timer-wf", definitionVersionId: "v", definition, params: {}, ownerType: "user", ownerId: "local-user", status: "parked", waitingOn: [{ kind: "timer", nodeId: "delay", wakeAt: 10000 }], createdAt: 1, updatedAt: 13 });
     const sources = await collectWorkspaceBriefingSources(db,"local-org",user);
     expect(sources).toHaveLength(3);
     expect(sources.find(item => item.source.runId === "timer")).toMatchObject({ state: "in_progress", content: expect.stringContaining("10000") });
@@ -160,6 +162,11 @@ describe("workspace briefing evidence", () => {
     const settled = (await collectWorkspaceBriefingSources(db,"local-org",user)).find(item => item.source.runId === "run");
     expect(settled?.state).toBe("updated");
     expect(settled?.content).not.toContain("Pending approval");
+    await db.insert(workflowRuns).values({ id: "retry-success", workflowId: "failed-wf", definitionVersionId: "v", definition, params: {}, ownerType: "user", ownerId: "local-user", status: "settled", outcome: "completed", createdAt: 20, updatedAt: 21 });
+    await db.insert(workflowCheckpoints).values({ runId: "retry-success", nodeId: "finish", status: "completed", attempt: 1, result: { output: "Concurrent verification passed." }, createdAt: 21 });
+    const afterRetry = await collectWorkspaceBriefingSources(db, "local-org", user);
+    expect(afterRetry.find(item => item.source.runId === "failed")).toBeUndefined();
+    expect(afterRetry.find(item => item.source.runId === "retry-success")).toMatchObject({ state: "updated", content: "Concurrent verification passed." });
     expect(await collectWorkspaceBriefingSources(db,"local-org",{ type: "team", id: "other" })).toEqual([]);
   });
 });

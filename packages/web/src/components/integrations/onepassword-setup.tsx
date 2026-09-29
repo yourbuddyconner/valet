@@ -44,13 +44,13 @@ export type OnePasswordTokenScope = "personal" | "org";
 const SCOPE_COPY: Record<OnePasswordTokenScope, { title: string; reach: string; input: string }> = {
   personal: {
     title: "Connect your 1Password account",
-    reach: "This token is yours alone. It reads your own vaults, for sessions you own.",
+    reach: "This token is yours alone. It reads your own vaults, for runtimes you own.",
     input: "1Password personal token",
   },
   org: {
     title: "Connect 1Password for the organization",
     reach:
-      "This token is shared across the organization. Every member's sessions resolve org references through it.",
+      "This token is shared across the organization. Every member's runtimes resolve org references through it.",
     input: "Organization 1Password token",
   },
 };

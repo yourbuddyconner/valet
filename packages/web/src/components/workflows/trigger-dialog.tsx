@@ -1,3 +1,4 @@
+import { AutomationReview } from "~/components/events/automation-review";
 /**
  * TriggerDialog — create or edit a schedule or event trigger.
  *
@@ -64,12 +65,14 @@ export function TriggerDialog({
   workflowId,
   editing,
   schedulesOnly = false,
+  review = false,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   workflowId?: string;
   editing?: WorkflowTriggerItem;
   schedulesOnly?: boolean;
+  review?: boolean;
 }) {
   const isEditing = editing !== undefined;
   const lockedKind: TriggerKind | undefined = editing?.kind ?? (schedulesOnly ? "schedule" : undefined);
@@ -221,13 +224,14 @@ export function TriggerDialog({
           // editing.kind matches `kind` (set in the open-reset effect); TS can't narrow through useState
           const orig = editing as Extract<WorkflowTriggerItem, { kind: "schedule" }>;
           type ScheduleUpdate = {
+            enabled?: boolean;
             name?: string;
             cron?: string;
             timezone?: string;
             prompt?: string;
             input?: unknown;
           };
-          const body: ScheduleUpdate = {};
+          const body: ScheduleUpdate = review && !orig.enabled ? { enabled: true } : {};
           if (name !== orig.name) body.name = name;
           if (cron !== orig.detail.cron) body.cron = cron;
           if (timezone !== orig.detail.timezone) body.timezone = timezone;
@@ -288,12 +292,13 @@ export function TriggerDialog({
           // editing.kind matches `kind` (set in the open-reset effect); TS can't narrow through useState
           const orig = editing as Extract<WorkflowTriggerItem, { kind: "event" }>;
           type EventUpdate = {
+            enabled?: boolean;
             name?: string;
             eventKeys?: string[];
             filters?: unknown[];
             anyChannel?: boolean;
           };
-          const body: EventUpdate = {};
+          const body: EventUpdate = review && !orig.enabled ? { enabled: true } : {};
           if (name !== orig.name) body.name = name;
           if (eventKey !== (orig.detail.eventKeys[0] ?? "")) {
             body.eventKeys = [eventKey];
@@ -349,7 +354,7 @@ export function TriggerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title={title} className="max-w-2xl">
+      <DialogContent title={title} description={review ? "Review the configuration before enabling it." : "Set when this automation runs and what it does."} className="max-w-2xl">
         <div className="grid gap-4">
           {/* Kind picker — only shown when creating */}
           {!lockedKind && (
@@ -607,6 +612,11 @@ export function TriggerDialog({
           )}
 
           {/* Form validation error */}
+          <AutomationReview workflowId={targetKind === "workflow" ? selectedWorkflowId || workflowId : undefined} when={kind === "schedule" ? `${cron} (${timezone})` : eventKey}
+            scope={kind === "schedule" ? "This workspace" : filterRows.map(row => `${row.field} ${row.op} ${row.label || row.value}`).join("; ") || "All matching events"}
+            result={targetKind === "orchestrator" ? prompt : "Run the workflow with its configured steps and inputs"}
+            destination={targetKind === "orchestrator" ? "Workspace assistant, in a scheduled thread" : workflows.find(w => w.id === selectedWorkflowId)?.name || selectedWorkflowId || workflowId}
+          />
           {formError && (
             <div className="rounded border border-danger-500/30 bg-danger-500/10 px-3 py-2 text-xs text-danger-600">
               {formError}
@@ -630,7 +640,7 @@ export function TriggerDialog({
             Cancel
           </Button>
           <Button onClick={() => void submit()} disabled={isPending || missingSetup}>
-            {isPending ? (isEditing ? "Saving…" : "Creating…") : isEditing ? "Save" : "Create"}
+            {isPending ? (isEditing ? "Saving…" : "Creating…") : review && editing && !editing.enabled ? "Enable automation" : isEditing ? "Save" : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>

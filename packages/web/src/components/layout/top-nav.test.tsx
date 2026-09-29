@@ -240,10 +240,10 @@ describe("TopNav", () => {
     expect(screen.getByLabelText("Settings")).toBeTruthy();
   });
 
-  it("does not render a New session button", async () => {
+  it("does not render a New runtime button", async () => {
     renderNav();
     await screen.findByText("Valet");
-    expect(screen.queryByText("New session")).toBeNull();
+    expect(screen.queryByText("New runtime")).toBeNull();
   });
 });
 
@@ -309,3 +309,5 @@ describe("TopNav — sidebar toggle", () => {
     expect(toggle.compareDocumentPosition(logo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+vi.mock("~/components/layout/workspace-assistant", () => ({ WorkspaceAssistantButton: () => <button>Ask Valet</button> }));

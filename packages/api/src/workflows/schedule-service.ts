@@ -7,6 +7,7 @@
 import type { WorkflowDefinition } from "@valet/workflow";
 import { CronExpressionParser } from "cron-parser";
 import { and, eq } from "drizzle-orm";
+import { proposalId } from "../events/proposals.js";
 import { randomUUID } from "node:crypto";
 import type { AppDb } from "../lib/drizzle.js";
 import { workflowDefinitions, workflowSchedules } from "../schema/index.js";
@@ -110,6 +111,7 @@ export async function createWorkflowSchedule(
      * workflow target (owner follows the workflow).
      */
     teamId?: string;
+    proposalKey?: string;
   },
   now = Date.now(),
 ): Promise<{ ok: true; schedule: WorkflowScheduleSummary } | { ok: false; error: string }> {
@@ -190,7 +192,7 @@ export async function createWorkflowSchedule(
   }
 
   const values = {
-    id: randomUUID(),
+    id: input.proposalKey ? proposalId("schedule", owner.orgId, scheduleOwner.ownerType, scheduleOwner.ownerId, input.proposalKey) : randomUUID(),
     orgId: owner.orgId,
     ownerType: scheduleOwner.ownerType,
     ownerId: scheduleOwner.ownerId,
@@ -201,7 +203,7 @@ export async function createWorkflowSchedule(
     cron: input.cron,
     timezone,
     input: input.input ?? null,
-    enabled: true,
+    enabled: !input.proposalKey,
     nextFireAt: next.at,
     createdBy: owner.userId,
     createdAt: now,
@@ -230,15 +232,17 @@ export async function createWorkflowSchedule(
             ));
           if (!target) return [];
         }
-        return tx.insert(workflowSchedules).values(values).returning();
+        const inserted = await tx.insert(workflowSchedules).values(values).onConflictDoNothing().returning();
+        return inserted.length ? inserted : tx.select().from(workflowSchedules).where(eq(workflowSchedules.id, values.id));
       },
     );
     if (!inserted?.[0]) return { ok: false, error: "Team or schedule target is no longer available. Refresh and select an active target." };
     return { ok: true, schedule: rowToSummary(inserted[0]) };
   }
 
-  const inserted = await db.insert(workflowSchedules).values(values).returning();
-  return { ok: true, schedule: rowToSummary(inserted[0]!) };
+  const inserted = await db.insert(workflowSchedules).values(values).onConflictDoNothing().returning();
+  const row = inserted[0] ?? (await db.select().from(workflowSchedules).where(eq(workflowSchedules.id, values.id)))[0]!;
+  return { ok: true, schedule: rowToSummary(row) };
 }
 
 /** Pass `sets` when the caller already holds this request's

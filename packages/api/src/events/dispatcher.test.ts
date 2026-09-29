@@ -474,6 +474,25 @@ describe("EventDispatcher", () => {
     expect(row?.createdBy).toBe("member-9");
   });
 
+  it("does not create a second follow path for a message subscription", async () => {
+    const { deliveryId } = await seedDelivery({
+      target: { kind: "orchestrator", follow: true }, service: "slack",
+      eventKey: "slack.message", eventKeys: ["slack.message"],
+      refs: { channel: "C1" }, summary: "Reply",
+      payload: { type: "message", channel: "C1", user: "U9", text: "reply", ts: "1.3", thread_ts: "1.2" },
+    });
+    const deliver = vi.fn<OrchestratorDeliverFn>(async () => {});
+    const dispatcher = new EventDispatcher({
+      db: tdb.appDb, workflowRunHost: fakeRunHost(), workflowStore: new PgWorkflowStore(tdb.pgdb),
+      deliverToOrchestrator: deliver,
+      resolveChannelOrigin: () => ({ channelType: "slack", threadKey: "slack:C1:1.2" }),
+    });
+    await dispatcher.pollOnce();
+    expect(deliver).toHaveBeenCalledOnce();
+    expect((await getDelivery(deliveryId)).status).toBe("delivered");
+    expect(await findFollowedThread(tdb.appDb, { orgId: ORG, channelType: "slack", channelId: "C1", threadTs: "1.2" })).toBeNull();
+  });
+
   it("signal target: inserts workflow_signals for org runs parked on event:<key> and wakes them", async () => {
     const db = tdb.appDb;
     const now = Date.now();

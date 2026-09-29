@@ -53,10 +53,10 @@ Commands:
   threads     List, create, and inspect workspace threads
   sessions    Legacy runtime commands (compatible with existing scripts)
   send        Send a prompt to a thread
-  upload      Upload files to a session sandbox
+  upload      Upload files with --thread <id>
   handoff     Hand off work from a local agent to Valet
   gates       List and resolve decision gates
-  status      Show instance / session status
+  status      Show instance health or --thread <id> status
   login       Add or authenticate an instance profile
   logout      Remove an instance profile
   instance    Manage instance profiles

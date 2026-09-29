@@ -20,7 +20,7 @@ export function SessionForm({
           value={node.model ?? null}
           onSelect={(model) => onChange({ model })}
           onClear={() => onChange({ model: undefined })}
-          emptyLabel="Use the session default"
+          emptyLabel="Use the runtime default"
           ariaLabel="Model"
         />
       </div>

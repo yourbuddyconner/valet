@@ -121,7 +121,7 @@ function TeamApiKeyControls({ teamId, keys, canMutate }: { teamId: string; keys:
         <details>
           <summary className="cursor-pointer font-medium text-ink">Key access and lifetime</summary>
           <ul className="mt-2 list-disc space-y-2 pl-5">
-            <li>Keys can read, run, and change this team's sessions and workflows, and delete sessions.</li>
+            <li>Keys can read, run, and change this team's runtimes and workflows, and delete runtimes.</li>
             <li>Workflow deletion requires a person with team or organization admin access. Keys cannot manage organization settings or other teams.</li>
             <li>Keys remain valid after their creator leaves. Revoke a key to stop access.</li>
           </ul>

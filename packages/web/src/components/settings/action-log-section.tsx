@@ -235,7 +235,7 @@ function LogRow({
             params={{ sessionId: entry.sessionId }}
             className="inline-flex min-h-11 items-center text-xs text-accent-600 underline sm:min-h-0"
           >
-            session
+            runtime
           </Link>
         )}
         {entry.workflowExecutionId && (

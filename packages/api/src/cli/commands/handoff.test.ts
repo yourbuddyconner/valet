@@ -43,6 +43,7 @@ function stubDeps(opts: StubOpts = {}): {
   const created: CreateSessionRequest[] = [];
   let ensureCalls = 0;
   const client: HandoffClient = {
+    getThread: async () => ({ sessionId: "s1" }),
     ensureOrchestrator: () => {
       ensureCalls += 1;
       return Promise.resolve({ sessionId: "orch_1" });
@@ -143,8 +144,8 @@ describe("runHandoff", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].id).toBe("orch_1");
     expect(sent[0].body.text).toBe(`[Handoff from myhost:/home/me/proj]\n\n${DOC}`);
-    expect(stdout()).toContain("orch_1");
-    expect(stdout()).toContain("http://inst/sessions/orch_1");
+    expect(stdout()).toContain("handed off to thread t1");
+    expect(stdout()).toContain("http://inst/threads/t1");
   });
 
   it("accepts --file as an alternative to the positional", async () => {
@@ -246,7 +247,7 @@ describe("runHandoff", () => {
       sessionId: "orch_1",
       threadId: "t1",
       messageId: "q1",
-      url: "http://inst/sessions/orch_1",
+      url: "http://inst/threads/t1",
     });
   });
 
@@ -271,7 +272,7 @@ describe("runHandoff", () => {
       const code = await runHandoff(deps, parseGlobalFlags(["doc.md", "--wait"]));
       expect(code).toBe(ExitCode.OK);
       expect(stdout()).toContain("on it");
-      expect(stdout()).toContain("orch_1");
+      expect(stdout()).toContain("handed off to thread t1");
     });
 
     it("maps a failed settle to TurnError", async () => {
@@ -280,4 +281,23 @@ describe("runHandoff", () => {
       expect(code).toBe(ExitCode.TurnError);
     });
   });
+});
+
+
+it("hands off to the requested thread without creating a runtime", async () => {
+  const bundle = stubDeps({ files: { "doc.md": DOC } });
+  expect(await runHandoff(bundle.deps, parseGlobalFlags(["doc.md", "--thread", "t1"]))).toBe(ExitCode.OK);
+  expect(bundle.sent[0]).toMatchObject({ id: "s1", body: { threadId: "t1" } });
+  expect(bundle.ensureCalls()).toBe(0);
+  expect(bundle.created).toEqual([]);
+  expect(stdout()).toContain("http://inst/threads/t1");
+});
+
+it("rejects conflicting thread handoff selectors before sending", async () => {
+  for (const selectors of [["--thread", "t1", "--session", "other"], ["--thread", "t1", "--new-session"]]) {
+    const bundle = stubDeps({ files: { "doc.md": DOC } });
+    expect(await runHandoff(bundle.deps, parseGlobalFlags(["doc.md", ...selectors]))).toBe(ExitCode.Usage);
+    expect(bundle.sent).toEqual([]);
+    expect(bundle.created).toEqual([]);
+  }
 });

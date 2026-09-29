@@ -30,12 +30,13 @@ type HubTab = "workflows" | "scheduled";
 
 export const Route = createFileRoute("/workflows/")({
   component: WorkflowsIndexPage,
-  validateSearch: (search: Record<string, unknown>): { tab?: HubTab; run?: string; gate?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { tab?: HubTab; run?: string; gate?: string; review?: string } => ({
     tab:
       search.tab === "scheduled" || search.tab === "triggers"
         ? "scheduled"
         : undefined,
     run: typeof search.run === "string" ? search.run : undefined,
+    review: typeof search.review === "string" ? search.review : undefined,
     gate: typeof search.gate === "string" ? search.gate : undefined,
   }),
 });
@@ -52,6 +53,7 @@ export function WorkflowsIndexPage() {
     tab?: HubTab;
     run?: string;
     gate?: string;
+    review?: string;
   };
   const navigate = useNavigate();
   const tab: HubTab = search.tab ?? "workflows";
@@ -112,7 +114,7 @@ export function WorkflowsIndexPage() {
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
         {tab === "workflows" && <WorkflowsTab creating={creating} onBegin={() => setCreating(true)} onBack={() => setCreating(false)} />}
-        {tab === "scheduled" && <ScheduledTab />}
+        {tab === "scheduled" && <ScheduledTab reviewId={search.review} onReviewClose={() => void navigate({ to: "/workflows", search: { tab: "scheduled" } })} />}
       </div>
     </div>
   );
@@ -335,7 +337,7 @@ function DefinitionRow({
   );
 }
 
-function ScheduledTab() {
+function ScheduledTab({ reviewId, onReviewClose }: { reviewId?: string; onReviewClose?: () => void }) {
   const owner = useListOwner();
-  return <TriggerList owner={owner} schedulesOnly />;
+  return <TriggerList owner={owner} schedulesOnly reviewId={reviewId} onReviewClose={onReviewClose} />;
 }

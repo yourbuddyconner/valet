@@ -205,7 +205,7 @@ describe("a team workspace", () => {
 
   it("says something different from the personal case", () => {
     show(gmail());
-    expect(screen.getByText("Only sessions that you start can use it.")).toBeTruthy();
+    expect(screen.getByText("Only runtimes that you start can use it.")).toBeTruthy();
 
     teams = [team()];
     show(gmail());

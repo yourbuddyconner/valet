@@ -200,7 +200,7 @@ function provenanceLine(p: NonNullable<DecisionGate["provenance"]>): string {
     case "override":
       return "Gated by your personal policy override.";
     case "runtime_grant":
-      return "Gated by a session grant.";
+      return "Gated by a runtime grant.";
     case "plugin_default":
       return "Gated by the plugin's default approval mode.";
     case "risk_default":

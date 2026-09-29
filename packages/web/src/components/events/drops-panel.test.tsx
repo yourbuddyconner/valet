@@ -43,13 +43,13 @@ describe("DropsPanel", () => {
     expect(screen.getByText(/No event receipt is recorded yet/)).toBeTruthy();
     expect(screen.getByText(/No recorded problems in this window/)).toBeTruthy();
     expect(screen.queryByText(/Every event that arrived was handled/)).toBeNull();
-    expect(screen.getByText(/An absent receipt does not establish/)).toBeTruthy();
+    expect(screen.getByText(/Check the integration's delivery logs if a message is missing/)).toBeTruthy();
   });
 
   it("shows a loading state", () => {
     useEventDropsMock.mockReturnValue({ isPending: true, error: null, data: undefined });
     render(<DropsPanel />);
-    expect(screen.getByText(/Loading problems/)).toBeTruthy();
+    expect(screen.getByText(/Loading rejections/)).toBeTruthy();
   });
 
   it("limits searches to 200 characters before it submits them", async () => {
@@ -58,7 +58,7 @@ describe("DropsPanel", () => {
     const user = userEvent.setup();
     render(<DropsPanel onQueryChange={onQueryChange} />);
 
-    const search = screen.getByRole("searchbox", { name: "Search problems" }) as HTMLInputElement;
+    const search = screen.getByRole("searchbox", { name: "Search rejections and failures" }) as HTMLInputElement;
     await user.type(search, "x".repeat(201));
 
     expect(search.value).toBe("x".repeat(200));
@@ -74,7 +74,7 @@ describe("DropsPanel", () => {
     expect(screen.getByRole("alert").textContent).toBe(
       "Search is too long. Shorten the search to 200 characters or fewer.",
     );
-    expect(screen.queryByText("Loading problems…")).toBeNull();
+    expect(screen.queryByText("Loading rejections…")).toBeNull();
     expect(useEventDropsMock).toHaveBeenLastCalledWith(
       { q: query, cursor: undefined, direction: undefined },
       { enabled: false },

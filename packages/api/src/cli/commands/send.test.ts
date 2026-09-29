@@ -138,7 +138,7 @@ describe("render helpers", () => {
     expect(text).toContain("Approve write?");
     expect(text).toContain("approve");
     expect(text).toContain("deny");
-    expect(text).toContain("valet gates resolve gate_1");
+    expect(text).toContain("valet gates resolve gate_1 <actionId> --thread t1");
   });
 });
 
@@ -274,4 +274,14 @@ describe("runSend", () => {
     expect(bundle.ensureCalls).toBe(0);
     expect(bundle.sent[0].id).toBe("sess_9");
   });
+});
+
+
+it("does not silently send to the default runtime when a target flag is empty", async () => {
+  const bundle = stubDeps([]);
+  for (const args of [["hello", "--thread"], ["hello", "--thread="], ["hello", "--session"]]) {
+    expect(await runSend(bundle.deps, parseGlobalFlags(args))).toBe(ExitCode.Usage);
+  }
+  expect(bundle.sent).toEqual([]);
+  expect(bundle.ensureCalls).toBe(0);
 });

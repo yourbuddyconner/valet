@@ -65,13 +65,18 @@ function renderInRouter(ui: React.ReactElement) {
     path: "/sessions/$sessionId",
     component: () => null,
   });
+  const threadRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/threads/$threadId",
+    component: () => null,
+  });
   const runRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/workflows/runs/$runId",
     component: () => null,
   });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([sessionRoute, runRoute]),
+    routeTree: rootRoute.addChildren([sessionRoute, threadRoute, runRoute]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   return render(<RouterProvider router={router} />);
@@ -216,7 +221,7 @@ describe("RunDetailBody", () => {
     }
   });
 
-  it("links a checkpoint to the session it drove and the child run it started", async () => {
+  it("links checkpoints to their thread, legacy runtime, and child run", async () => {
     const data = baseRun({ status: "settled", outcome: "failed" });
     data.checkpoints = [
       {
@@ -227,6 +232,7 @@ describe("RunDetailBody", () => {
         sessionId: "s_abc",
         createdAt: Date.now(),
       },
+      { nodeId: "thread-step", iteration: 0, status: "completed", sessionId: "s_abc", threadId: "thread_abc", createdAt: Date.now() },
       { nodeId: "sub", iteration: 0, status: "completed", childRunId: "wfrun_sub_1", createdAt: Date.now() },
       { nodeId: "set1", iteration: 0, status: "completed", createdAt: Date.now() },
     ];
@@ -240,12 +246,13 @@ describe("RunDetailBody", () => {
         retryPending={false}
       />,
     );
-    expect((await screen.findByText("Open session")).getAttribute("href")).toBe("/sessions/s_abc");
+    expect((await screen.findByText("Open runtime")).getAttribute("href")).toBe("/sessions/s_abc");
+    expect(screen.getByText("Open thread").getAttribute("href")).toBe("/threads/thread_abc");
     expect(screen.getByText("Open child run").getAttribute("href")).toBe(
       "/workflows/runs/wfrun_sub_1",
     );
     // A checkpoint carrying neither id gets no link row.
-    expect(screen.getAllByText("Open session")).toHaveLength(1);
+    expect(screen.getAllByText("Open runtime")).toHaveLength(1);
   });
 
   it("renders checkpoints with status and a result preview", () => {

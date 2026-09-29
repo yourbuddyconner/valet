@@ -1,8 +1,10 @@
+import { eq } from "drizzle-orm";
+import githubPlugin from "@valet/plugin-github/plugin";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PluginActionContext } from "@valet/engine";
 import type { AppDb } from "../lib/drizzle.js";
 import { freshTestPgDb } from "../test-helpers/pg-test-db.js";
-import { eventDropLog, eventReceipts, orgMembers, orgs, users } from "../schema/index.js";
+import { eventDropLog, eventReceipts, eventSubscriptions, orgMembers, orgs, users, teams, teamMembers } from "../schema/index.js";
 import { eventsActionPlugin } from "./actions.js";
 
 const ORG = "event-problems-org";
@@ -31,6 +33,47 @@ describe("eventsActionPlugin", () => {
       { orgId: ORG, userId: "admin", role: "admin" },
       { orgId: ORG, userId: "member", role: "member" },
     ]);
+  });
+
+  it("stores one disabled proposal per owner and preserves enabled configuration on retry", async () => {
+    const tool = eventsActionPlugin(db, [githubPlugin]).actions.find(a => a.id === "events.propose_subscription")!;
+    const input = { proposal_key: "pulls", name: "Pulls", event_keys: ["github.pull_request.opened"] };
+    const results = await Promise.all([tool.execute(input, context("member")), tool.execute(input, context("member"))]);
+    for (const result of results) expect(result).toMatchObject({ success: true, data: { proposal: { kind: "subscription", enabled: false, config: { ownerId: "member" } } } });
+    const rows = await db.select().from(eventSubscriptions);
+    expect(rows).toHaveLength(1);
+    await db.update(eventSubscriptions).set({ enabled: true }).where(eq(eventSubscriptions.id, rows[0]!.id));
+    expect(await tool.execute({ ...input, name: "Changed" }, context("member"))).toMatchObject({ success: true, data: { proposal: { enabled: true, config: { name: "Pulls" } } } });
+    expect(await tool.execute(input, context("admin"))).toMatchObject({ success: true });
+    expect(await db.select().from(eventSubscriptions)).toHaveLength(2);
+    expect(await tool.execute(input, context("member", { owner: { type: "team", id: "foreign" } }))).toMatchObject({ success: false });
+    expect(await db.select().from(eventSubscriptions)).toHaveLength(2);
+  });
+
+  it("persists explicit personal thread preferences and rejects them for team proposals", async () => {
+    const tool = eventsActionPlugin(db, [githubPlugin]).actions.find(a => a.id === "events.propose_subscription")!;
+    const base = { proposal_key: "thread", name: "Thread", event_keys: ["github.pull_request.opened"] };
+    expect(await tool.execute({ ...base, follow: true }, context("member"))).toMatchObject({ success: false, error: expect.stringContaining("slack.app_mention") });
+    expect(await db.select().from(eventSubscriptions)).toHaveLength(0);
+    const prefs = { follow: false, delivery_policy: "ignoreIfMyTeamSubscribed", pause_on_overlap: false };
+    expect(await tool.execute({ ...base, ...prefs }, context("member"))).toMatchObject({
+      success: true, data: { proposal: { enabled: false, config: { target: {
+        follow: false, deliveryPolicy: "ignoreIfMyTeamSubscribed", pauseOnOverlap: false,
+      } } } },
+    });
+    const [stored] = await db.select().from(eventSubscriptions);
+    expect(stored!.target).toMatchObject({ follow: false, deliveryPolicy: "ignoreIfMyTeamSubscribed", pauseOnOverlap: false });
+    for (const preference of [{ delivery_policy: "always" }, { pause_on_overlap: false }]) {
+      expect(await tool.execute({ ...base, ...preference }, context("member", { owner: { type: "team", id: "team" } }))).toMatchObject({
+        success: false, error: expect.stringContaining("personal subscriptions"),
+      });
+    }
+    expect(await db.select().from(eventSubscriptions)).toHaveLength(1);
+    await db.insert(teams).values({ id: "follow-team", orgId: ORG, name: "Follow team", createdAt: Date.now() });
+    await db.insert(teamMembers).values({ teamId: "follow-team", userId: "member", role: "member" });
+    expect(await tool.execute({ ...base, follow: false }, context("member", { owner: { type: "team", id: "follow-team" } }))).toMatchObject({
+      success: true, data: { proposal: { config: { target: { orchestrator: "team", teamId: "follow-team", follow: false } } } },
+    });
   });
 
   function list() {

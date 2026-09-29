@@ -157,8 +157,8 @@ export const NODE_META: Record<DagNodeType, NodeMeta> = {
     defaultNode: (id): ApprovalNode => ({ id, type: 'approval', prompt: '' }),
   },
   session: {
-    label: 'Session',
-    description: 'Start a coding session',
+    label: 'Runtime',
+    description: 'Start a coding runtime',
     defaultNode: (id): SessionNode => ({ id, type: 'session', mode: 'start', prompt: '' }),
   },
   stop: {

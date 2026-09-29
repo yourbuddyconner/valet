@@ -456,3 +456,10 @@ Workflow conversations now use `workflow:<workflow id>:<viewer id>` in the owner
 The creation composer uses an isolated local draft and resolves the workflow Thread before posting its first message. Its submission lock survives opening/closing the global dock. Ask Valet and workflow panels are chat-only; helper Threads also suppress Browser when opened directly. Ordinary Threads retain browser access.
 
 Local visual checks confirmed a clean new-workflow composer, first-send routing into an isolated conversation, and no Browser tab in the workflow panel. Full validation remains deferred.
+
+
+## Routing acceptance update: 2026-09-29
+
+The [routing acceptance matrix](2026-09-29-routing-acceptance.md) records deterministic coverage and external verification limits. Thread creation now materializes reserved team runtimes. Gate prompt addresses use the existing durable engine reference table. ChannelHost restores them before ingress and rechecks current authority for each callback.
+
+Only Slack mention deliveries establish follow bindings. Message subscriptions deliver later replies through their own dispatcher path. This prevents a second follow path from duplicating each reply.

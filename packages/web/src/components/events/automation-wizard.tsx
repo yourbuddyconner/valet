@@ -1,3 +1,5 @@
+import { AutomationReview } from "./automation-review";
+import { parseSlackThreadLink } from "./slack-thread-preset";
 import { DeliveryPreferences, type DeliveryPreferencesValue } from "./delivery-preferences";
 /**
  * AutomationWizard — one flow for the creation surfaces that used to be
@@ -79,7 +81,7 @@ interface SelectedChannel {
 }
 
 /** The outcome the reader picks first. It decides the steps and the store. */
-type Outcome = "reply" | "workflow" | "notify" | "advanced" | "schedule";
+type Outcome = "reply" | "workflow" | "notify" | "advanced" | "schedule" | "thread";
 
 /** The workspace that owns the event rule or scheduled prompt. */
 type OrchestratorChoice =
@@ -150,6 +152,8 @@ export function AutomationWizard({
 
   const [step, setStep] = useState<Step>(replyTeam ? 2 : 1);
   const [outcome, setOutcome] = useState<Outcome>("reply");
+  const [threadLink, setThreadLink] = useState("");
+  const threadPreset = parseSlackThreadLink(threadLink);
   const [name, setName] = useState("");
   const [keys, setKeys] = useState<Set<string>>(new Set());
   const [filterRows, setFilterRows] = useState<UiFilterRow[]>([]);
@@ -230,7 +234,7 @@ export function AutomationWizard({
   // Only the advanced outcome shows the raw multi-event picker. The workflow
   // and notify outcomes still pick one event, but never carry a target the
   // outcome forbids.
-  const isEventOutcome = outcome === "workflow" || outcome === "notify" || outcome === "advanced";
+  const isEventOutcome = outcome === "workflow" || outcome === "notify" || outcome === "advanced" || outcome === "thread";
 
   const filterFields = unionFilterFields(services, keys);
 
@@ -262,6 +266,7 @@ export function AutomationWizard({
       return step === 2 && replyScoped && (!replyTeam || targetReady);
     }
     if (step === 2) {
+      if (outcome === "thread") return threadPreset !== null;
       return isSchedule ? cron.trim().length > 0 : keys.size > 0;
     }
     if (step === 3) return targetReady;
@@ -275,6 +280,13 @@ export function AutomationWizard({
   function next() {
     setError(null);
     setCollisions(null);
+    if (step === 2 && outcome === "thread" && threadPreset) {
+      setKeys(new Set(["slack.message"]));
+      setFilterRows([
+        { id: "thread-channel", field: "channel", op: "eq", value: threadPreset.channel },
+        { id: "thread-timestamp", field: "thread_ts", op: "eq", value: threadPreset.threadTs },
+      ]);
+    }
     setStep((s) => (Math.min(s + 1, plan.count) as Step));
   }
   function back() {
@@ -378,7 +390,7 @@ export function AutomationWizard({
         outcome === "notify"
           ? { ...orchestratorTargetFrom(target), follow: false, ...templates, ...(target.kind === "orchestrator" && target.orchestrator === "user" ? deliveryPreferences : {}) }
           : target.kind === "orchestrator"
-            ? { ...target, ...templates, ...(target.orchestrator === "user" ? deliveryPreferences : {}) }
+            ? { ...target, ...(outcome === "thread" ? { follow: false } : {}), ...templates, ...(target.orchestrator === "user" ? deliveryPreferences : {}) }
             : target;
       createSubscription.mutate(
         {
@@ -465,7 +477,13 @@ export function AutomationWizard({
             />
           )}
 
-          {step === 2 && isEventOutcome && (
+          {step === 2 && outcome === "thread" && <div className="space-y-2">
+            <Label htmlFor="slack-thread-link">Slack thread link</Label>
+            <Input id="slack-thread-link" value={threadLink} onChange={(event) => setThreadLink(event.target.value)} placeholder="https://your-team.slack.com/archives/…" />
+            <p className="text-xs text-muted">In Slack, copy a message link. Only future human replies in that thread will match. Valet must have access to the channel.</p>
+            {threadLink && !threadPreset && <p role="alert" className="text-xs text-danger-500">Paste a Slack message link from Copy link.</p>}
+          </div>}
+          {step === 2 && isEventOutcome && outcome !== "thread" && (
             <EventMatchStep
               services={services}
               catalogLoading={catalogQ.isLoading}
@@ -514,6 +532,12 @@ export function AutomationWizard({
             <ReviewStep
               name={name}
               onNameChange={setName}
+              following={outcome === "reply" ? follow : outcome === "thread" ? false : undefined}
+              reviewAudience={outcome === "reply" && target.kind === "orchestrator" && target.orchestrator === "team" ? audience : undefined}
+              workflowId={target.kind === "workflow" ? target.workflowId : undefined}
+              when={isSchedule ? `${cron} (${timezone})` : outcome === "reply" ? "Slack @-mention" : [...keys].join(", ")}
+              scope={outcome === "reply" ? (anyChannel ? "Any accessible channel" : replyChannels.map(c => c.label).join(", ")) : isSchedule ? (scopedTeam?.name ?? "Personal") : describeFilters(filterRows) || "All matching events"}
+              destination={describeTarget(target, workflows, teams, scopedTeam)}
               summary={summarize({
                 outcome,
                 keys,
@@ -602,6 +626,7 @@ function StepHeader({ step, plan }: { step: Step; plan: { labels: string[]; coun
 }
 
 const OUTCOMES: { value: Outcome; title: string; hint: string }[] = [
+  { value: "thread", title: "Subscribe to thread", hint: "Follow future replies in one Slack thread." },
   {
     value: "reply",
     title: "Reply to Slack mentions",
@@ -801,7 +826,7 @@ function ReplyStep({
             Either way, the assistant answers explicit mentions in the selected channels, and
             everyone in those channels sees the replies. While it keeps following a thread, it
             also reads later messages in a thread it has answered, from anyone in that thread.
-            A sender outside the team cannot see or change the assistant's sessions, settings,
+            A sender outside the team cannot see or change the assistant's threads, settings,
             or credentials, but whatever they ask it to do runs with the team's access and
             tools. It answers questions and runs its tools. It does not run or change the
             team's workflows for senders outside the team.
@@ -1305,8 +1330,10 @@ function ThenStep({
 function ReviewStep({
   name,
   onNameChange,
-  summary,
+  summary, when, scope, destination, workflowId, following, reviewAudience,
 }: {
+  following?: boolean; reviewAudience?: string;
+  when: string; scope: string; destination: string; workflowId?: string;
   name: string;
   onNameChange: (v: string) => void;
   summary: string;
@@ -1323,10 +1350,7 @@ function ReviewStep({
           aria-label="Automation name"
         />
       </div>
-      <div className="rounded border border-line bg-ink-wash/40 px-3 py-2">
-        <p className="text-xs font-medium text-muted">Summary</p>
-        <p className="mt-1 text-sm text-ink">{summary}</p>
-      </div>
+      <AutomationReview follow={following} audience={reviewAudience} workflowId={workflowId} when={when} scope={scope} result={summary} destination={destination} />
     </div>
   );
 }

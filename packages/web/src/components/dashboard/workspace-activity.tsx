@@ -136,7 +136,7 @@ function Section({ title, count, icon, children }: { title: string; count: numbe
   return <section aria-label={title}><div className="mb-3 flex items-center gap-2">{icon}<h2 className="font-display text-lg">{title}</h2><span className="text-xs text-muted">{count}</span></div><div className="divide-y divide-line rounded-lg border border-line bg-paper">{children}</div></section>;
 }
 function ActiveRow({ row }: { row: WorkspaceActiveWorkItem }) {
-  return <div className="flex flex-wrap items-center gap-3 px-4 py-3"><Link to="/sessions/$sessionId" params={{ sessionId: row.sessionId }} search={{ thread: row.threadId }} className="min-w-0 flex-1 break-words text-sm font-medium hover:underline">{row.title || "Untitled thread"}</Link><RunStateBadge state={row.state} /><span className="text-xs text-muted">{relativeTime(row.updatedAt)}</span></div>;
+  return <div className="flex flex-wrap items-center gap-3 px-4 py-3"><Link to="/threads/$threadId" params={{ threadId: row.threadId }} className="min-w-0 flex-1 break-words text-sm font-medium hover:underline">{row.title || "Untitled thread"}</Link><RunStateBadge state={row.state} /><span className="text-xs text-muted">{relativeTime(row.updatedAt)}</span></div>;
 }
 function SessionRow({ row }: { row: SessionSummary }) {
   return <div className="flex flex-wrap items-center gap-3 px-4 py-3"><Link to="/sessions/$sessionId" params={{ sessionId: row.id }} className="min-w-0 flex-1 break-words text-sm font-medium hover:underline">{row.title || "Untitled work"}</Link><RunStateBadge state={row.runState} /><span className="text-xs text-muted">{relativeTime(row.lastActivityAt)}</span></div>;
@@ -151,7 +151,7 @@ function ResultRow({ item }: { item: ResultItem }) {
   return <li className="flex gap-3"><Icon aria-hidden className="mt-1 h-4 w-4 shrink-0 text-moss" /><div className="min-w-0 flex-1">
     {item.token ? <Link to="/a/$token" params={{ token: item.token }} className="break-words text-sm font-medium hover:underline">{item.title}</Link> : item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 break-words text-sm font-medium hover:underline">{item.title}<ArrowUpRight className="h-3 w-3 shrink-0" /></a> : <span className="break-words text-sm font-medium">{item.title}</span>}
     <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted"><span>{label}</span><span>{relativeTime(item.time)}</span>
-      {item.sessionId && <Link to="/sessions/$sessionId" params={{ sessionId: item.sessionId }} search={{ thread: item.threadId }} className="text-moss hover:underline">{item.threadId ? "Open thread" : "Open work"}</Link>}
+      {item.threadId ? <Link to="/threads/$threadId" params={{ threadId: item.threadId }} className="text-moss hover:underline">Open thread</Link> : item.sessionId && <Link to="/sessions/$sessionId" params={{ sessionId: item.sessionId }} className="text-moss hover:underline">Open work</Link>}
       {item.runId && <Link to="/workflows/runs/$runId" params={{ runId: item.runId }} className="text-moss hover:underline">Open workflow run</Link>}
     </div>
   </div></li>;

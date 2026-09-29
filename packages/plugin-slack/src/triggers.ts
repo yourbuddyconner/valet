@@ -221,6 +221,7 @@ const triggerSpecs: TriggerSpec[] = [
             options: { source: "slack.channels" },
           },
           { field: "channel_type", path: "channel_type", description: "Conversation type (channel, group, im, mpim)" },
+          { field: "thread_ts", path: "thread_ts", description: "Parent message timestamp, to match replies in one thread" },
           {
             field: "user",
             path: "user",

@@ -57,6 +57,7 @@ vi.mock("~/api/settings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/api/settings")>();
   return {
     ...actual,
+    useMe: () => ({ data: { id: "user-1" }, error: null }),
     useModels: () => ({ data: { models: [] }, isLoading: false, error: null }),
     useModelTiers: () => ({
       data: { xs: [], s: [], m: [], l: [], xl: [] },
@@ -72,7 +73,10 @@ vi.mock("~/api/workspace-runtime", () => ({
 
 }));
 
-vi.mock("~/stores/stream", () => ({
+vi.mock("~/stores/stream", async (importOriginal) => ({
+  ...await importOriginal<typeof import("~/stores/stream")>(),
+  useThreadLiveStatus: () => ({ status: "idle" }),
+  useQueueStateForThread: () => undefined,
   useStreamStore: () => undefined,
 }));
 

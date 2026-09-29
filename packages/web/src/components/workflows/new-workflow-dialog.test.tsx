@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderTemplate, type TemplateContext } from "@valet/workflow";
 import { beforeEach, describe, expect, it, vi } from "vitest";

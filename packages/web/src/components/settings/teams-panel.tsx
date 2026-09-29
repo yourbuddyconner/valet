@@ -387,8 +387,8 @@ function TeamDefaults({
         )}
       </div>
       <p className="text-xs text-muted">
-        New sessions started in this team's workspace use this model and reasoning level. A
-        member's personal default wins for sessions that member starts. Existing sessions keep
+        New runtimes started in this team's workspace use this model and reasoning level. A
+        member's personal default wins for runtimes that member starts. Existing runtimes keep
         their settings, including the team assistant if anyone has already opened it.
       </p>
       {patchTeam.error != null && (

@@ -26,7 +26,7 @@ export function TeamOnePasswordToken({ teamId, teamName, canMutate }: {
       <ErrorRow>Could not load the connection. <Button onClick={() => void status.refetch()}>Retry</Button></ErrorRow> :
       <p className="mt-1 text-xs text-muted">{status.data.tokenConnected
         ? "Team token connected."
-        : "No team token connected. Team sessions use the organization token when available."}</p>}
+        : "No team token connected. Team runtimes use the organization token when available."}</p>}
     <p className="mt-1 text-xs text-muted">Valet finds credentials in the vaults this service account can access.</p>
     {canMutate && <div className="mt-2 flex items-center gap-2">
       <Input type="password" autoComplete="new-password" value={draft}

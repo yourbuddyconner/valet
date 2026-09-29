@@ -65,6 +65,7 @@ import { recordThreadUserActivity } from "../services/thread-activity.js";
 import { ensureWorkflowSession, parseWorkflowSessionId } from "../workflows/engine-deps.js";
 import { DbActiveStreamStore, type ActiveStreamStore } from "./active-streams.js";
 import { digestGate } from "./gate-digest.js";
+import { savedGatePrompts, deleteSavedGatePrompts } from "./gate-prompts.js";
 import { consumeLinkCode, identityForExternal, identityForUser, linkIdentity } from "./identity-links.js";
 import { ChannelStreamBridge } from "./stream-bridge.js";
 
@@ -449,7 +450,7 @@ export class ChannelHost {
   recordGatePrompt(gateId: string, ref: GatePromptRef, sessionId: string): void {
     this.gateRefs.set(`${ref.conversationKey}#${ref.messageId}`, { gateId, sessionId });
     const refs = this.gatePrompts.get(gateId) ?? [];
-    refs.push(ref);
+    if (!refs.some(existing => existing.conversationKey === ref.conversationKey && existing.messageId === ref.messageId)) refs.push(ref);
     this.gatePrompts.set(gateId, refs);
   }
 
@@ -465,6 +466,15 @@ export class ChannelHost {
     }
     this.orgId = await this.deps.resolveOrgId();
     const orgId = this.orgId;
+    // Restore callback addresses before starting ingress. Authorization still
+    // runs for each click; a stored address grants no decision authority.
+    const restored = await savedGatePrompts(this.deps.db, orgId);
+    for (const prompt of restored) {
+      const gate = await this.deps.engineStore.getDecisionGate(prompt.sessionId, prompt.gateId);
+      if (!gate) continue;
+      this.recordGatePrompt(prompt.gateId, prompt.ref, prompt.sessionId);
+      this.gateActions.set(prompt.gateId, gate.actions);
+    }
     for (const plugin of this.deps.plugins) {
       for (const factory of plugin.transports ?? []) {
         // start() now runs on the api's background boot chain, so stop()
@@ -527,6 +537,13 @@ export class ChannelHost {
     }
     if (!this.started) return;
     this.startOutbound();
+    // A gate can settle while channel delivery is offline. Clear its old buttons.
+    const restoredGates = new Map(restored.map(prompt => [prompt.gateId, prompt]));
+    for (const prompt of restoredGates.values()) {
+      const gate = await this.deps.engineStore.getDecisionGate(prompt.sessionId, prompt.gateId);
+      if (gate?.status === "resolved" && gate.resolution) await this.deliverGateResolution(gate.id, gate.resolution);
+      else if (gate && gate.status !== "pending") await this.settleGatePrompts(gate.id, gate.status === "expired" ? GATE_EXPIRED_LABEL : GATE_WITHDRAWN_LABEL);
+    }
     // Close streams a previous boot left open. Runs after the transports are
     // up because closing one needs its transport, and after `startOutbound`
     // so a slow sweep cannot delay live traffic.
@@ -1053,6 +1070,12 @@ export class ChannelHost {
       ...prompt,
       ...(sender !== undefined ? { sender } : {}),
     });
+    const gate = await this.deps.engineStore.getDecisionGate(sessionId, prompt.gateId);
+    if (gate) {
+      await this.deps.engineStore.saveDecisionGateRef(sessionId, gate.threadId, gate.id, {
+        channelType: transport.channelType, ref: { channelId: ref.conversationKey, messageId: ref.messageId },
+      });
+    }
     this.gateActions.set(prompt.gateId, prompt.actions);
     this.recordGatePrompt(prompt.gateId, ref, sessionId);
     const settled = this.settledGates.get(prompt.gateId);
@@ -1100,6 +1123,7 @@ export class ChannelHost {
     label: string,
     outcome: { actionId?: string; resolvedAtMs?: number } = {},
   ): Promise<void> {
+    let allUpdated = true;
     for (const ref of this.gatePrompts.get(gateId) ?? []) {
       const channelType = ref.conversationKey.slice(0, ref.conversationKey.indexOf(":"));
       const transport = this.transports.get(channelType);
@@ -1109,14 +1133,18 @@ export class ChannelHost {
         } catch (err) {
           // One stale message (deleted DM, revoked scope) must not keep the
           // other copies of the same prompt un-updated.
+          allUpdated = false;
           console.error(`[channels] ${channelType}: gate prompt update failed`, err);
         }
+      } else {
+        allUpdated = false;
       }
       this.gateRefs.delete(`${ref.conversationKey}#${ref.messageId}`);
     }
 
     this.gatePrompts.delete(gateId);
     this.gateActions.delete(gateId);
+    if (allUpdated) await deleteSavedGatePrompts(this.deps.db, gateId);
   }
 
   /**

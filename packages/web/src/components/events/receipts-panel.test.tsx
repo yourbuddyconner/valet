@@ -49,7 +49,7 @@ it("disables the request for nonadmins and hides even cached receipts", () => {
 it("shows loading and empty states", () => {
   data = undefined; pending = true;
   const view = render(<ReceiptsPanel />);
-  expect(screen.getByText("Loading delivery log…")).toBeTruthy();
+  expect(screen.getByText("Loading incoming events…")).toBeTruthy();
   pending = false; data = { ...fixture, receipts: [], nextCursor: null };
   view.rerender(<ReceiptsPanel />);
   expect(screen.getByText(/No receipts recorded in the last 7 days/)).toBeTruthy();
@@ -93,5 +93,5 @@ it("shows unfinished processing without declaring failure", () => {
   render(<ReceiptsPanel />);
   expect(screen.getByText("Started · no completion recorded")).toBeTruthy();
   fireEvent.click(screen.getByText("About this log"));
-  expect(screen.getByRole("link", { name: "Problems" }).getAttribute("href")).toBe("/events?tab=problems");
+  expect(screen.getByText(/Check the rejections above/)).toBeTruthy();
 });

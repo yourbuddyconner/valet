@@ -92,7 +92,7 @@ export function summaryLines(disclosure: ToolDisclosure, title: string): string[
       : asking.length === 1
         ? `1 of them stops and asks you before it runs.`
         : `${asking.length} of them stop and ask you before they run.`,
-    `Your assistant uses these tools only in a session or a workflow you start.`,
+    `Your assistant uses these tools only in a thread or a workflow you start.`,
   ];
   if (mayLoadMore) {
     lines.push(`${title} may add more tools after you connect.`);
@@ -155,7 +155,7 @@ export function reachLines(teams: ReachableTeam[], title: string): string[] {
   if (teams.length === 0) {
     return [
       `Valet saves this connection for your account.`,
-      `Only sessions that you start can use it.`,
+      `Only runtimes that you start can use it.`,
     ];
   }
   const names = list(teams.map((t) => t.name));

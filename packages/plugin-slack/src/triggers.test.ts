@@ -292,6 +292,7 @@ describe("slackTriggerDefs catalog", () => {
     expect(entry.filters.map((f) => `${f.field}:${f.path}`)).toEqual([
       "channel:channel",
       "channel_type:channel_type",
+      "thread_ts:thread_ts",
       "user:user",
       "text:text",
     ]);

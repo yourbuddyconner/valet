@@ -40,7 +40,7 @@ export function WorkflowCreation({ onBack, onBegin }: { onBack?: () => void; onB
     if (!mounted.current) throw new Error("Workspace changed. Open the saved workflow to continue.");
     const target = await api.ensureWorkflowConversation(workflowId.current);
     if (!mounted.current) throw new Error("Workspace changed. Open the saved workflow to continue.");
-    return { threadId: target.threadId, text: `${text}\n\nHelp me build workflow ${workflowId.current} in this workspace. It currently contains only start and stop nodes. Give it a concise name based on my request. Clarify missing inputs, then use patch_workflow to build its steps incrementally so I can review the canvas. Do not run it or enable schedules or event subscriptions unless I explicitly ask.` };
+    return { threadId: target.threadId, text: `${text}\n\nHelp me build workflow ${workflowId.current} in this workspace. It currently contains only start and stop nodes. Give it a concise name based on my request. Clarify missing inputs, then use patch_workflow to build its steps incrementally so I can review the canvas. Use propose_trigger or propose_schedule for automation so I can review its saved configuration before enabling it. Do not run it or enable schedules or event subscriptions unless I explicitly ask.` };
   }
 
   return <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">

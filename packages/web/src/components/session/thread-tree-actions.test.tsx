@@ -8,7 +8,7 @@
  * this file checks the DOM wiring.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { TooltipProvider } from "~/components/primitives";
@@ -75,6 +75,7 @@ vi.mock("~/api/settings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/api/settings")>();
   return {
     ...actual,
+    useMe: () => ({ data: { id: "user-1" }, error: null }),
     useModels: () => ({ data: { models }, isLoading: false, error: null }),
     useModelTiers: () => ({ data: tierMap, isLoading: false, error: null }),
   };
@@ -89,7 +90,8 @@ vi.mock("~/api/workspace-runtime", () => ({
 // `pendingGates` drives the response-required bell, `queueByThread` the children
 // live-update hook, and the absent `setPendingGates` is never called
 // because the mocked useDecisions returns no data.
-vi.mock("~/stores/stream", () => {
+vi.mock("~/stores/stream", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/stores/stream")>();
   interface FakeStreamState {
     bySession: Record<
       string,
@@ -98,6 +100,9 @@ vi.mock("~/stores/stream", () => {
     setPendingGates?: (sessionId: string, gates: DecisionGate[]) => void;
   }
   return {
+    ...actual,
+    useThreadLiveStatus: () => ({ status: "idle" }),
+    useQueueStateForThread: () => undefined,
     useStreamStore: (sel: (s: FakeStreamState) => unknown) =>
       sel({ bySession: { "orchestrator:user-1": { pendingGates, queueByThread: {} } } }),
   };
@@ -378,14 +383,14 @@ describe("ThreadTree — response-required bell", () => {
     pendingGates = { g1: gate("g1", "thread-old") };
     renderTree();
 
-    const bell = screen.getByLabelText("Response required");
+    const bell = screen.getByLabelText("Needs approval");
     expect(bell.closest("a")?.textContent).toContain("Gated thread");
-    expect(bell.getAttribute("title")).toBe("Response required");
+    expect(bell.getAttribute("role")).toBe("img");
   });
 
   it("shows no bell when no gate is pending", () => {
     renderTree();
-    expect(screen.queryByLabelText("Response required")).toBeNull();
+    expect(screen.queryByLabelText("Needs approval")).toBeNull();
   });
 
   it("marks each gated thread, and only those", () => {
@@ -397,7 +402,7 @@ describe("ThreadTree — response-required bell", () => {
     pendingGates = { g1: gate("g1", "thread-a"), g2: gate("g2", "thread-b") };
     renderTree();
 
-    const bells = screen.getAllByLabelText("Response required");
+    const bells = screen.getAllByLabelText("Needs approval");
     const marked = bells.map((bell) => bell.closest("a")?.textContent ?? "");
     expect(marked.some((t) => t.includes("Active thread"))).toBe(true);
     expect(marked.some((t) => t.includes("Gated B"))).toBe(true);
@@ -405,7 +410,7 @@ describe("ThreadTree — response-required bell", () => {
     expect(bells).toHaveLength(2);
   });
 
-  it("keeps a gated thread visible when the search query would hide it", async () => {
+  it("keeps approval state in the sidebar when dialog search filters other threads", async () => {
     threads = [
       thread({ id: "thread-new", title: "Newest", createdAt: 3_000 }),
       thread({ id: "thread-gated", title: "Plan the launch", createdAt: 2_000 }),
@@ -415,12 +420,15 @@ describe("ThreadTree — response-required bell", () => {
     const user = userEvent.setup();
     renderTree();
 
-    await user.type(screen.getByLabelText("Search threads"), "Newest");
+    await user.click(screen.getByRole("button", { name: "Search threads" }));
+    await user.type(screen.getByRole("combobox", { name: "Search threads" }), "Newest");
+    const results = within(screen.getByRole("listbox"));
+    expect(results.getByText("Newest")).toBeTruthy();
+    expect(results.queryByText("Plan the launch")).toBeNull();
+    expect(results.queryByText("Old notes")).toBeNull();
+    await user.keyboard("{Escape}");
+    expect(screen.getByLabelText("Needs approval").closest("a")?.textContent).toContain("Plan the launch");
 
-    expect(screen.getByText("Newest")).toBeTruthy();
-    expect(screen.getByText("Plan the launch")).toBeTruthy();
-    expect(screen.queryByText("Old notes")).toBeNull();
-    expect(screen.getByLabelText("Response required")).toBeTruthy();
   });
 
   it("surfaces a gate on an archived thread: toggle bell, then row bell", async () => {
@@ -552,12 +560,14 @@ describe("ThreadTree — sort preference", () => {
     const newer = screen.getByText("Newer");
     expect(older.compareDocumentPosition(newer) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
 
-    await user.click(screen.getByRole("button", { name: "Sort threads" }));
+    await user.click(screen.getByRole("button", { name: "Sidebar options" }));
+    await user.hover(screen.getByRole("menuitem", { name: "Sort chats by" }));
+    await screen.findByRole("menuitemradio", { name: "Created" });
     expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual([
       "Last user activity",
       "Created",
     ]);
-    await user.click(screen.getByRole("menuitemradio", { name: "Created" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Created" }));
     expect(window.localStorage.getItem("valet:thread-sort")).toBe("created");
     view.unmount();
 

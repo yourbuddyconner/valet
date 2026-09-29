@@ -664,7 +664,7 @@ function ConfiguredCard({
         open={confirmRemove}
         onOpenChange={setConfirmRemove}
         title="Remove the GitHub App?"
-        description="Sessions using it for repo access lose that access. The App stays on GitHub, so you can connect it again with its App ID and private key."
+        description="Runtimes using it for repo access lose that access. The App stays on GitHub, so you can connect it again with its App ID and private key."
         confirmLabel="Remove App"
         pendingLabel="Removing…"
         pending={deleteApp.isPending}

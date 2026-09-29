@@ -13,6 +13,9 @@
  * render outside a provider, so the page renders inside one here — the same
  * wrapper `session-header.test.tsx` uses.
  */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
+import { api } from "~/api/client";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   ListAllWorkflowRunsResponse,
@@ -187,6 +190,10 @@ vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (config: unknown) => config,
 }));
 
+vi.mock("~/components/layout/workspace-assistant", () => ({ useWorkspaceAssistant: () => ({ open: vi.fn(), close: vi.fn(), isOpen: false }) }));
+
+vi.mock("~/components/session/composer", () => ({ Composer: () => <textarea aria-label="Workflow request" /> }));
+
 vi.mock("~/api/settings", () => ({
   useModels: () => ({ data: { models: [] }, isLoading: false, error: null }),
   useModelTiers: () => ({ data: { xs: [], s: [], m: [], l: [], xl: [] }, isLoading: false, error: null }),
@@ -272,12 +279,14 @@ function SwitchWorkspace() {
 function renderPage(workspace = PERSONAL) {
   window.localStorage.setItem("valet:workspace", workspace);
   return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <TooltipProvider>
       <WorkspaceScopeProvider>
         <SwitchWorkspace />
         <WorkflowsIndexPage />
       </WorkspaceScopeProvider>
-    </TooltipProvider>,
+    </TooltipProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -355,7 +364,8 @@ describe("WorkflowsIndexPage", () => {
 
   it("opens the New workflow dialog, defaults the name field, and posts the entered name on Create", async () => {
     renderPage();
-    fireEvent.click(screen.getByRole("button", { name: "New workflow" }));
+    await userEvent.click(screen.getByRole("button", { name: "Workflow options" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Manual setup" }));
 
     const nameInput = screen.getByLabelText("Name") as HTMLInputElement;
     expect(nameInput.value).toBe("Untitled workflow");
@@ -410,7 +420,10 @@ describe("WorkflowsIndexPage", () => {
 
     expect(screen.getByText("Workflow approval")).toBeTruthy();
     expect(screen.getByText("Tool permission")).toBeTruthy();
-    expect(screen.getAllByText("Ship this release?")).toHaveLength(1);
+    const approvalRow = screen.getAllByTestId("action-required-item")[0];
+    const details = approvalRow.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(within(approvalRow).getByText("Ship this release?", { selector: "summary *" })).toBeTruthy();
     expect(screen.getAllByText("slack.send_message").length).toBeGreaterThan(0);
     expect(screen.getByText("Started by schedule (sched_1)")).toBeTruthy();
   });
@@ -468,11 +481,14 @@ describe("WorkflowsIndexPage", () => {
     expect(screen.queryByTestId("template-gallery")).toBeNull();
   });
 
-  it("offers creation without templates when the list is empty", () => {
+  it("offers the workflow composer without templates when the list is empty", async () => {
+    vi.spyOn(api, "ensureWorkspaceRuntime").mockResolvedValue({ sessionId: "workspace-runtime" });
     workflowsData.workflows = [];
     renderPage();
     expect(screen.queryByTestId("template-gallery")).toBeNull();
-    expect(screen.getByText(/no workflows yet/i)).toBeTruthy();
+    expect(await screen.findByText("What would you like to automate?")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Workflow request" })).toBeTruthy();
+    expect(api.ensureWorkspaceRuntime).toHaveBeenCalledWith("user");
   });
 
   it("links the workflow directly to its latest failed run", () => {
@@ -501,7 +517,8 @@ describe("WorkflowsIndexPage — team ownership", () => {
     // switcher and could contradict it, so the list could show one
     // workspace while Create filed the new workflow under another.
     renderPage("team_1");
-    fireEvent.click(screen.getByRole("button", { name: "New workflow" }));
+    await userEvent.click(screen.getByRole("button", { name: "Workflow options" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Manual setup" }));
 
     expect(screen.queryByLabelText("Owner")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -517,7 +534,8 @@ describe("WorkflowsIndexPage — team ownership", () => {
 
   it("sends no teamId in your own workspace", async () => {
     renderPage();
-    fireEvent.click(screen.getByRole("button", { name: "New workflow" }));
+    await userEvent.click(screen.getByRole("button", { name: "Workflow options" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Manual setup" }));
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(createMutateAsync).toHaveBeenCalled());

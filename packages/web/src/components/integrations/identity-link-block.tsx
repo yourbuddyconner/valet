@@ -220,7 +220,7 @@ export function IdentityLinkBlock({ link, title }: { link: IdentityLinkStatus; t
     // pings on the provider stop with them.
     const unlinkDescription =
       `Messages from this ${title} account stop reaching your assistant, and it stops ` +
-      `pinging you there when a session needs you. To undo this, link the account ` +
+      `pinging you there when a thread needs you. To undo this, link the account ` +
       `again with a new code.`;
     return (
       <div className="space-y-1">

@@ -34,6 +34,8 @@ import { EngineHost } from "../engine/host.js";
 import { PgCredentialStore } from "../plugins/credential-store.js";
 import { deriveSecretKey } from "../lib/secret-crypto.js";
 import type { AttentionEvent } from "../orchestrator/attention.js";
+import { savedGatePrompts } from "./gate-prompts.js";
+import { wireAttentionRouter } from "../orchestrator/attention-wiring.js";
 import { linkIdentity, setNotifyAttention } from "./identity-links.js";
 import { ChannelHost, type ChannelHostDeps } from "./host.js";
 import { defaultAssistantSessionFor } from "../test-helpers/assistant-session.js";
@@ -1572,6 +1574,103 @@ describe("ChannelHost outbound delivery", () => {
       { timeout: 3000 },
     );
     expect(fakeTransport.answered.some((a) => a.callbackId === "cb2" && a.text === undefined)).toBe(true);
+  });
+
+  it("routes a child gate through its parent audience to Slack and resolves only the child after host restart", async () => {
+    await host.stop();
+    class SlackContractTransport extends FakeTransport {
+      override readonly channelType = "slack";
+    }
+    const slack = new SlackContractTransport();
+    await engineCredentials.save({ type: "org", id: ORG_ID }, "slack", { type: "bot_token", accessToken: "contract-token" });
+    await linkIdentity(testDb.appDb, { provider: "slack", externalId: "U_PARENT", userId: USER_ID });
+    host = new ChannelHost({
+      db: testDb.appDb, engineHost, engineStore, eventStream, engineCredentials, workflowStore, actionPluginByService,
+      plugins: [{ name: "slack-contract", version: "0", transports: [{ channelType: "slack", create: () => slack }] }],
+      resolveOrgId: async () => ORG_ID,
+    });
+    await host.start();
+    const unwire = wireAttentionRouter({ db: testDb.appDb, engineStore, eventStream, channels: [host.attentionDeliverer()] });
+    try {
+      const parent = await defaultAssistantSessionFor({ db: testDb.appDb, engineHost }, { type: "user", id: USER_ID }, { actorUserId: USER_ID, orgId: ORG_ID });
+      const childId = `child-slack-${randomUUID()}`;
+      await testDb.appDb.insert(agentSessions).values({
+        id: childId, userId: USER_ID, orgId: ORG_ID, workspace: "/tmp/child-slack-contract",
+        ownerType: "user", ownerId: USER_ID, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const child = await engineHost.childSessionFor(childId, {
+        parentSessionId: parent.id, parentThreadId: parent.thread().id,
+        actorUserId: USER_ID, orgId: ORG_ID, owner: parent.owner, workspace: "/tmp/child-slack-contract",
+      });
+      faux.setResponses([
+        fauxAssistantMessage([fauxToolCall("call_tool", { tool_id: "fake.do_thing", params: {}, summary: "child action" }, { id: "child-action" })], { stopReason: "toolUse" }),
+        fauxAssistantMessage("child finished"),
+      ]);
+      await child.thread().submitPrompt({ text: "perform the child action" }, { dispatchId: `child:${randomUUID()}` });
+      await vi.waitFor(() => expect(slack.gatePrompts).toHaveLength(1), { timeout: 5000 });
+      const prompt = slack.gatePrompts[0];
+      expect(prompt.conversationKey).toContain("U_PARENT");
+      expect(host.gateForRef(prompt)).toMatchObject({ sessionId: child.id, gateId: prompt.prompt.gateId });
+      expect(await parent.pendingDecisionGates()).toHaveLength(0);
+      // Rebuild the channel host; its callback maps must come from durable refs.
+      await host.stop();
+      host = new ChannelHost({
+        db: testDb.appDb, engineHost, engineStore, eventStream, engineCredentials, workflowStore, actionPluginByService,
+        plugins: [{ name: "slack-contract", version: "0", transports: [{ channelType: "slack", create: () => slack }] }],
+        resolveOrgId: async () => ORG_ID,
+      });
+      await host.start();
+      expect(host.gateForRef(prompt)).toMatchObject({ sessionId: child.id, gateId: prompt.prompt.gateId });
+      expect(slack.gatePrompts).toHaveLength(1);
+      await linkIdentity(testDb.appDb, { provider: "slack", externalId: "U_OUTSIDER", userId: "outsider" });
+      await host.handleUpdate("slack", inbound({
+        dispatchId: `slack:${randomUUID()}`, conversationKey: prompt.conversationKey,
+        sender: { externalId: "U_OUTSIDER" }, kind: "gate_callback",
+        gateCallback: { actionId: "approve", callbackId: "outsider", ref: prompt },
+      }));
+      expect((await engineStore.getDecisionGate(child.id, prompt.prompt.gateId))?.status).toBe("pending");
+      expect(slack.answered.find(answer => answer.callbackId === "outsider")?.text).toContain("expired");
+      await host.handleUpdate("slack", inbound({
+        dispatchId: `slack:${randomUUID()}`, conversationKey: prompt.conversationKey,
+        sender: { externalId: "U_PARENT" }, kind: "gate_callback",
+        gateCallback: { actionId: "approve", callbackId: "child-slack-approve", ref: prompt },
+      }));
+      await vi.waitFor(async () => {
+        expect((await engineStore.getDecisionGate(child.id, prompt.prompt.gateId))?.status).toBe("resolved");
+        expect(slack.gateEdits).toHaveLength(1);
+      });
+      expect(await parent.pendingDecisionGates()).toHaveLength(0);
+      expect(slack.answered).toContainEqual({ callbackId: "child-slack-approve", text: undefined });
+    } finally {
+      unwire();
+    }
+  });
+
+  it.each(["resolved", "expired", "withdrawn"] as const)("clears a gate card that became %s while the channel host was offline", async (status) => {
+    const session = await defaultAssistantSessionFor({ db: testDb.appDb, engineHost }, { type: "user", id: USER_ID }, { actorUserId: USER_ID, orgId: ORG_ID });
+    const gate: DecisionGate = {
+      id: "offline-gate", sessionId: session.id, threadId: session.thread().id, queueItemId: "offline-q",
+      resumeKey: "offline", ordinal: 0, type: "approval", title: "Offline approval",
+      actions: [{ id: "approve", label: "Approve" }], status: "pending", createdAt: 1, updatedAt: 1,
+    };
+    await engineStore.saveDecisionGate(session.id, gate.threadId, gate);
+    await host.attentionDeliverer().deliver(USER_ID, {
+      kind: "approval", owner: session.owner, sessionId: session.id, title: gate.title,
+      gate: { id: gate.id, actions: gate.actions },
+    });
+    expect(fakeTransport.gatePrompts).toHaveLength(1);
+    await host.stop();
+    await engineStore.saveDecisionGate(session.id, gate.threadId, {
+      ...gate, status, ...(status === "resolved" ? { resolution: { actionId: "approve", resolvedBy: USER_ID, resolvedAt: Date.now() } } : {}),
+    });
+    host = new ChannelHost({ db: testDb.appDb, engineHost, engineStore, eventStream, engineCredentials,
+      plugins: [{ name: "fake", version: "0", transports: [{ channelType: "fake", create: () => fakeTransport }] }],
+      resolveOrgId: async () => ORG_ID,
+    });
+    await host.start();
+    expect(fakeTransport.gateEdits).toHaveLength(1);
+    expect(host.gateForRef(fakeTransport.gatePrompts[0])).toBeNull();
+    expect(await savedGatePrompts(testDb.appDb, ORG_ID)).toEqual([]);
   });
 
   it("a Slack approval resolves its originating workflow gate", async () => {

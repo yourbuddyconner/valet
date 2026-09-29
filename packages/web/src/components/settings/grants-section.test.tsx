@@ -52,7 +52,7 @@ describe("GrantsSection", () => {
     };
     render(<GrantsSection />);
 
-    expect(screen.getByText("session sess_1")).toBeTruthy();
+    expect(screen.getByText("runtime sess_1")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Revoke grant gmail.gmail.send_email" }));
 
     expect(deleteMutate).not.toHaveBeenCalled();

@@ -127,7 +127,7 @@ describe("reachLines", () => {
     const lines = reachLines([], "Gmail");
     expect(lines).toEqual([
       "Valet saves this connection for your account.",
-      "Only sessions that you start can use it.",
+      "Only runtimes that you start can use it.",
     ]);
   });
 
@@ -143,8 +143,8 @@ describe("reachLines", () => {
     const personal = reachLines([], "Gmail").join(" ");
     const team = reachLines([{ name: "Platform", memberCount: 6 }], "Gmail").join(" ");
     expect(team).not.toBe(personal);
-    expect(personal).toContain("Only sessions that you start can use it.");
-    expect(team).not.toContain("Only sessions that you start can use it.");
+    expect(personal).toContain("Only runtimes that you start can use it.");
+    expect(team).not.toContain("Only runtimes that you start can use it.");
   });
 
   it("names every team the user belongs to", () => {

@@ -93,9 +93,9 @@ describe("acceptImages", () => {
       meta(`new-${i}.png`, "image/png", 10),
     );
     const { accepted, rejected } = acceptImages(current, incoming);
-    expect(accepted.map((f) => f.name)).toEqual(["new-0.png", "new-1.png", "new-2.png", "new-3.png"]);
+    expect(accepted.map((f) => f.name)).toEqual(Array.from({ length: MAX_IMAGES - 1 }, (_, i) => `new-${i}.png`));
     expect(rejected).toHaveLength(1);
-    expect(rejected[0]).toContain("new-4.png");
+    expect(rejected[0]).toContain(`new-${MAX_IMAGES - 1}.png`);
   });
 
   it("refuses a file that crosses the total budget and names the total limit", () => {

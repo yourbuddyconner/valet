@@ -78,7 +78,7 @@ function Primitives() {
         <Section title="Card">
           <Card className="max-w-sm">
             <CardHeader>
-              <CardTitle>Session: dogfood</CardTitle>
+              <CardTitle>Thread: dogfood</CardTitle>
             </CardHeader>
             <CardBody className="text-sm text-muted">
               A short summary of what's happening. Status badges live below.
@@ -120,7 +120,7 @@ function Primitives() {
                 <Button variant="secondary">Open dialog</Button>
               </DialogTrigger>
               <DialogContent
-                title="New session"
+                title="New thread"
                 description="Pick a workspace path. Bash runs in a fresh Docker container against this dir."
               >
                 <div className="grid gap-1">

@@ -310,7 +310,9 @@ export class EventDispatcher {
         // Bind the thread only AFTER the delivery lands, so a mention whose
         // delivery fails does not leave a followed thread with no listener. The
         // threadKey is `{channelType}:{channelId}:{threadTs}`.
-        if (target.follow && origin) {
+        // Message subscriptions already deliver later replies. A second follow
+        // binding would submit each reply twice and outlive the subscription.
+        if (target.follow && origin && event.eventKey === "slack.app_mention") {
           const parts = origin.threadKey.split(":");
           if (parts.length === 3 && parts[1] !== "" && parts[2] !== "") {
             const key = {

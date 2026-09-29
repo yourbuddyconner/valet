@@ -11,7 +11,7 @@ vi.mock("@tanstack/react-router", async importOriginal => {
   const actual = await importOriginal<typeof import("@tanstack/react-router")>();
   return { ...actual,
     Navigate: ({ search }: { search: Record<string, string> }) => <div data-testid="redirect">{JSON.stringify(search)}</div>,
-    Link: ({ children, search }: { children: ReactNode; search: Record<string, string> }) => <a data-testid="origin" data-search={JSON.stringify(search)}>{children}</a>,
+    Link: ({ children, to, params }: { children: ReactNode; to: string; params: Record<string, string> }) => <a data-testid="origin" data-to={to} data-params={JSON.stringify(params)}>{children}</a>,
   };
 });
 vi.mock("~/api/queries", () => ({ useSession: () => ({ data: { owner, isWorkspaceRuntime: sessionId === runtime, parentWork: sessionId === "child" ? { sessionId: runtime, threadId: "parent-thread" } : undefined } }) }));
@@ -41,5 +41,6 @@ it("keeps child history in its own runtime and points back to the team origin", 
   render(<AppSessionPage />);
   expect(screen.getByText("Work history")).toBeTruthy();
   expect(screen.queryByTestId("redirect")).toBeNull();
-  expect(JSON.parse(screen.getByTestId("origin").getAttribute("data-search") ?? "{}")).toEqual({ thread: "parent-thread" });
+  expect(screen.getByTestId("origin").getAttribute("data-to")).toBe("/threads/$threadId");
+  expect(JSON.parse(screen.getByTestId("origin").getAttribute("data-params") ?? "{}")).toEqual({ threadId: "parent-thread" });
 });

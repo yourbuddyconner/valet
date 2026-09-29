@@ -36,21 +36,18 @@ it("resets paged work when the workspace changes", async () => {
     .mockResolvedValueOnce({ sessions: [], nextCursor: null })
     .mockResolvedValue({ sessions: [], nextCursor: null });
   const view = render(<WorkDiscovery />, { wrapper });
-  fireEvent.click(screen.getByText("Activity details"));
   fireEvent.click(await screen.findByText("Recent work · 0 loaded"));
   fireEvent.click(await screen.findByRole("button", { name: "Load more work" }));
   await waitFor(() => expect(api.listWork).toHaveBeenCalledWith(owner, "next"));
   owner = { ownerType: "team", ownerId: "t" };
   view.rerender(<WorkDiscovery />);
-  fireEvent.click(screen.getByText("Activity details"));
   await waitFor(() => expect(api.listWork).toHaveBeenCalledWith(owner, undefined));
-  expect(await screen.findByText("No attention items in the loaded work.")).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Nothing to brief yet" })).toBeTruthy();
 });
 it("shows retry on failed discovery", async () => {
   owner = { ownerType: "team", ownerId: "t" };
   vi.mocked(api.listWork).mockRejectedValue(new Error("denied"));
   render(<WorkDiscovery />, { wrapper });
-  fireEvent.click(screen.getByText("Activity details"));
   expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
   expect(screen.queryByText("No work yet. Select New work to start.")).toBeNull();
 });
@@ -80,7 +77,6 @@ it("hides cached work and pagination when a refresh loses workspace access", asy
     createdAt: 1, updatedAt: 1, lastActivityAt: 1, owner: { type: "team", id: "t" },
   }], nextCursor: "next" });
   render(<QueryClientProvider client={client}><WorkDiscovery /></QueryClientProvider>);
-  fireEvent.click(screen.getByText("Activity details"));
   fireEvent.click(await screen.findByText("Recent work · 1 loaded"));
   expect(await screen.findByText("Private work")).toBeTruthy();
   vi.mocked(api.listWork).mockRejectedValue(new Error("404: workspace not found"));
@@ -112,7 +108,7 @@ it("shows results without creation or artifact management controls", async () =>
   render(<WorkDiscovery />, { wrapper });
   expect(await screen.findByRole("heading", { name: "Nothing to brief yet" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Recent results" })).toBeNull();
-  expect(api.listWork).not.toHaveBeenCalled();
+  expect(api.listWork).toHaveBeenCalledWith(owner, undefined);
   expect(screen.getByRole("heading", { name: "Briefing" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "New work" })).toBeNull();
   expect(screen.queryByRole("button", { name: "All workspace artifacts" })).toBeNull();

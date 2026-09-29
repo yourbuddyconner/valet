@@ -1,3 +1,4 @@
+import { automationProposalRenderer } from "./automation-proposal";
 /**
  * Tool-renderer registry.
  *
@@ -39,6 +40,7 @@ const RENDERERS: ToolRenderer[] = [
   memWriteRenderer,
   skillRenderer,
   threadReadRenderer,
+  automationProposalRenderer,
   workflowRenderer,
   findReplaceRenderer,
   openaiMediaRenderer,

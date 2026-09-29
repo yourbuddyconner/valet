@@ -90,7 +90,7 @@ describe("ActionLogSection — rows", () => {
 
   it("links session provenance to the session route", () => {
     renderSection();
-    const link = screen.getByRole("link", { name: "session" });
+    const link = screen.getByRole("link", { name: "runtime" });
     expect(link.getAttribute("to")).toBe("/sessions/$sessionId");
   });
 

@@ -78,6 +78,22 @@ describe("generic ingest receipt diagnostics", () => {
     expect(await db.appDb.select().from(eventDeliveries)).toHaveLength(1);
   });
 
+  it("fans out to each matching destination once and excludes disabled rules", async () => {
+    await subscribe();
+    const [base] = await db.appDb.select().from(eventSubscriptions);
+    await db.appDb.insert(eventSubscriptions).values([
+      { ...base, id: "workflow-a", target: { kind: "workflow", workflowId: "wf-a" } },
+      { ...base, id: "workflow-b", target: { kind: "workflow", workflowId: "wf-b" } },
+      { ...base, id: "disabled", enabled: false },
+    ]);
+    const first = await ingest("fanout-event");
+    expect(first).toMatchObject({ duplicate: false, deliveries: 3 });
+    expect(await ingest("fanout-event")).toMatchObject({ duplicate: true, deliveries: 0 });
+    const deliveries = await db.appDb.select().from(eventDeliveries);
+    expect(deliveries.map(delivery => delivery.subscriptionId).sort()).toEqual(["receipt-sub", "workflow-a", "workflow-b"]);
+    expect(deliveries.every(delivery => delivery.eventId === first.eventId)).toBe(true);
+  });
+
   it("does not hide an actual persistence error behind receipt diagnostics", async () => {
     await subscribe();
     const transaction = vi.spyOn(db.appDb, "transaction").mockRejectedValueOnce(new Error(SECRET_BODY));

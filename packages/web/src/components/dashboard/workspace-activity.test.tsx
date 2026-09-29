@@ -34,22 +34,22 @@ it("groups PRs and published files under their work with real source links", asy
   expect(pr.getAttribute("href")).toBe("https://github.com/acme/app/pull/42");
   expect(within(results).getByRole("link", { name: "Routing report" }).getAttribute("href")).toBe("/a/report-token");
   expect(within(results).getByText("TKAI-42 · Route events")).toBeTruthy();
-  expect(within(results).getAllByRole("link", { name: "Open thread" })[0]?.getAttribute("href")).toBe("/sessions/s?thread=thread-a");
+  expect(within(results).getAllByRole("link", { name: "Open thread" })[0]?.getAttribute("href")).toBe("/threads/thread-a");
   expect(screen.queryByRole("link", { name: "Unsafe link" })).toBeNull();
   expect(screen.queryByText("Completed")).toBeNull();
   expect(screen.queryByRole("link", { name: "TKAI-42" })).toBeNull();
 });
 it("separates approval from timer waits and shows the requested action", async () => {
-  vi.mocked(api.listRuns).mockImplementation(async filter => ({ runs: filter?.status?.includes("parked") ? [
-    { runId: "approval", workflowId: "wf", workflowName: "Review rollout", status: "parked", needsApproval: true, createdAt: 1, updatedAt: 2 },
-    { runId: "timer", workflowId: "wf", workflowName: "Wait for intake", status: "parked", waitingOn: [{ kind: "timer", nodeId: "wait", wakeAt: 100 }], createdAt: 1, updatedAt: 2 },
-  ] : [] }));
+  vi.mocked(api.listWorkflows).mockResolvedValue({ workflows: [
+    { id: "wf", name: "Review rollout", definition: {}, ownerType: "user", ownerId: "u", createdAt: 1, updatedAt: 1, latestRun: { runId: "approval", workflowId: "wf", status: "parked", createdAt: 1, updatedAt: 2 } },
+    { id: "timer-wf", name: "Wait for intake", definition: {}, ownerType: "user", ownerId: "u", createdAt: 1, updatedAt: 1, latestRun: { runId: "timer", workflowId: "timer-wf", status: "parked", waitingOn: [{ kind: "timer", nodeId: "wait", wakeAt: 100 }], createdAt: 1, updatedAt: 2 } },
+  ] });
   vi.mocked(api.listWorkflowActionRequired).mockResolvedValue({ items: [{ id: "g", runId: "approval", workflowId: "wf", workflowName: "Review rollout", runCreatedAt: 1, owner: { type: "user", id: "u" }, trigger: { type: "manual" }, gate: { nodeId: "review", kind: "approval", prompt: "Check the routing report before rollout." } }], count: 1 });
   setup();
   expect(await screen.findByText("Check the routing report before rollout.")).toBeTruthy();
   expect(within(screen.getByRole("region", { name: "Needs attention" })).getByText("Review rollout")).toBeTruthy();
   expect(within(screen.getByRole("region", { name: "In progress" })).getByText("Wait for intake")).toBeTruthy();
-  expect(api.listRuns).toHaveBeenCalledWith(expect.objectContaining({ workflowIds: ["wf"] }));
+  expect(api.listWorkflows).toHaveBeenCalledWith(expect.objectContaining(owner));
 });
 it("finds old active threads independently of recent work and resolves state precedence", async () => {
   vi.mocked(api.listWorkspaceActiveWork).mockResolvedValue({ items: [

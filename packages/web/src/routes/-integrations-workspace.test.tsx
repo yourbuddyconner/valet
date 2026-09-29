@@ -118,7 +118,7 @@ describe("Integrations workspace isolation", () => {
 
     view.switchTo("b");
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByText("Linear")).toBeNull();
+    expect(screen.queryByText("Linear MCP")).toBeNull();
     expect(await screen.findByText("Sentry")).toBeTruthy();
     expect(screen.getByText("Stored on the team")).toBeTruthy();
     expect(api.listCredentials).toHaveBeenCalledWith("team", "a");
@@ -136,12 +136,12 @@ describe("Integrations workspace isolation", () => {
   it("does not show cached personal or team A data while team B loads or fails", async () => {
     teamId = "a";
     const view = mount();
-    await screen.findByText("Linear");
+    await screen.findByText("Linear MCP");
     let rejectRead: (error: Error) => void = () => {};
     vi.mocked(api.listCredentials).mockReturnValueOnce(new Promise((_resolve, reject) => { rejectRead = reject; }));
     view.switchTo("b");
     expect(screen.getByText("Loading credentials…")).toBeTruthy();
-    expect(screen.queryByText("Linear")).toBeNull();
+    expect(screen.queryByText("Linear MCP")).toBeNull();
     await act(async () => rejectRead(new Error("Forbidden")));
     expect(await screen.findByText("Could not load credentials. Reload the page.")).toBeTruthy();
     // Credential-row controls name their service and their team, so this
@@ -232,7 +232,7 @@ describe("Integrations workspace isolation", () => {
     vi.mocked(api.listCredentials).mockRejectedValue(new Error("Forbidden"));
     await act(async () => { await view.client.invalidateQueries({ queryKey: qkIntegrations.credentials("team", "a") }); });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.queryByText("Linear")).toBeNull();
+    expect(screen.queryByText("Linear MCP")).toBeNull();
     expect(screen.getByText("Could not load credentials. Reload the page.")).toBeTruthy();
   });
 });
@@ -300,7 +300,8 @@ describe("Team account connection", () => {
       services: [{ service: "linear", type: "oauth2", configKeys: ["accessToken"], connected: false, connect: "oauth", dynamic: true, actions: [] }],
     }] });
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Connect Linear" }));
+    fireEvent.click(await screen.findByText("Optional MCP tools"));
+    fireEvent.click(screen.getByRole("button", { name: "Connect via MCP" }));
     const submit = screen.getByRole("button", { name: "Continue to Linear" });
     expect(submit.hasAttribute("disabled")).toBe(true);
     expect(screen.queryByLabelText("Team account token")).toBeNull();
@@ -312,21 +313,21 @@ describe("Team account connection", () => {
     window.history.replaceState(null, "", "/integrations?teamId=a&connected=linear");
     teamId = "a";
     const view = mount();
-    expect(await screen.findByRole("status")).toHaveProperty("textContent", "Connected linear.");
+    expect(await screen.findByRole("status")).toHaveProperty("textContent", "Connected Linear via MCP.");
     expect(setKey).toHaveBeenCalledWith("a");
     setKey.mockClear();
     view.switchTo("b");
     await screen.findByText("Sentry");
     expect(setKey).not.toHaveBeenCalled();
-    expect(screen.queryByText("Connected linear.")).toBeNull();
+    expect(screen.queryByText("Connected Linear via MCP.")).toBeNull();
   });
 
   it("adopts an accessible callback team with the real workspace provider", async () => {
     realWorkspace = true;
     window.history.replaceState(null, "", "/integrations?teamId=a&connected=linear");
     mount();
-    expect(await screen.findByText("Connected linear.")).toBeTruthy();
-    expect(await screen.findByText("Linear")).toBeTruthy();
+    expect(await screen.findByText("Connected Linear via MCP.")).toBeTruthy();
+    expect(await screen.findByText("Linear MCP")).toBeTruthy();
     expect(window.localStorage.getItem("valet:workspace")).toBe("a");
     expect(screen.getByRole("button", { name: "Stop sharing Linear with Team A" })).toBeTruthy();
     expect(api.listCredentials).toHaveBeenCalledWith("team", "a");

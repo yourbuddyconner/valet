@@ -87,6 +87,10 @@ async function gatesResolve(client: GatesClient, flags: ParsedFlags): Promise<nu
 
 /** Pure dispatch over the `gates` subcommands, testable with a stub client. */
 export async function runGates(client: GatesClient, flags: ParsedFlags): Promise<number> {
+  if (flags.flags.thread === true || flags.flags.session === true || flags.flags.thread === "" || flags.flags.session === "") {
+    printErr("Provide an id after --thread or --session.");
+    return ExitCode.Usage;
+  }
   if (flags.flags.thread !== undefined && flags.flags.session !== undefined) {
     printErr("Use --thread or the legacy --session selector, not both.");
     return ExitCode.Usage;

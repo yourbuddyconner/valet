@@ -119,19 +119,17 @@ function CheckpointRow({
       </div>
       {/* The work the node started. On a failed node this is the only way
           to read what actually went wrong. */}
-      {(checkpoint.sessionId || checkpoint.childRunId) && (
+      {(checkpoint.threadId || checkpoint.sessionId || checkpoint.childRunId) && (
         <div className="mt-1 flex flex-wrap gap-x-3 pl-6 text-xs">
-          {checkpoint.sessionId && (
-            <Link
-              to="/sessions/$sessionId"
-              params={{ sessionId: checkpoint.sessionId }}
-              // The thread, when the node recorded one. That route forwards
-              // it to /chat for the caller's own assistant, which is the
-              // only way to land on THIS run's thread instead of the newest.
-              search={checkpoint.threadId ? { thread: checkpoint.threadId } : undefined}
-              className="inline-flex min-h-11 items-center text-muted hover:underline sm:min-h-0"
-            >
-              Open session
+          {checkpoint.threadId ? (
+            <Link to="/threads/$threadId" params={{ threadId: checkpoint.threadId }}
+              className="inline-flex min-h-11 items-center text-muted hover:underline sm:min-h-0">
+              Open thread
+            </Link>
+          ) : checkpoint.sessionId && (
+            <Link to="/sessions/$sessionId" params={{ sessionId: checkpoint.sessionId }}
+              className="inline-flex min-h-11 items-center text-muted hover:underline sm:min-h-0">
+              Open runtime
             </Link>
           )}
           {checkpoint.childRunId && (

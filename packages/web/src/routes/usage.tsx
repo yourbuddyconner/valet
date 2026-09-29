@@ -86,7 +86,7 @@ function StatCard({
 
 const USE_CASE_LABELS: Record<UsageUseCase, string> = {
   orchestrator: "Orchestrator",
-  session: "Sessions",
+  session: "Runtimes",
   workflow: "Workflows",
   proxy: "Proxy (external tools)",
 };
@@ -604,7 +604,7 @@ export function UsagePage() {
             <div>
               <h2 className="text-sm font-medium text-ink mb-2">Outcomes</h2>
               <p className="text-xs text-muted mb-3">
-                Confirmed GitHub actions and Slack deliveries. Model spend is allocated evenly across outcomes in each session or workflow run during this period.
+                Confirmed GitHub actions and Slack deliveries. Model spend is allocated evenly across outcomes in each runtime or workflow run during this period.
               </p>
               {outcomesQ.isLoading ? (
                 <p className="text-xs text-muted">Loading outcomes…</p>
@@ -803,9 +803,9 @@ export function UsagePage() {
                     <details>
                       <summary className="min-h-11 cursor-pointer py-3 sm:min-h-0 sm:py-0">How active agents are counted</summary>
                       <p className="mt-2">
-                        Each session with recorded token usage counts once per member per UTC day.
+                        Each runtime with recorded token usage counts once per member per UTC day.
                         {" "}Averages cover {dailyAgentWindow.days} UTC calendar {dailyAgentWindow.days === 1 ? "day" : "days"}, including zero-activity days and today so far.
-                        {" "}Activity uses the prompt author, then the child’s spawning member; older ordinary sessions use the session user.
+                        {" "}Activity uses the prompt author, then the child’s spawning member; older ordinary runtimes use the runtime owner.
                         {" "}Unattributed activity appears under Team / shared. An agent used by multiple members counts for each.
                         {" "}Spend uses billing attribution and the rolling time range.
                       </p>

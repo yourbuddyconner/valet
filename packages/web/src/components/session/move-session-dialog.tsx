@@ -70,7 +70,7 @@ export function MoveSessionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         title="Move to workspace"
-        description="The session keeps its threads, history, and sandbox. Who can open it changes."
+        description="The runtime keeps its threads, history, and sandbox. Who can open it changes."
       >
         <SelectMenu
           value={selected}
@@ -80,7 +80,7 @@ export function MoveSessionDialog({
         />
         <p className="text-xs text-muted">
           {selectedTeam
-            ? `Everyone on ${selectedTeam.name} can read this session and send messages. Team admins can manage it.`
+            ? `Everyone on ${selectedTeam.name} can read its threads and send messages. Team admins can manage it.`
             : "Only you can open it."}
         </p>
         {move.error != null && <p className="text-xs text-danger-500">{errorText(move.error)}</p>}
@@ -94,7 +94,7 @@ export function MoveSessionDialog({
             Cancel
           </Button>
           <Button type="button" onClick={submit} disabled={unchanged || move.isPending}>
-            {move.isPending ? "Moving…" : "Move session"}
+            {move.isPending ? "Moving…" : "Move runtime"}
           </Button>
         </DialogFooter>
       </DialogContent>

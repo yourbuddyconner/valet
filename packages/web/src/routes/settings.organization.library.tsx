@@ -155,7 +155,7 @@ function OrgSkillsSection({
         <div className="space-y-1">
           <h2 className="font-display text-xl text-ink">Organization skills &amp; prompts</h2>
           <p className="text-sm text-muted">
-            Skills and prompts owned by the org. Every member&apos;s sessions can read them.
+            Skills and prompts owned by the org. Every member&apos;s runtimes can read them.
           </p>
         </div>
         {isAdmin && (

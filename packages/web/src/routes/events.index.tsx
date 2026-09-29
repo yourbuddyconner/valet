@@ -15,6 +15,7 @@ type TabId = "activity" | "subscriptions" | "logs";
 
 interface EventsSearch {
   tab?: TabId;
+  review?: string;
   scope?: FeedScope;
   problemsQ?: string;
   problemsCursor?: string;
@@ -30,7 +31,8 @@ export function readEventsSearch(raw: unknown): EventsSearch {
   const problemsQ = textParam(raw, "problemsQ");
   const problemsCursor = textParam(raw, "problemsCursor");
   const problemsDirection = textParam(raw, "problemsDirection") === "previous" ? "previous" as const : undefined;
-  return { ...(tab ? { tab } : {}), ...(scope ? { scope } : {}), ...(problemsQ ? { problemsQ } : {}), ...(problemsCursor ? { problemsCursor } : {}), ...(problemsDirection ? { problemsDirection } : {}) };
+  const review = textParam(raw, "review");
+  return { ...(review ? { review } : {}), ...(tab ? { tab } : {}), ...(scope ? { scope } : {}), ...(problemsQ ? { problemsQ } : {}), ...(problemsCursor ? { problemsCursor } : {}), ...(problemsDirection ? { problemsDirection } : {}) };
 }
 
 export const Route = createFileRoute("/events/")({
@@ -100,7 +102,7 @@ export function EventsPage() {
             />
           )}
 
-          {tab === "subscriptions" && <SubscriptionsPanel />}
+          {tab === "subscriptions" && <SubscriptionsPanel reviewId={search.review} onReviewClose={() => void navigate({ to: "/events", search: { tab: "subscriptions" } })} />}
           {tab === "logs" && (
             <div className="space-y-8">
             <section aria-label="Rejections and failures">

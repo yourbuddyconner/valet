@@ -219,7 +219,7 @@ function OnePasswordRow() {
       scope="personal"
       connected={settingsQ.data.personalTokenConnected}
       label="1Password"
-      hint="Let an agent read a credential from your vaults instead of you pasting it. Your token reads your own vaults, for sessions you own."
+      hint="Let an agent read a credential from your vaults instead of you pasting it. Your token reads your own vaults, for runtimes you own."
       removeNote={REMOVE_PERSONAL_TOKEN_NOTE}
     />
   );

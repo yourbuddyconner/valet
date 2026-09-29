@@ -11,6 +11,7 @@ import type {
   PluginActionContext,
   PluginActionResult,
 } from "@valet/engine";
+import { proposalResult } from "../events/proposals.js";
 import { ValetError } from "@valet/shared";
 import { WorkflowCursorError, type WorkflowDefinition, type WorkflowEdge } from "@valet/workflow";
 import type { Static, TSchema } from "typebox";
@@ -989,6 +990,43 @@ export function workflowsActionPlugin(getDeps: () => WorkflowServiceDeps): Actio
     },
   });
 
+  const proposalKeySchema = Type.Object({
+    proposal_key: Type.String({ minLength: 1, maxLength: 200, description: "Stable key for this proposal. Reuse on retries; use a new key for a different proposal." }),
+  });
+  const proposeTrigger = action(Type.Intersect([createTrigger.parameters, proposalKeySchema]))({
+    id: "workflows.propose_trigger",
+    name: "Propose workflow event trigger",
+    description: "Save a disabled event trigger for human review. Returns a review link and the stored configuration. Repeated keys return the existing record without changing it. Ask the user to review and enable it in Events.",
+    riskLevel: "low",
+    execute: async ({ workflow_id, name, event_keys, filters, any_channel, proposal_key }, ctx) => {
+      const owner = ownerFromContext(ctx);
+      if (!owner) return NO_OWNER;
+      const result = await createWorkflowTrigger(armDepsFrom(getDeps()), owner, {
+        workflowId: workflow_id, name, eventKeys: event_keys, filters, anyChannel: any_channel, proposalKey: proposal_key,
+      });
+      if (!result.ok) return { success: false, error: result.error };
+      return { success: true, data: proposalResult("subscription", result.trigger.triggerId, result.trigger.enabled, {
+        ...result.trigger, target: { kind: "workflow", workflowId: result.trigger.workflowId },
+      }) };
+    },
+  });
+  const proposeSchedule = action(Type.Intersect([createSchedule.parameters, proposalKeySchema]))({
+    id: "workflows.propose_schedule",
+    name: "Propose schedule",
+    description: "Save a disabled cron schedule for human review. Returns a review link and the stored configuration. Repeated keys return the existing record without changing it. Ask the user to review and enable it in Scheduled.",
+    riskLevel: "low",
+    execute: async ({ workflow_id, prompt, name, cron, timezone, input, proposal_key }, ctx) => {
+      const owner = ownerFromContext(ctx);
+      if (!owner) return NO_OWNER;
+      const result = await createWorkflowSchedule(armDepsFrom(getDeps()), owner, {
+        workflowId: workflow_id, prompt, name, cron, timezone, input, proposalKey: proposal_key,
+        teamId: owner.principal?.type === "team" ? owner.principal.id : undefined,
+      });
+      if (!result.ok) return { success: false, error: result.error };
+      return { success: true, data: proposalResult("schedule", result.schedule.scheduleId, result.schedule.enabled, result.schedule) };
+    },
+  });
+
   const listSchedules = action(
     Type.Object({ workflow_id: Type.Optional(Type.String()) }),
   )({
@@ -1209,10 +1247,12 @@ export function workflowsActionPlugin(getDeps: () => WorkflowServiceDeps): Actio
       resolveApproval,
       listEventTypesAction,
       createTrigger,
+      proposeTrigger,
       listTriggers,
       deleteTrigger,
       updateTrigger,
       createSchedule,
+      proposeSchedule,
       listSchedules,
       deleteSchedule,
       updateSchedule,

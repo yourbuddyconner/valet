@@ -294,10 +294,10 @@ export function askLine(
   });
 }
 
-/** Build the startup banner (instance + session + how to exit). */
-export function chatBanner(instanceName: string, sessionId: string): string {
+/** Build the startup banner with the selected target and exit instructions. */
+export function chatBanner(instanceName: string, sessionId: string, threadId?: string): string {
   return [
-    `valet chat — instance "${instanceName}", session ${sessionId}`,
+    `valet chat — instance "${instanceName}", ${threadId ? `thread ${threadId}` : `runtime ${sessionId}`}`,
     "type a message and press Enter. Ctrl-D or /exit to quit; Ctrl-C cancels a turn.",
   ].join("\n");
 }
@@ -306,6 +306,10 @@ export async function run(args: string[], ctx: CliContext): Promise<number> {
   const readline = await import("node:readline");
 
   const flags = parseGlobalFlags(args);
+  if (flags.flags.thread === true || flags.flags.session === true || flags.flags.thread === "" || flags.flags.session === "") {
+    printErr("Provide an id after --thread or --session.");
+    return ExitCode.Usage;
+  }
   const instance = resolveInstance({
     flag: typeof flags.flags.instance === "string" ? flags.flags.instance : undefined,
     env: process.env.VALET_INSTANCE,
@@ -316,12 +320,12 @@ export async function run(args: string[], ctx: CliContext): Promise<number> {
   let threadId = typeof flags.flags.thread === "string" ? flags.flags.thread : undefined;
   const resolved = threadId ? await client.getThread(threadId) : undefined;
   if (resolved && typeof flags.flags.session === "string" && flags.flags.session !== resolved.sessionId) {
-    printErr("The thread does not belong to the specified runtime.");
+    printErr("The thread does not belong to the specified runtime. Use its runtime or omit --session.");
     return ExitCode.Usage;
   }
   const sessionId = resolved?.sessionId ?? (typeof flags.flags.session === "string" ? flags.flags.session : (await client.ensureOrchestrator()).sessionId);
 
-  printLine(chatBanner(instance.name, sessionId));
+  printLine(chatBanner(instance.name, sessionId, threadId));
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 

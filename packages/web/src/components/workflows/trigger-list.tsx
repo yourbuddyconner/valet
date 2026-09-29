@@ -38,12 +38,15 @@ export function TriggerList({
   workflowId,
   owner,
   schedulesOnly = false,
+  reviewId, onReviewClose,
 }: {
   workflowId?: string;
   /** Scopes the flat hub list to one workspace. Unset per-workflow, where
    * `workflowId` already narrows the list. */
   owner?: OwnerFilter;
   schedulesOnly?: boolean;
+  reviewId?: string;
+  onReviewClose?: () => void;
 }) {
   const { data, isLoading, error } = useWorkflowTriggers(workflowId, owner);
   const workflowsQ = useWorkflows(owner);
@@ -76,7 +79,8 @@ export function TriggerList({
   }
 
   function toggle(t: WorkflowTriggerItem) {
-    const body = { enabled: !t.enabled };
+    if (!t.enabled) { setEditing(t); setDialogOpen(true); return; }
+    const body = { enabled: false };
     void guarded(() =>
       t.kind === "schedule"
         ? updateSchedule.mutateAsync({ id: t.id, body })
@@ -211,7 +215,11 @@ export function TriggerList({
         />
       )}
 
+      {reviewId && data && !triggers.some(t => t.id === reviewId) && <p role="alert" className="text-sm text-muted">This proposal is not in the selected workspace. Switch to its workspace and reopen the review link.</p>}
+      {triggers.filter(t => t.id === reviewId).map(t => <TriggerDialog key={t.id} open review editing={t} schedulesOnly={schedulesOnly}
+        onOpenChange={(open) => { if (!open) onReviewClose?.(); }} />)}
       <TriggerDialog
+        review={editing !== undefined && !editing.enabled}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         workflowId={workflowId}

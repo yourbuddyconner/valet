@@ -384,7 +384,15 @@ describeE2E("CLI e2e against a real `valet serve`", () => {
         };
         expect(receipt.sessionId).toBe(session.id);
         expect(receipt.messageId).not.toBe("");
-        expect(receipt.url).toContain(session.id);
+        expect(receipt.threadId).not.toBe("");
+        expect(new URL(receipt.url).pathname).toBe(`/threads/${encodeURIComponent(receipt.threadId)}`);
+
+        const status = await runCli(["status", "--thread", receipt.threadId, "--json"], dataEnv());
+        expect(status.code, `stderr: ${status.stderr}`).toBe(0);
+        expect(JSON.parse(status.stdout)).toMatchObject({ thread: { id: receipt.threadId }, runtime: { id: session.id } });
+        const followup = await runCli(["handoff", docPath, "--thread", receipt.threadId, "--json"], dataEnv());
+        expect(followup.code, `stderr: ${followup.stderr}`).toBe(0);
+        expect(JSON.parse(followup.stdout)).toMatchObject({ sessionId: session.id, threadId: receipt.threadId, url: receipt.url });
 
         // The doc must be persisted as a user message carrying the provenance
         // header — read it back over the same REST surface the web UI uses.

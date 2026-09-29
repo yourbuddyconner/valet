@@ -149,7 +149,7 @@ export function buildTranscript(ctx: TranscriptContext): string {
     : messages;
 
   const header: string[] = [
-    `# Valet session transcript`,
+    `# Valet thread transcript`,
     ``,
     `Generated: ${now}`,
     ``,
@@ -157,7 +157,7 @@ export function buildTranscript(ctx: TranscriptContext): string {
     `session.id:      ${session.id}`,
     `session.title:   ${session.title ?? "(untitled)"}`,
     `session.workspace: ${session.workspace ?? "(none)"}`,
-    `session.model:   ${session.model ?? "(session default)"}`,
+    `session.model:   ${session.model ?? "(runtime default)"}`,
     `thread.id:       ${threadId ?? "(no active thread)"}`,
     `messages:        ${inThread.length}${threadId ? ` (of ${messages.length} loaded across threads)` : ""}`,
     ``,

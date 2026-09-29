@@ -82,7 +82,7 @@ export function ChildPanel({
       ref={panelRef}
       role="dialog"
       aria-modal="true"
-      aria-label="Child session"
+      aria-label="Child thread"
       tabIndex={-1}
       className="fixed top-[--nav-height] bottom-0 right-0 z-40 flex w-full sm:w-[480px] flex-col border-l border-line bg-paper shadow-lg outline-none"
     >

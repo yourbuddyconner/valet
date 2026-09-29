@@ -91,7 +91,7 @@ describe("childCardTitle", () => {
   });
 
   it("falls back to a generic label when neither is present", () => {
-    expect(childCardTitle({ signalType: "child.settled" })).toBe("child session");
+    expect(childCardTitle({ signalType: "child.settled" })).toBe("child runtime");
   });
 });
 

@@ -64,6 +64,8 @@ describe("workflowsActionPlugin", () => {
       "workflows.list_triggers",
       "workflows.list_workflows",
       "workflows.patch_workflow",
+      "workflows.propose_schedule",
+      "workflows.propose_trigger",
       "workflows.resolve_approval",
       "workflows.save_workflow",
       "workflows.start_run",
@@ -285,6 +287,30 @@ describe("DB-backed actions", () => {
     );
     return created.id;
   }
+
+  it("proposes disabled schedules and preserves enabled records on concurrent retries", async () => {
+    const tool = workflowsActionPlugin(() => deps).actions.find(a => a.id === "workflows.propose_schedule")!;
+    const input = { proposal_key: "morning", name: "Morning", prompt: "Check work", cron: "0 9 * * *" };
+    const results = await Promise.all([tool.execute(input, ctx()), tool.execute(input, ctx())]);
+    for (const result of results) expect(result).toMatchObject({ success: true, data: { proposal: { kind: "schedule", enabled: false, reviewUrl: expect.stringContaining("/workflows?tab=scheduled&review=") } } });
+    expect(await db.select().from(workflowSchedules)).toHaveLength(1);
+    await db.update(workflowSchedules).set({ enabled: true });
+    expect(await tool.execute({ ...input, name: "Changed" }, ctx())).toMatchObject({ success: true, data: { proposal: { enabled: true, config: { name: "Morning" } } } });
+    expect(await db.select().from(workflowSchedules)).toHaveLength(1);
+  });
+
+  it("proposes disabled event triggers and refuses foreign workflows", async () => {
+    deps.plugins = [githubPlugin];
+    const workflowId = await seedWorkflow();
+    const tool = workflowsActionPlugin(() => deps).actions.find(a => a.id === "workflows.propose_trigger")!;
+    const input = { proposal_key: "pulls", workflow_id: workflowId, name: "Pulls", event_keys: ["github.pull_request.opened"] };
+    expect(await tool.execute(input, ctx({ userId: "other" }))).toMatchObject({ success: false });
+    const results = await Promise.all([tool.execute(input, ctx()), tool.execute(input, ctx())]);
+    for (const result of results) expect(result).toMatchObject({ success: true, data: { proposal: { enabled: false, config: { target: { kind: "workflow", workflowId } } } } });
+    expect(await db.select().from(eventSubscriptions)).toHaveLength(1);
+    await db.update(eventSubscriptions).set({ enabled: true });
+    expect(await tool.execute(input, ctx())).toMatchObject({ success: true, data: { proposal: { enabled: true } } });
+  });
 
   it("updates selected workflow models through the focused assistant action", async () => {
     // Size tiers only validate while a target provider holds a key.

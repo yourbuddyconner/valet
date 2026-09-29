@@ -120,10 +120,10 @@ export function NewSessionDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        title="New session"
+        title="New runtime"
         description="The agent runs bash, read, write, and edit tools against this directory inside a Docker sandbox."
       >
-        <CreateScopeLine what="session" />
+        <CreateScopeLine what="runtime" />
         <div className="grid gap-1">
           {/* "Working directory", not "workspace" — that word names the
               switcher scope now (one name for one thing; CLAUDE.md

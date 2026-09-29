@@ -41,7 +41,16 @@ export function createThreadsRouter(forward: (request: Request) => Promise<Respo
     if (!owner) return c.json({ error: "Workspace not found." }, 404);
     const existing = await findDefaultAssistant(c.var.providers.db, c.var.user.orgId, owner);
     if (!existing && c.req.method === "GET") return c.json({ threads: [] });
-    const sessionId = existing?.sessionId ?? (await ensureDefaultAssistantSession(c.var.providers, owner, { actorUserId: c.var.user.id, orgId: c.var.user.orgId })).sessionId;
+    // Team creation reserves the assistant identity before its runtime exists.
+    // A write must materialize that runtime before forwarding to session handlers.
+    if (c.req.method === "GET" && existing) {
+      const [runtime] = await c.var.providers.db.select({ id: agentSessions.id }).from(agentSessions)
+        .where(and(eq(agentSessions.id, existing.sessionId), eq(agentSessions.orgId, c.var.user.orgId))).limit(1);
+      if (!runtime) return c.json({ threads: [] });
+    }
+    const sessionId = c.req.method === "POST"
+      ? (await ensureDefaultAssistantSession(c.var.providers, owner, { actorUserId: c.var.user.id, orgId: c.var.user.orgId })).sessionId
+      : existing!.sessionId;
     return relay(c, `/api/sessions/${encodeURIComponent(sessionId)}/threads`);
   });
 

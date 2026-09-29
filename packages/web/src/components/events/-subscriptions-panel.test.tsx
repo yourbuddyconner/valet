@@ -81,6 +81,8 @@ let feedEnabled: boolean | undefined;
 let subscriptionsEnabled: boolean | undefined;
 /** One stable spy, so a case can assert that Refresh did NOT fetch. */
 const feedRefetch = vi.fn();
+const openAssistant = vi.fn();
+vi.mock("~/components/layout/workspace-assistant", () => ({ useWorkspaceAssistant: () => ({ open: openAssistant }) }));
 
 vi.mock("~/api/events", () => ({
   useEventCatalog: () => ({ data: catalogData, isLoading: false, error: null }),
@@ -189,6 +191,7 @@ beforeEach(() => {
   workflowsData = { workflows: [] };
   teamsData = { teams: [] };
   feedRefetch.mockClear();
+  openAssistant.mockClear();
 });
 
 afterEach(() => {
@@ -198,6 +201,33 @@ afterEach(() => {
 });
 
 describe("SubscriptionsPanel", () => {
+  it("opens assistant setup with a paused proposal request", () => {
+    render(<TooltipProvider><SubscriptionsPanel /></TooltipProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Create with Valet" }));
+    expect(openAssistant).toHaveBeenCalledTimes(1);
+    expect(openAssistant).toHaveBeenCalledWith(expect.stringContaining("save a paused proposal for me to review before enabling it"));
+  });
+
+  it("resets the organization filter when the workspace changes", () => {
+    subscriptionsData = { subscriptions: [
+      subscription({ id: "org", name: "Org watch", ownerType: "org", ownerId: "org_1" }),
+      subscription({ id: "team", name: "Team watch", ownerType: "team", ownerId: "t_eng" }),
+      subscription(),
+    ] };
+    const view = render(<TooltipProvider><SubscriptionsPanel /></TooltipProvider>);
+    expect(screen.getByText("PR alerts")).toBeTruthy();
+    expect(screen.queryByText("Team watch")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Subscription scope"), { target: { value: "organization" } });
+    expect(screen.getByText("Org watch")).toBeTruthy();
+    expect(screen.queryByText("PR alerts")).toBeNull();
+    scopeTeamId = "t_eng";
+    view.rerender(<TooltipProvider><SubscriptionsPanel /></TooltipProvider>);
+    expect((screen.getByLabelText("Subscription scope") as HTMLSelectElement).value).toBe("workspace");
+    expect(screen.getByText("Team watch")).toBeTruthy();
+    expect(screen.queryByText("Org watch")).toBeNull();
+    expect(screen.queryByText("PR alerts")).toBeNull();
+  });
+
   it("asks for the caller's own subscriptions in the personal workspace", () => {
     render(
       <TooltipProvider>
@@ -285,10 +315,9 @@ describe("SubscriptionsPanel", () => {
     ).toBeTruthy();
   });
 
-  // An org-owned subscription belongs to no single workspace. The route
-  // returns it beside every workspace's own rows, and the panel must render
-  // it as manageable in each — it is the only off-switch such a row has.
-  it("lists an org-owned subscription in the personal workspace", () => {
+  // The API includes organization rules. The explicit filter keeps them
+  // manageable without mixing them into workspace-owned rules.
+  it("shows an org-owned subscription only after selecting Organization rules in the personal workspace", () => {
     subscriptionsData = {
       subscriptions: [subscription({ id: "sub_org", name: "Org watch", ownerType: "org", ownerId: "org_1" })],
     };
@@ -297,13 +326,15 @@ describe("SubscriptionsPanel", () => {
         <SubscriptionsPanel />
       </TooltipProvider>,
     );
+    expect(screen.queryByText("Org watch")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Subscription scope"), { target: { value: "organization" } });
     expect(screen.getByText("Org watch")).toBeTruthy();
     expect(screen.getByText("Org")).toBeTruthy();
     const toggle = screen.getByRole("switch", { name: "Disable Org watch" }) as HTMLButtonElement;
     expect(toggle.disabled).toBe(false);
   });
 
-  it("lists an org-owned subscription in a team workspace too", () => {
+  it("shows an org-owned subscription only after selecting Organization rules in a team workspace", () => {
     scopeTeamId = "t_eng";
     subscriptionsData = {
       subscriptions: [subscription({ id: "sub_org", name: "Org watch", ownerType: "org", ownerId: "org_1" })],
@@ -313,6 +344,8 @@ describe("SubscriptionsPanel", () => {
         <SubscriptionsPanel />
       </TooltipProvider>,
     );
+    expect(screen.queryByText("Org watch")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Subscription scope"), { target: { value: "organization" } });
     expect(screen.getByText("Org watch")).toBeTruthy();
     expect(screen.getByText("Org")).toBeTruthy();
     const toggle = screen.getByRole("switch", { name: "Disable Org watch" }) as HTMLButtonElement;
@@ -353,7 +386,8 @@ describe("SubscriptionsPanel", () => {
   // The row badges the assistant that answers the event, not the team that
   // owns the rule: a team has many assistants, and the badge is the way in
   // to the one this rule uses.
-  it("badges a team orchestrator target with its assistant, linked to the editor", () => {
+  it("links a team target to its workspace conversation", () => {
+    scopeTeamId = "t_eng";
     teamsData = { teams: [teamFixture()] };
     subscriptionsData = {
       subscriptions: [
@@ -401,6 +435,7 @@ describe("SubscriptionsPanel", () => {
       </TooltipProvider>,
     );
 
+    fireEvent.change(screen.getByLabelText("Subscription scope"), { target: { value: "organization" } });
     const labels = screen.getAllByText("Org");
     expect(labels).toHaveLength(1);
     expect(labels[0].closest("a")).toBeNull();

@@ -388,7 +388,7 @@ export async function buildNodeProviders(opts: NodeProviderOpts): Promise<Provid
     name: "events-actions",
     version: "0.1.0",
     description: "Agent-facing received event diagnostics.",
-    actions: [eventsActionPlugin(db)],
+    actions: [eventsActionPlugin(db, () => plugins)],
   };
 
   // Plugin filter: config file `plugins` block takes precedence over

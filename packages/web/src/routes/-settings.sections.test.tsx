@@ -240,7 +240,7 @@ describe("ThreadDefaultsPage", () => {
     expect(screen.queryByLabelText(/Personality/)).toBeNull();
     expect(
       screen.getByText(
-        "New sessions you start use this model or size. Existing sessions keep theirs. Switch the model per thread in the chat header. Shared team assistants do not use it.",
+        "Choose a model for new personal threads, or use the valet default. Existing threads keep their settings.",
       ),
     ).toBeTruthy();
   });
@@ -274,7 +274,7 @@ describe("ThreadDefaultsPage", () => {
     fireEvent.focus(input);
 
     // Personal threads do not inherit team defaults.
-    fireEvent.click(within(screen.getByRole("listbox")).getByText("Organization default"));
+    fireEvent.click(within(screen.getByRole("listbox")).getByText("Valet default"));
     expect(patchMeMutate).toHaveBeenCalledWith({ defaultModel: null });
   });
 

@@ -25,7 +25,7 @@ export function OrganizationTeamsPage() {
   const { teamId } = Route.useSearch();
 
   return (
-    <Section title="Teams" description="Group members for scoped session access.">
+    <Section title="Teams" description="Group members for scoped thread access.">
       <SuggestedTeams />
       {directoryQ.isLoading && (
         <div className="flex items-center gap-2 py-4 text-sm text-muted">

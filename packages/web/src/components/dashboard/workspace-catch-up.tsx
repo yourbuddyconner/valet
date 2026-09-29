@@ -99,9 +99,8 @@ function BriefingCard({ briefing }: { briefing: WorkspaceBriefing }) {
     <p className="whitespace-pre-line text-base leading-relaxed text-ink">{briefing.summary}</p>
     <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
       {briefing.latestThread ? <Link
-        to="/sessions/$sessionId"
-        params={{ sessionId: briefing.latestThread.sessionId }}
-        search={{ thread: briefing.latestThread.threadId }}
+        to="/threads/$threadId"
+        params={{ threadId: briefing.latestThread.threadId }}
         className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-moss underline-offset-4 hover:underline sm:min-h-0"
       >Latest thread <ArrowRight aria-hidden className="h-4 w-4" /></Link> : <span className="text-sm text-muted">No linked conversation</span>}
       <span className="text-xs text-muted">Updated {relativeTime(briefing.updatedAt)}</span>
@@ -127,10 +126,10 @@ function BriefingSource({ source }: { source: WorkspaceBriefingSource }) {
   const url = safeResultUrl(source.url);
   return <li className="min-w-0 max-w-full">
     {source.token ? <Link to="/a/$token" params={{ token: source.token }} className={className}>{content}</Link>
-      : source.kind === "thread" && source.sessionId && source.threadId ? <Link to="/sessions/$sessionId" params={{ sessionId: source.sessionId }} search={{ thread: source.threadId }} className={className}>{content}</Link>
+      : source.kind === "thread" && source.threadId ? <Link to="/threads/$threadId" params={{ threadId: source.threadId }} className={className}>{content}</Link>
       : url ? <a href={url} target="_blank" rel="noopener noreferrer" className={className}>{content}<ArrowUpRight aria-hidden className="h-3 w-3 shrink-0" /></a>
       : source.runId ? <Link to="/workflows/runs/$runId" params={{ runId: source.runId }} className={className}>{content}</Link>
-      : source.sessionId && source.threadId ? <Link to="/sessions/$sessionId" params={{ sessionId: source.sessionId }} search={{ thread: source.threadId }} className={className}>{content}</Link>
+      : source.threadId ? <Link to="/threads/$threadId" params={{ threadId: source.threadId }} className={className}>{content}</Link>
       : <span className="inline-flex max-w-full items-center gap-1.5 px-2 py-1 text-xs text-muted">{content}</span>}
   </li>;
 }

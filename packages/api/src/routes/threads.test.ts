@@ -1,3 +1,4 @@
+import type { CreateTeamResponse, CreateTeamApiKeyResponse } from "../wire/types.js";
 import { eq } from "drizzle-orm";
 import { agentSessions, teams, teamMembers } from "../schema/index.js";
 import { afterEach, describe, expect, it } from "vitest";
@@ -44,4 +45,40 @@ describe("thread addressing compatibility", () => {
     const archived = await fetch(`${api.baseUrl}/api/threads?archived=1`);
     expect(await archived.json()).toMatchObject({ threads: expect.arrayContaining([expect.objectContaining({ id: thread.id })]) });
   });
+  it("keeps decisions inside their URL thread and denies team-key policy grants", async () => {
+    api = await bootTestApi({ auth: true });
+    const signup = await fetch(`${api.baseUrl}/api/auth/sign-up/email`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "thread-key@nowhere.test", name: "Admin", password: "correct-horse-battery" }) });
+    const cookie = signup.headers.get("set-cookie")?.match(/better-auth\.session_token=[^;]+/)?.[0];
+    if (!cookie) throw new Error("Missing session cookie");
+    const team = await (await fetch(`${api.baseUrl}/api/teams`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Thread team" }) })).json() as CreateTeamResponse;
+    const key = await (await fetch(`${api.baseUrl}/api/teams/${team.team.id}/api-keys`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "CI" }) })).json() as CreateTeamApiKeyResponse;
+    const headers = { "x-api-key": key.key, "content-type": "application/json" };
+    expect(await (await fetch(`${api.baseUrl}/api/threads`, { headers })).json()).toEqual({ threads: [] });
+    const created = await fetch(`${api.baseUrl}/api/threads`, { method: "POST", headers, body: "{}" });
+    expect(created.status).toBe(201);
+    const first = await created.json() as { id: string; sessionId: string };
+    const second = await (await fetch(`${api.baseUrl}/api/threads`, { method: "POST", headers, body: "{}" })).json() as { id: string; sessionId: string };
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(second.id).not.toBe(first.id);
+    const personal = await (await fetch(`${api.baseUrl}/api/threads`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: "{}" })).json() as { id: string };
+    expect((await fetch(`${api.baseUrl}/api/threads/${personal.id}`, { headers })).status).toBe(404);
+    expect((await fetch(`${api.baseUrl}/api/threads?workspace=user`, { headers })).status).toBe(404);
+    const gate = {
+      id: "thread-key-gate", sessionId: first.sessionId, threadId: first.id,
+      queueItemId: "q-key", resumeKey: "key", ordinal: 0, type: "approval" as const,
+      title: "Approve action?", actions: [{ id: "approve", label: "Approve" }, { id: "always_allow", label: "Always allow" }],
+      status: "pending" as const, createdAt: Date.now(), updatedAt: Date.now(),
+    };
+    await api.providers.engineStore.saveDecisionGate(first.sessionId, first.id, gate);
+    expect(await (await fetch(`${api.baseUrl}/api/threads/${second.id}/decisions`, { headers })).json()).toEqual({ gates: [] });
+    const resolve = (id: string, actionId: string) => fetch(`${api!.baseUrl}/api/threads/${id}/decisions/${gate.id}/resolve`, { method: "POST", headers, body: JSON.stringify({ actionId }) });
+    expect((await resolve(second.id, "approve")).status).toBe(404);
+    expect((await resolve(first.id, "always_allow")).status).toBe(403);
+    expect((await api.providers.engineStore.getDecisionGate(first.sessionId, gate.id))?.status).toBe("pending");
+    const legacyDenial = await fetch(`${api.baseUrl}/api/sessions/${encodeURIComponent(first.sessionId)}/decisions/${gate.id}/resolve`, { method: "POST", headers, body: JSON.stringify({ actionId: "always_allow" }) });
+    expect(legacyDenial.status).toBe(403);
+    expect((await resolve(first.id, "approve")).status).toBe(200);
+    expect((await api.providers.engineStore.getDecisionGate(first.sessionId, gate.id))?.status).toBe("resolved");
+  });
+
 });

@@ -32,7 +32,7 @@ describe("team 1Password connection", () => {
       return { ok: true };
     });
     view();
-    await screen.findByText("No team token connected. Team sessions use the organization token when available.");
+    await screen.findByText("No team token connected. Team runtimes use the organization token when available.");
     const input = screen.getByLabelText("1Password service account token for a");
     fireEvent.change(input, { target: { value: "fake-team-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect token" }));
@@ -46,14 +46,14 @@ describe("team 1Password connection", () => {
   it("clears drafts on team switch and only shows status to a member", async () => {
     vi.mocked(api.getTeamOnePasswordStatus).mockResolvedValue({ tokenConnected: false });
     const rendered = view();
-    await screen.findByText("No team token connected. Team sessions use the organization token when available.");
+    await screen.findByText("No team token connected. Team runtimes use the organization token when available.");
     fireEvent.change(screen.getByLabelText("1Password service account token for a"), { target: { value: "fake-draft" } });
     rendered.switchTeam("b");
     await waitFor(() => expect(api.getTeamOnePasswordStatus).toHaveBeenCalledWith("b"));
     expect(screen.getByLabelText("1Password service account token for b").getAttribute("value")).toBe("");
     cleanup();
     view("c", false);
-    expect(await screen.findByText("No team token connected. Team sessions use the organization token when available.")).toBeTruthy();
+    expect(await screen.findByText("No team token connected. Team runtimes use the organization token when available.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Connect token" })).toBeNull();
   });
 

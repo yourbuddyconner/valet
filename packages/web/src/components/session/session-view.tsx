@@ -404,7 +404,7 @@ function PanelHeader({
     <header className="min-w-0 flex-1 px-4 py-3 flex items-center gap-3">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold tracking-tight truncate text-ink">
-          {title || "Untitled session"}
+          {title || "Untitled thread"}
         </div>
       </div>
       <Link

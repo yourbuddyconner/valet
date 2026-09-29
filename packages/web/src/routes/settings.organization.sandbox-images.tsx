@@ -21,7 +21,7 @@ export function OrganizationSandboxSettingsPage() {
     <div className="space-y-10">
       <Section title="Anonymous image bakes" description="Allow public repository images to build without an org GitHub credential. Off by default.">
         <div className="flex items-center justify-between gap-4 py-4">
-          <p className="text-sm text-muted">Turning this off blocks new anonymous bakes. Existing images and session bindings remain available.</p>
+          <p className="text-sm text-muted">Turning this off blocks new anonymous bakes. Existing images and runtime bindings remain available.</p>
           <Switch
             aria-label="Allow anonymous image bakes"
             checked={org.data?.allowAnonymousImageBakes ?? false}

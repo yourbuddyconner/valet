@@ -86,7 +86,7 @@ export function NotificationsBell() {
           {decisions.data?.items.map(item => <div key={item.gate.id} className="rounded-lg border border-line pb-3">
             <div className="px-3 pt-3 text-sm font-medium">{item.title}</div>
             <DecisionGateCard sessionId={item.sessionId} gate={item.gate} />
-            <a className="ml-3 mt-2 inline-block text-xs text-muted underline" href={`/sessions/${encodeURIComponent(item.sessionId)}?thread=${encodeURIComponent(item.gate.threadId)}`}>Open thread</a>
+            <a className="ml-3 mt-2 inline-block text-xs text-muted underline" href={`/threads/${encodeURIComponent(item.gate.threadId)}`}>Open thread</a>
           </div>)}
         </section>
         <section aria-label="Updates" className="border-t border-line p-4 space-y-3">

@@ -17,6 +17,8 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "~/components/primitives";
 
+vi.mock("~/components/layout/workspace-assistant", () => ({ useWorkspaceAssistant: () => ({ open: vi.fn() }) }));
+
 const catalogData = {
   services: [
     {
@@ -415,7 +417,7 @@ describe("EventsPage — Subscriptions", () => {
    * Review. The advanced outcome is the raw event + filter + target flow.
    */
   function openWizardToTargetStep(eventKey: string) {
-    fireEvent.click(screen.getByRole("button", { name: /New automation/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Manual setup/ }));
     fireEvent.click(screen.getByLabelText(/Advanced \/ custom trigger/)); // What: raw event flow
     clickNext(); // What → Match
     fireEvent.click(screen.getByText(eventKey)); // pick the event key
@@ -437,16 +439,13 @@ describe("EventsPage — Subscriptions", () => {
     );
   });
 
-  it("hides the actions menu and disables the switch for another user's personal subscription", () => {
+  it("hides another user's personal subscription outside the selected workspace", () => {
     subscriptionsData.subscriptions[0].ownerId = "someone-else";
     try {
       openSubscriptionsTab();
       expect(screen.queryByRole("button", { name: "PR alerts actions" })).toBeNull();
-      const toggle = screen.getByRole("switch", { name: "Disable PR alerts" }) as HTMLButtonElement;
-      expect(toggle.disabled).toBe(true);
-      // The list carries every subscription in the org, so a colleague's
-      // personal row is badged — an unbadged row must mean the viewer's own.
-      expect(screen.getByText("Personal")).toBeTruthy();
+      expect(screen.queryByRole("switch", { name: "Disable PR alerts" })).toBeNull();
+      expect(screen.queryByText("PR alerts")).toBeNull();
     } finally {
       subscriptionsData.subscriptions[0].ownerId = "u1";
     }
@@ -475,7 +474,7 @@ describe("EventsPage — Subscriptions", () => {
           name: "Merged PRs",
           eventKeys: ["github.pr.merged"],
           filters: [],
-          target: { kind: "orchestrator", orchestrator: "user" },
+          target: { kind: "orchestrator", orchestrator: "user", deliveryPolicy: "always", pauseOnOverlap: true },
         },
         expect.anything(),
       ),
@@ -484,11 +483,12 @@ describe("EventsPage — Subscriptions", () => {
 
   it("badges a team-owned subscription with the team's name and lets a member manage it", () => {
     teamsData = { teams: [team("t_eng", "Engineering", "member")] };
+    scopeTeamId = "t_eng";
     subscriptionsData.subscriptions[0].ownerType = "team";
     subscriptionsData.subscriptions[0].ownerId = "t_eng";
     try {
       openSubscriptionsTab();
-      expect(screen.getByText("Engineering")).toBeTruthy();
+      expect(screen.getAllByText("Engineering").length).toBeGreaterThan(0);
       const toggle = screen.getByRole("switch", { name: "Disable PR alerts" }) as HTMLButtonElement;
       expect(toggle.disabled).toBe(false);
     } finally {
@@ -503,8 +503,7 @@ describe("EventsPage — Subscriptions", () => {
     subscriptionsData.subscriptions[0].ownerId = "t_eng";
     try {
       openSubscriptionsTab();
-      const toggle = screen.getByRole("switch", { name: "Disable PR alerts" }) as HTMLButtonElement;
-      expect(toggle.disabled).toBe(true);
+      expect(screen.queryByRole("switch", { name: "Disable PR alerts" })).toBeNull();
       expect(screen.queryByRole("button", { name: "PR alerts actions" })).toBeNull();
     } finally {
       subscriptionsData.subscriptions[0].ownerType = "user";

@@ -20,6 +20,8 @@ export interface StatusInput {
   name: string;
   url: string;
   json: boolean;
+  threadId?: string;
+  sessionId?: string;
 }
 
 /**
@@ -54,13 +56,47 @@ export async function runStatus(client: StatusClient, input: StatusInput): Promi
   return ExitCode.OK;
 }
 
+/** Thread addresses resolve to their existing runtime; status does not create work. */
+export async function runTargetStatus(
+  client: Pick<InstanceClient, "getThread" | "getSession">,
+  input: StatusInput,
+): Promise<number> {
+  const thread = input.threadId ? await client.getThread(input.threadId) : undefined;
+  if (thread && input.sessionId && input.sessionId !== thread.sessionId) {
+    printErr("The thread does not belong to the specified runtime. Use its runtime or omit --session.");
+    return ExitCode.Usage;
+  }
+  const sessionId = thread?.sessionId ?? input.sessionId;
+  if (!sessionId) return ExitCode.Usage;
+  const runtime = await client.getSession(sessionId);
+  if (input.json) printJson({ thread, runtime });
+  else {
+    if (thread) printLine(`thread:    ${thread.id} (${thread.title ?? "Untitled thread"})`);
+    printLine(`runtime:   ${runtime.id}`);
+    printLine(`status:    ${runtime.status}`);
+    printLine(`activity:  ${runtime.runState}`);
+  }
+  return ExitCode.OK;
+}
+
 export async function run(args: string[], ctx: CliContext): Promise<number> {
   const flags = parseGlobalFlags(args);
+  if (flags.flags.thread === true || flags.flags.session === true || flags.flags.thread === "" || flags.flags.session === "") {
+    printErr("valet status: provide an id after --thread or --session.");
+    return ExitCode.Usage;
+  }
   const instance: ResolvedInstance = resolveInstance({
     flag: typeof flags.flags.instance === "string" ? flags.flags.instance : undefined,
     env: process.env.VALET_INSTANCE,
     config: ctx.config,
   });
   const client = new InstanceClient({ url: instance.url, apiKey: instance.apiKey });
+  if (typeof flags.flags.thread === "string" || typeof flags.flags.session === "string") {
+    return runTargetStatus(client, {
+      name: instance.name, url: instance.url, json: flags.json,
+      threadId: typeof flags.flags.thread === "string" ? flags.flags.thread : undefined,
+      sessionId: typeof flags.flags.session === "string" ? flags.flags.session : undefined,
+    });
+  }
   return runStatus(client, { name: instance.name, url: instance.url, json: flags.json });
 }

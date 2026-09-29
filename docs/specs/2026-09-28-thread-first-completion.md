@@ -1,59 +1,72 @@
 # Thread-first completion
 
-Status: implementation in progress. The user approved completion of the remaining refactor and its validation.
+Status, 2026-09-29: remaining product work implemented and reviewed. Functional checks pass after repairs; the full scorecard is not clean because of the infrastructure failures below.
 
 ## Contract
 
-Threads are the public conversation address. Session IDs remain internal execution and sandbox boundaries. Existing session API routes and CLI commands remain compatible; the new routes delegate to existing operations instead of duplicating execution logic.
+Threads are the public conversation address. Runtime IDs remain execution and sandbox boundaries. Existing session API routes and CLI commands stay compatible. Thread routes delegate to existing operations instead of duplicating execution logic.
 
-Thread lookup must join its runtime and restrict by authenticated organization before applying existing visibility and action authorization. A URL thread cannot be overridden by a body or query field. A decision addressed through a thread must belong to that thread. Team keys must retain the same restrictions as the compatible session operation.
+Thread lookup joins its runtime and restricts by authenticated organization before applying visibility and action authorization. A URL thread cannot be overridden by a body or query field. A decision addressed through a thread must belong to that thread. Team keys retain the restrictions of the compatible session operation.
 
-Workspace lists and creation use the existing personal/team runtime. Existing helper and workflow conversation lifetimes remain unchanged. New workflows get their own conversation; reopening a workflow resumes it.
+Workspace lists and creation use the existing personal or team runtime. New workflows get their own conversation; reopening a workflow resumes it. Ask Valet and workflow editing share the assistant panel, transcript, and composer.
 
-## Implementation sequence
+## Implemented scope
 
-1. Add thread-rooted HTTP addressing and CLI commands. Preserve legacy entry points. Test ownership, org boundaries, conflicting addresses, and equivalent responses.
-2. Switch primary web links and user-facing terminology. Keep redirects for existing links and preserve sandbox configuration semantics.
-3. Implement a structured workflow trigger/result proposal with editable review. Reuse subscription and schedule controls. A Slack thread follow action supplies a starting configuration. Proposal review precedes enabling delivery or schedules.
-4. Bind routing and authorization invariants to acceptance tests, including restart, duplicate delivery, membership changes, child isolation, and compatibility. Run targeted suites, typecheck, and the full e2e scorecard. Record failures without claiming coverage.
-
-## Review boundaries
-
-Configuration review is separate from a human approval checkpoint and reusable action permissions. Existing grants remain workflow-scoped. Proposed delivery must never expand authority. A rejected proposal creates no enabled routing. Repeated confirmation must not duplicate a subscription or schedule.
-
-## Completion evidence
-
-Each step must record the actual implementation and test results. A ticket moves to complete coverage only when its remaining acceptance criteria are met. Existing incomplete notification and child-approval behavior must remain explicit until validated.
-
-## Checkpoint implementation
-
-The HTTP adapter supports workspace thread creation/listing, durable thread lookup, history and prompt submission, archive updates, abort/resume, and thread-scoped decisions. It delegates mutations to existing session handlers. Workflow-agent threads retain decision-only access through existing workflow-run authorization.
-
-The CLI adds `threads list|new|show` and resolves `send`, `chat`, and `gates` from `--thread`. Legacy session commands remain available. The web adds `/threads/:threadId` and reuses the existing detail view for both routes. Assistant links and parent breadcrumbs now use thread addresses.
-
-Fresh-database testing found missing statement separators around the workflow grants table and index. The baseline migration now includes those separators. Typechecking also exposed two existing web prop/ref mismatches and an untyped notification query; these are corrected without changing execution semantics.
-
-## Remaining acceptance work
-
-| Area | Status at this checkpoint |
+| Area | Implementation and evidence |
 | --- | --- |
-| Thread API and main CLI commands | Implemented; focused tests pass. |
-| Primary thread web route | Implemented using the existing detail component; compatibility route retained. |
-| All public entry points and terminology | Incomplete. Audit remaining session links, status/upload commands, and transport-facing interfaces. Preserve runtime-wide sandbox semantics. |
-| Structured subscription proposal | Not implemented. Existing assistant instructions do not meet the review contract. |
-| Follow a Slack thread preset | Not implemented. Reuse existing event filter and subscription controls. |
-| Full routing/authorization matrix | Incomplete. Focused ownership tests do not establish all channel, child, key, and authority combinations. |
-| Restart, reconnect, replay, rollback | Incomplete. Cache eviction verifies durable history retrieval, not process restart or rollback. |
-| Child approvals to parent and Slack | Not established by this checkpoint. UI cards alone do not prove delivery. |
-| Shared assistant panel | Implemented before this checkpoint; both hosts reuse the same transcript and composer. |
+| Thread API and CLI | Workspace thread creation/listing, lookup, history, submission, archive, abort/resume, and decisions reuse existing handlers. CLI thread commands and `send`, `chat`, `gates`, `status`, `upload`, and `handoff` accept thread addresses. Legacy runtime commands remain supported. |
+| Entry points and terminology | Conversation links use `/threads/:id`, including workflow checkpoints and parent breadcrumbs. User-facing conversation labels say thread. Sandbox, grants, and other runtime-wide operations retain their real scope. Wire identifiers remain compatible. |
+| Structured trigger/result review | Assistant proposal tools save paused records. Shared review shows When, Scope, Result, Destination, Permissions, and applicable delivery/audience settings. Existing edit endpoints apply changes and explicit activation together. |
+| Subscribe to thread | The existing automation form accepts a Slack thread link and sets exact channel and parent timestamp filters. It does not create an extra follow binding. |
+| Routing and authorization | Tests cover fanout, event deduplication, membership changes, org isolation, team keys, sibling decisions, workflow ownership, and personal delivery precedence. |
+| Restart and compatibility | On-disk database reopen preserves identity, history, follow bindings, and gate addresses. Engine child-process SIGKILL tests cover pending decisions and queues. Legacy and thread addresses expose compatible history and authority. |
+| Child approvals | Connected tests route a child gate through its parent audience to a Slack-shaped transport, restore the callback after host restart, deny an outsider, and resolve only the child gate. |
 
-Do not move partially covered tickets to complete coverage based on this checkpoint. The remaining product work and validation must be tracked separately from passing typechecks.
+Configuration review is separate from human approval checkpoints and reusable action permissions. Workflow grants remain workflow-scoped. Proposals never grant access or enable routing. Repeated proposal keys return the existing record without changing it or creating duplicates.
 
-## Validation evidence
+The acceptance work corrected missing runtime creation for new teams, approval buttons lost after channel-host restart, and duplicate message/follow delivery. It reuses the existing subscription, schedule, and decision-reference storage; no additional schema or execution path was introduced.
 
-- Six focused API/CLI files passed, 51 tests. Two additional send-selector tests passed afterward (24 tests in that file).
-- The thread integration test passed again after adding removed-team-membership rejection and title persistence assertions.
-- API and web typechecking passed. API typechecking also passed after the title persistence fix.
-- Read-only review identified title persistence in the shared create handler. The fix validates and stores the title before returning it.
-- The full `make e2e` scorecard is running. A clean scorecard is not yet established.
-- Local browser verification is blocked: the existing PGlite database fails startup with an invalid checkpoint record. Reproduced on a copy at `/tmp/valet-refactor-pg-backup-1790654216`; the original database is preserved. Fresh test databases boot successfully. This does not establish recovery for the local data.
+## Design and acceptance records
+
+- [Proposal interaction contract](2026-09-29-automation-proposals-design.md)
+- [Thread entry points and terminology](2026-09-29-thread-entrypoints.md)
+- [Routing acceptance matrix](2026-09-29-routing-acceptance.md)
+
+## Validation
+
+The full command was `mise x node@22 -- make e2e E2E_ARGS="--verbose"`.
+The recorded run ended with **22 stages passed, 6 failed, and 9 skipped**.
+It exposed stale test contracts in earlier UI refactor changes. Those tests now
+exercise the current controls and scope boundaries; a checkpoint link was also
+changed to use its Thread address.
+
+| Check | Final evidence |
+| --- | --- |
+| Root test sweep after repairs | 816 files passed, 17 skipped, 1 failed. 11,117 tests passed, 65 skipped; the only failure was the live Kubernetes build remaining in `building`. The attempted CLI exclude did not remove that project test, so it ran again. |
+| CLI with a real local server | 9 passed, 3 credential-dependent cases skipped. Verifies legacy handoff, canonical receipt URL, `status --thread`, and continuing `handoff --thread` in the same conversation. |
+| API integration | 202 passed, 4 skipped in the full scorecard. |
+| Real PostgreSQL | Initial stage could not bind occupied port 5433. Repeated its store and API commands against a fresh temporary database on a free loopback port: 282 store and 180 API tests passed. The temporary container was stopped. |
+| Static/build | Root typecheck, web production build, API bundle, conventions, and docs checks passed. Typecheck and docs checks passed again after the final repairs. |
+| Other scorecard stages | Engine, workflow, browser runtime, gateway, plugins, local sandbox, PGlite, Helm, Docker workspace preparation/prebuild, and Keycloak stages passed. A passing stage can contain internally skipped tests. |
+| Docker browser | Reproduced failure in the nested Docker check: `busybox:stable echo` exits 255 with `exec /bin/echo: invalid argument`. The scenario without nested Docker passed. This script and sandbox implementation have no changes in this PR. The failure remains unresolved. |
+| Kubernetes | Lifecycle readiness failed and the image build could not schedule on the disk-pressure node. After recording evidence, the blocked sandbox stage and repeated build stage were interrupted and remain failed. No cluster data cleanup was attempted. |
+| Credential-dependent stages | Nine stages skipped for missing provider credentials or opt-in. They are not passing evidence. |
+
+Logs:
+
+- Full scorecard: `/tmp/valet-final-refactor-e2e.log`
+- Root follow-up: `/tmp/valet-final-unit-rerun.log`
+- CLI follow-up: `/tmp/valet-final-cli-rerun.log`
+- PostgreSQL follow-up: `/tmp/valet-final-postgres-rerun.log`
+- Docker browser follow-up: `/tmp/valet-final-browser-rerun.log`
+- Node scheduling evidence: `/tmp/valet-scorecard-k8s-blocker.txt`
+
+## Evidence boundaries
+
+Live Slack delivery and a real Slack button interaction were not exercised. Local signed-request and transport fixtures establish routing and authorization, not installation permissions or provider availability. Older-binary rollback was not exercised.
+
+Local browser verification remains blocked by an invalid checkpoint record in the existing PGlite database, reproduced on a preserved copy at `/tmp/valet-refactor-pg-backup-1790654216`. Fresh test databases boot. The original database remains untouched; recovery is not verified.
+
+The local Kubernetes node reports `node.kubernetes.io/disk-pressure`, preventing pods from scheduling. Infrastructure outcomes must remain distinct from the refactor's deterministic acceptance results. A build test that accepts a terminal failure does not prove a successful image build.
+
+Ticket coverage must follow these boundaries. Passing typechecks or transport fixtures alone must not be reported as full live-provider or rollback acceptance.

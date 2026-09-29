@@ -155,7 +155,7 @@ export function CommentComposer({
       </div>
       {canSendToSession && (
         <p className="mt-2 text-[11px] leading-snug text-muted">
-          “Send to agent” also delivers this comment into the session that published the page.
+          “Send to agent” also delivers this comment to the agent that published the page.
         </p>
       )}
     </div>
@@ -238,7 +238,7 @@ export function ArtifactThreadPanel({
               </div>
               <p className="whitespace-pre-wrap text-sm text-ink">{thread.root.body}</p>
               {thread.root.sentToSession && (
-                <p className="mt-1 text-[11px] text-muted">Sent to the publishing session.</p>
+                <p className="mt-1 text-[11px] text-muted">Sent to the publishing agent.</p>
               )}
               {thread.replies.map((reply) => (
                 <div key={reply.id} className="mt-2 border-l-2 border-line pl-2">

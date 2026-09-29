@@ -1,5 +1,5 @@
 /**
- * `valet upload <session-id> <path...> [--dest <path>] [--extract auto|true|false]
+ * `valet upload --thread <thread-id> <path...> [--dest <path>] [--extract auto|true|false]
  *   [--overwrite] [--message "..."]`
  *
  * Uploads one or more files to a session's sandbox at `/workspace/uploads/`.
@@ -16,7 +16,7 @@ import * as path from "path";
 import { formatBytes } from "@valet/shared";
 import { InstanceClient } from "../client.js";
 import { ApiError, ExitCode } from "../exit.js";
-import { emitNdjson, parseGlobalFlags, printErr, printLine, type ParsedFlags } from "../output.js";
+import { parseGlobalFlags, printErr, printLine, type ParsedFlags } from "../output.js";
 import { resolveInstance } from "../resolve.js";
 import { streamSession, type StreamSessionOpts } from "../stream.js";
 import type { CliContext } from "../types.js";
@@ -26,10 +26,11 @@ import type {
   SendPromptResponse,
   WireEvent,
 } from "../../wire/types.js";
-import { consumeSend, outcomeToExit } from "./send.js";
+import { consumeSend } from "./send.js";
 
 /** The subset of `InstanceClient` the `upload` command needs. */
 export interface UploadClient {
+  getThread(id: string): Promise<{ sessionId: string }>;
   uploadFiles(sessionId: string, files: UploadFileInfo[]): Promise<UploadResponse>;
   sendPrompt(id: string, body: SendPromptRequest): Promise<SendPromptResponse>;
 }
@@ -65,7 +66,8 @@ export interface UploadDeps {
 
 /** Parse CLI args and validate the upload command invocation. */
 export interface UploadArgs {
-  sessionId: string;
+  sessionId?: string;
+  threadId?: string;
   paths: string[];
   dest?: string;
   extract?: "auto" | "true" | "false";
@@ -81,13 +83,18 @@ export interface UploadArgs {
  * - `--extract` is one of the allowed values.
  */
 export function parseUploadArgs(flags: ParsedFlags): UploadArgs | string {
-  const paths = flags.rest;
-  if (paths.length < 2) {
-    return "valet upload: a session id and at least one file path are required";
+  const threadId = typeof flags.flags.thread === "string" ? flags.flags.thread : undefined;
+  const sessionFlag = typeof flags.flags.session === "string" ? flags.flags.session : undefined;
+  if (flags.flags.thread === true || flags.flags.session === true || flags.flags.thread === "" || flags.flags.session === "") {
+    return "valet upload: provide an id after --thread or --session";
   }
-
-  const sessionId = paths[0];
-  const filePaths = paths.slice(1);
+  // Positional runtime IDs remain compatible with existing scripts.
+  const explicitTarget = threadId !== undefined || sessionFlag !== undefined;
+  const sessionId = sessionFlag ?? (explicitTarget ? undefined : flags.rest[0]);
+  const filePaths = explicitTarget ? flags.rest : flags.rest.slice(1);
+  if ((!threadId && !sessionId) || filePaths.length === 0) {
+    return "valet upload: provide --thread <id> and at least one file path. Legacy scripts can provide a session id first.";
+  }
 
   const dest = typeof flags.flags.dest === "string" ? flags.flags.dest : undefined;
   if (dest !== undefined && filePaths.length > 1) {
@@ -106,6 +113,7 @@ export function parseUploadArgs(flags: ParsedFlags): UploadArgs | string {
 
   return {
     sessionId,
+    threadId,
     paths: filePaths,
     dest,
     extract,
@@ -200,8 +208,21 @@ export function errorMessage(status: number, body: unknown): string {
  */
 export async function runUpload(deps: UploadDeps, args: UploadArgs): Promise<number> {
   let uploadedFiles: UploadedFile[] = [];
+  let sessionId = args.sessionId;
 
   try {
+    if (args.threadId) {
+      const thread = await deps.client.getThread(args.threadId);
+      if (sessionId !== undefined && sessionId !== thread.sessionId) {
+        printErr("The thread does not belong to the specified runtime. Use its runtime or omit --session.");
+        return ExitCode.Usage;
+      }
+      sessionId = thread.sessionId;
+    }
+    if (!sessionId) {
+      printErr("valet upload: provide --thread <id> or --session <id>.");
+      return ExitCode.Usage;
+    }
     // Prepare file metadata from paths, carrying the parsed flags through.
     const fileInfos = await prepareUploadFiles(args.paths, args.dest, args.extract, args.overwrite);
 
@@ -209,7 +230,7 @@ export async function runUpload(deps: UploadDeps, args: UploadArgs): Promise<num
     if (!args.json && fileInfos.length > 0) {
       printLine(`uploading ${fileInfos.length} file${fileInfos.length === 1 ? "" : "s"}…`);
     }
-    const response = await deps.client.uploadFiles(args.sessionId, fileInfos);
+    const response = await deps.client.uploadFiles(sessionId, fileInfos);
     uploadedFiles = response.files;
 
     if (!args.json) {
@@ -244,7 +265,8 @@ export async function runUpload(deps: UploadDeps, args: UploadArgs): Promise<num
       ref: f.attachmentRef,
     }));
     try {
-      const sent = await deps.client.sendPrompt(args.sessionId, {
+      const sent = await deps.client.sendPrompt(sessionId, {
+        threadId: args.threadId,
         text: args.message,
         fileRefs,
       });
@@ -258,7 +280,7 @@ export async function runUpload(deps: UploadDeps, args: UploadArgs): Promise<num
 
       // Stream the reply using the same logic as `valet send`.
       return await consumeSend(deps, {
-        sessionId: args.sessionId,
+        sessionId,
         messageId: sent.messageId,
         threadId: sent.threadId,
         json: args.json ?? false,
@@ -301,6 +323,10 @@ class RealUploadClient implements UploadClient {
 
   constructor(opts: { url: string; apiKey?: string }) {
     this.instanceClient = new InstanceClient(opts);
+  }
+
+  getThread(id: string): Promise<{ sessionId: string }> {
+    return this.instanceClient.getThread(id);
   }
 
   async uploadFiles(sessionId: string, files: UploadFileInfo[]): Promise<UploadResponse> {

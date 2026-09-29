@@ -152,25 +152,20 @@ vi.mock("~/api/workflows", () => ({
   useTriggerCatalog: () => ({ data: { catalog: [] } }),
 }));
 
-/**
- * The assistant panel resolves a session and watches its transcript, both
- * of which need a live QueryClient. This file mocks the data layer rather
- * than providing one, so the two hooks are stubbed here as well. Left
- * un-resolved on purpose: the panel then renders its own "opening" state
- * instead of mounting `SessionView`, which keeps these page-level tests off
- * the whole chat stack. Its header and its openings render either way,
- * which is what the tests below reach for. What the panel does once a
- * session resolves belongs to the session tests.
- */
+/** The assistant has a stable conversation address. SessionView renders its
+ * header through a stub, so page tests do not need the chat transport. */
 vi.mock("~/hooks/use-workflow-assistant", () => ({
-  useWorkflowAssistant: () => ({ opening: true }),
+  useWorkflowAssistant: () => ({ sessionId: "workflow-assistant", threadId: "workflow-thread", opening: false, retry: vi.fn() }),
+}));
+vi.mock("~/components/session/session-view", () => ({
+  SessionView: ({ renderPanelHeader }: { renderPanelHeader?: () => ReactNode }) => <div>{renderPanelHeader?.()}</div>,
 }));
 vi.mock("~/hooks/use-workflow-patch-watch", () => ({
   useWorkflowPatchWatch: () => undefined,
 }));
 
 import { ApiError } from "~/api/client";
-import { useComposerPrefillStore } from "~/stores/composer-prefill";
+import { draftKey, useComposerDraftStore } from "~/stores/composer-drafts";
 import { WorkflowEditorPage } from "./workflows.$workflowId";
 
 /** JSON mode is deliberately behind the editor's overflow menu — the
@@ -438,12 +433,13 @@ describe("WorkflowEditorPage", () => {
   });
 
   it("puts a suggestion in the composer of the assistant that is already open", () => {
-    useComposerPrefillStore.setState({ text: null });
+    useComposerDraftStore.setState({ byKey: {} });
     render(<WorkflowEditorPage workflowId="wf_1" />);
     // The openings name steps from this workflow, so they are instructions
     // the agent can act on, not a generic "ask me anything".
     fireEvent.click(screen.getByRole("button", { name: "Add a step" }));
-    expect(useComposerPrefillStore.getState().text).toContain("wf_1");
+    expect(useComposerDraftStore.getState().byKey[draftKey("workflow-assistant", "workflow-thread")]?.text).toContain("wf_1");
+    expect(useComposerDraftStore.getState().byKey[draftKey("workflow-assistant", "other-thread")]).toBeUndefined();
   });
 
   it("offers Leave without saving while a departure is held, and proceeds on confirm", () => {

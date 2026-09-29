@@ -432,7 +432,7 @@ describe("TeamsPanel — 1Password connection", () => {
     orgRole = "member";
     openTeam();
     expect(screen.queryByRole("button", { name: "Connect token" })).toBeNull();
-    expect(screen.getByText("No team token connected. Team sessions use the organization token when available.")).toBeTruthy();
+    expect(screen.getByText("No team token connected. Team runtimes use the organization token when available.")).toBeTruthy();
   });
 });
 
@@ -628,7 +628,7 @@ describe("TeamsPanel — team credentials", () => {
       },
     ];
     openTeam();
-    expect(screen.getByText("Linear")).toBeTruthy();
+    expect(screen.getByText("Linear MCP")).toBeTruthy();
     expect(screen.getByText("Shared by Two · broken")).toBeTruthy();
     expect(screen.getByText("Broken")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Stop sharing Linear with Platform" })).toBeTruthy();

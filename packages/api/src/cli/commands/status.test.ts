@@ -74,3 +74,26 @@ describe("runStatus", () => {
     expect(parsed.skew).toBe(false);
   });
 });
+
+describe("target status", () => {
+  it("resolves a thread and reports its runtime without ensuring new work", async () => {
+    const { runTargetStatus } = await import("./status.js");
+    const thread = { id: "t1", sessionId: "s1", title: "Review", createdAt: 1, archivedAt: null };
+    const getSession = vi.fn().mockResolvedValue({ id: "s1", status: "running", runState: "working" });
+    expect(await runTargetStatus({ getThread: async () => thread, getSession }, { name: "local", url: "http://x", json: true, threadId: "t1" })).toBe(ExitCode.OK);
+    expect(getSession).toHaveBeenCalledWith("s1");
+    expect(JSON.parse(stdout())).toMatchObject({ thread, runtime: { id: "s1" } });
+  });
+
+  it("retains explicit runtime status and rejects mismatched targets", async () => {
+    const { runTargetStatus } = await import("./status.js");
+    const getThread = vi.fn().mockResolvedValue({ id: "t1", sessionId: "other" });
+    const getSession = vi.fn().mockResolvedValue({ id: "s1", status: "running", runState: "idle" });
+    const input = { name: "local", url: "http://x", json: true, sessionId: "s1" };
+    expect(await runTargetStatus({ getThread, getSession }, input)).toBe(ExitCode.OK);
+    expect(getThread).not.toHaveBeenCalled();
+    getSession.mockClear();
+    expect(await runTargetStatus({ getThread, getSession }, { ...input, threadId: "t1" })).toBe(ExitCode.Usage);
+    expect(getSession).not.toHaveBeenCalled();
+  });
+});

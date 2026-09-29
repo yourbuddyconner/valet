@@ -9,6 +9,7 @@
  * subscriptions have their own management surface (`/api/event-subscriptions`).
  */
 import { linearEventArmBlock } from "../services/linear-ingress.js";
+import { proposalId } from "../events/proposals.js";
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import type { ValetPlugin } from "@valet/engine";
@@ -81,7 +82,7 @@ function rowToTrigger(row: typeof eventSubscriptions.$inferSelect): WorkflowTrig
 export async function createWorkflowTrigger(
   deps: TeamServiceReadinessDeps,
   owner: WorkflowOwner,
-  input: { workflowId: string; name: string; eventKeys: string[]; filters?: unknown[]; anyChannel?: boolean },
+  input: { workflowId: string; name: string; eventKeys: string[]; filters?: unknown[]; anyChannel?: boolean; proposalKey?: string },
 ): Promise<{ ok: true; trigger: WorkflowTriggerSummary } | { ok: false; error: string }> {
   const db = deps.db;
   const target = { kind: "workflow" as const, workflowId: input.workflowId };
@@ -124,7 +125,7 @@ export async function createWorkflowTrigger(
 
   const now = Date.now();
   const values = {
-    id: randomUUID(),
+    id: input.proposalKey ? proposalId("trigger", owner.orgId, owned.ownerType === "team" ? "team" : "user", owned.ownerType === "team" ? owned.ownerId : owner.userId, input.proposalKey) : randomUUID(),
     orgId: owner.orgId,
     // Owner follows the workflow, team only — see the insert in `routes/events.ts`.
     ownerType: owned.ownerType === "team" ? ("team" as const) : ("user" as const),
@@ -133,7 +134,7 @@ export async function createWorkflowTrigger(
     eventKeys: input.eventKeys,
     filters,
     target,
-    enabled: true,
+    enabled: !input.proposalKey,
     createdBy: owner.userId,
     createdAt: now,
     updatedAt: now,
@@ -169,7 +170,8 @@ export async function createWorkflowTrigger(
             ),
           );
         if (!targetWorkflow) return [];
-        return tx.insert(eventSubscriptions).values(values).returning();
+        const inserted = await tx.insert(eventSubscriptions).values(values).onConflictDoNothing().returning();
+        return inserted.length ? inserted : tx.select().from(eventSubscriptions).where(eq(eventSubscriptions.id, values.id));
       },
     );
     if (!rows?.[0]) {
@@ -177,8 +179,8 @@ export async function createWorkflowTrigger(
     }
     insertedRow = rows[0];
   } else {
-    const inserted = await db.insert(eventSubscriptions).values(values).returning();
-    insertedRow = inserted[0];
+    const inserted = await db.insert(eventSubscriptions).values(values).onConflictDoNothing().returning();
+    insertedRow = inserted[0] ?? (await db.select().from(eventSubscriptions).where(eq(eventSubscriptions.id, values.id)))[0];
   }
 
   const trigger = rowToTrigger(insertedRow!);

@@ -35,7 +35,7 @@ export function OnePasswordPanel() {
       <div className="flex items-start gap-3 py-4">
         <ServiceIcon slug="1password" label="1Password" />
         <p className="text-sm text-muted">
-          The organization token reads vaults every member's sessions can use. Your own token
+          The organization token reads vaults every member's runtimes can use. Your own token
           lives on{" "}
           <a className="text-moss underline" href="/settings/connected-accounts">
             Connected accounts
