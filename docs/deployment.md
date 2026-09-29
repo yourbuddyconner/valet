@@ -95,3 +95,21 @@ PGlite dev store requires wiping the data dir (`make dev-clean`; see CLAUDE.md).
 The Cloudflare Worker + Modal deployment (`make deploy`, `packages/worker`,
 `backend/`) is frozen and kept only for the legacy production environment; it
 is not part of this deployment path.
+
+## Railway
+
+`railway.json` builds `docker/Dockerfile.api`, serves the API and web UI from
+one replica, and checks `/api/ready` before routing traffic. Use a Railway
+Postgres service through `DATABASE_URL` and mount a persistent volume at `/data`.
+Set `VALET_DATA_DIR=/data`. Retain the existing auth and encryption secrets on
+updates. Set the public and auth URLs to the working HTTPS domain before
+configuring integration callbacks.
+
+The server still requires a sandbox backend. This branch does not implement
+Railway's sandbox API. `VALET_SANDBOX_BACKEND=local` runs commands inside the
+API container and is not an isolation boundary. Use the supported Docker or
+Kubernetes backend for isolated agent execution.
+
+Deploy an exact committed source snapshot, preserve a database backup before
+migration, and check both `/api/health` and `/api/ready` after rollout. The
+repository root Dockerfile is not the API deployment image.
