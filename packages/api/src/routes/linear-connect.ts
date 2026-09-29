@@ -89,6 +89,7 @@ linearConnectRouter.put("/app", async (c) => {
     || !body.clientId.trim() || !body.clientSecret.trim() || body.clientId.length > 512 || body.clientSecret.length > 4096) {
     return c.json({ error: "Enter the Linear application's client ID and client secret." }, 400);
   }
+  const { clientId, clientSecret } = body;
   const orgId = c.var.user.orgId;
   const { db } = c.var.providers;
   return db.transaction(async (tx) => {
@@ -96,7 +97,7 @@ linearConnectRouter.put("/app", async (c) => {
     const [install] = await tx.select().from(linearInstallations).where(eq(linearInstallations.orgId, orgId)).limit(1);
     if (install) return c.json({ error: "Disconnect Linear events before changing the application credentials." }, 409);
     await replaceCredential(tx, c.var.providers.encryptionKey, { type: "org", id: orgId }, LINEAR_APP_SERVICE, {
-      type: "service_account", apiKey: body.clientSecret.trim(), metadata: { clientId: body.clientId.trim() },
+      type: "service_account", apiKey: clientSecret.trim(), metadata: { clientId: clientId.trim() },
     });
     return c.body(null, 204);
   });
@@ -182,7 +183,7 @@ linearConnectRouter.get("/callback", async (c) => {
     )).limit(1);
     // Recheck after the provider request, under the same lock as app writes.
     const changed = app
-      ? config.source !== "organization" || app.metadata?.clientId !== config.clientId
+      ? config.source !== "organization" || !isRecord(app.metadata) || app.metadata.clientId !== config.clientId
         || !app.apiKeyEnc || decryptSecret(app.apiKeyEnc, key) !== config.clientSecret
       : config.source !== "deployment";
     if (changed) return c.json({ error: "Linear app configuration changed. Start the connection again." }, 409);

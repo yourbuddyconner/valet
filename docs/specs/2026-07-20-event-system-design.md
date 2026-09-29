@@ -526,3 +526,4 @@ OAuth state binds the user, organization, and client ID. A changed application r
 No database migration is required. Existing environment-configured deployments continue to work.
 App credentials are excluded from agent and workflow credential resolution. Generic credential mutation routes cannot change them.
 Application updates and callback persistence lock the organization row. The callback rechecks credentials after provider requests, before storing the installation.
+The clean deployment build validates credential input narrowing independently of local incremental TypeScript caches.
