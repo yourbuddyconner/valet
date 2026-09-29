@@ -347,6 +347,11 @@ Mitigations shipped:
   (empirically starts on masked-proc clusters) and probes storage drivers
   in order overlay2 → fuse-overlayfs → vfs. The daemon now starts
   everywhere; inner containers still need an unmasked /proc.
+- The fuse-overlayfs probe mounts a layer and executes a copied binary
+  inside the rootless user namespace. An open `/dev/fuse` does not prove
+  that executable layers work. Docker Desktop LinuxKit 6.10.14 can reject
+  execution with `EINVAL` after a successful mount. The probe selects vfs
+  if execution fails. It unmounts the probe before removing its files.
 - The manifest sets `hostUsers: false` on docker pods. Kubernetes >= 1.31
   validation requires it for `procMount: Unmasked` and REJECTS the pod
   without it once the ProcMountType gate is on (default from 1.33). On

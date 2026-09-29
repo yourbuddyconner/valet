@@ -131,6 +131,7 @@ jobs:
         run: |
           bash docker/cgroup-delegation_test.sh
           bash docker/userns-preflight_test.sh
+          bash docker/start-docker-storage_test.sh
           id dockerd >/dev/null 2>&1 || sudo useradd -m -u 1500 dockerd
           sudo install -d -o dockerd -g dockerd /tmp/valet-kubernetes-test
           sudo install -o dockerd -g dockerd -m 755 docker/valet-kubernetes.mjs docker/valet-kubernetes_test.sh /tmp/valet-kubernetes-test/
