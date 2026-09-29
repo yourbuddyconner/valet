@@ -67,10 +67,10 @@ describe.skipIf(!registryPresent() || !!process.env.CI)("KubernetesImageBuilder 
     async () => {
       const spec: PrebuildSpec = {
         configId: "cluster-smoke",
-        prebuildId: "pb-cluster-smoke",
+        prebuildId: `pb-cluster-smoke-${Date.now()}`,
         cloneUrl: "https://github.com/octocat/Hello-World.git",
         commitSha: "7fd1a60b01f91b314f59955a4e4d4e80d8edf11",
-        baseImage: "alpine:3",
+        baseImage: "alpine/git:2.47.2",
         recipe: [],
         imageRef: "valet-registry:5000/octocat-hello-world:cluster-smoke",
       };
@@ -87,9 +87,9 @@ describe.skipIf(!registryPresent() || !!process.env.CI)("KubernetesImageBuilder 
         status = await builder.status(buildId);
       }
 
-      expect(["pushed", "failed"]).toContain(status.state);
-      // Whichever terminal state, the secret/configmap cleanup must have
-      // run — verified indirectly: a second status() call still resolves
+      expect(status.state, JSON.stringify(status)).toBe("pushed");
+      // Successful completion runs secret/configmap cleanup. A second
+      // status() call must still resolve
       // without throwing (the Job itself is left standing until cancel()).
       await expect(builder.status(buildId)).resolves.toBeDefined();
     },

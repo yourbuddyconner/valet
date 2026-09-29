@@ -394,3 +394,15 @@ The row uses `VALET_BROWSER_TEST_IMAGE` when set.
 Otherwise, it builds `valet-browser-e2e:local` from the sandbox Dockerfile if that local image is absent.
 The row needs Docker but no external model credentials.
 These two rows bring the scorecard to 37 rows.
+
+### Isolated PostgreSQL test instances (2026-09-29)
+
+`make test-pg` creates its own temporary container on an ephemeral loopback port.
+It waits for readiness, shares that instance between the store and API suites,
+and stops only that container on exit. Concurrent development servers and test
+runs no longer collide on port 5433 or a shared container name.
+
+The live Kubernetes image-build smoke test uses a Git-capable base image and a
+unique resource ID for each run. It requires the image to reach `pushed`; a
+terminal failure no longer counts as success. This catches broken build execution
+instead of only checking that polling terminates.
