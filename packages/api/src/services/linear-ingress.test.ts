@@ -22,7 +22,7 @@ describe("Linear organization ingress readiness", () => {
     await install(target,"other-org");
     await engineCredentials.save({ type: "org", id: "other-org" },"linear",{ type: "oauth2", accessToken: "other", metadata: { webhookSecret: "other-secret" } });
     expect(await getLinearIngressStatus(db,engineCredentials,"local-org",configured)).toMatchObject({ configured: true, connected: false, ready: false, reason: expect.stringContaining("Personal connections") });
-    expect(await getLinearIngressStatus(db,engineCredentials,"local-org",{})).toMatchObject({ configured: false, ready: false, reason: expect.stringContaining("operator") });
+    expect(await getLinearIngressStatus(db,engineCredentials,"local-org",{})).toMatchObject({ configured: false, ready: false, reason: expect.stringContaining("configure the app") });
   });
   it("requires both webhook ID and nonempty signing secret; existing ingress does not require OAuth env", async () => {
     const target = await setup(); const { db, engineCredentials } = target.providers;

@@ -1426,6 +1426,7 @@ export const api = {
 
   // org GitHub App setup (GitHub/repo integration plan, Task 5) — admin-gated
   getLinearConnection: () => request<GetLinearConnectionResponse>("GET", "/org/linear"),
+  putLinearApp: (body: { clientId: string; clientSecret: string }) => request<undefined>("PUT", "/org/linear/app", body),
   postLinearConnect: () => request<{ url: string }>("POST", "/org/linear/connect"),
   deleteLinearConnection: () => request<undefined>("DELETE", "/org/linear"),
   getGithubApp: () => request<GetGithubAppResponse>("GET", "/org/github-app"),

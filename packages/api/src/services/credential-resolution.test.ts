@@ -92,9 +92,9 @@ describe("internal-service deny list", () => {
     expect(result).toBeNull();
   });
 
-  it("resolveOrgCredentialRead returns null for service 'github_app'", async () => {
+  it.each(["github_app", "linear_app"])("resolveOrgCredentialRead returns null for service %s", async (service) => {
     const credentials = fakeCredentialStore();
-    await credentials.save({ type: "org", id: orgId }, "github_app", {
+    await credentials.save({ type: "org", id: orgId }, service, {
       type: "service_account",
       apiKey: "-----BEGIN RSA PRIVATE KEY-----",
     });
@@ -102,7 +102,7 @@ describe("internal-service deny list", () => {
       throw new Error("must not resolve — denied service");
     });
 
-    const result = await resolveOrgCredentialRead({ credentials, onePassword }, { orgId }, "github_app");
+    const result = await resolveOrgCredentialRead({ credentials, onePassword }, { orgId }, service);
 
     expect(result).toBeNull();
   });

@@ -1,3 +1,4 @@
+import { loadLinearAppConfig } from "./linear-app.js";
 import type { CredentialStore } from "@valet/engine";
 import { eq } from "drizzle-orm";
 import type { AppDb } from "../lib/drizzle.js";
@@ -12,7 +13,8 @@ export async function getLinearIngressStatus(
     db.select().from(linearInstallations).where(eq(linearInstallations.orgId,orgId)).limit(1),
     credentials.get({ type: "org", id: orgId },"linear"),
   ]);
-  const configured = !!env.LINEAR_CLIENT_ID?.trim() && !!env.LINEAR_CLIENT_SECRET?.trim();
+  const app = await loadLinearAppConfig(credentials, orgId, env);
+  const configured = app !== null;
   const secret = credential?.metadata?.webhookSecret;
   const webhookConfigured = typeof install?.webhookId === "string" && !!install.webhookId.trim()
     && typeof secret === "string" && !!secret.trim();
@@ -20,11 +22,11 @@ export async function getLinearIngressStatus(
   const workspaceMatches = !credential?.metadata?.workspaceId || credential.metadata.workspaceId === install?.workspaceId;
   const ready = connected && webhookConfigured && workspaceMatches;
   const reason = ready ? undefined : !configured
-    ? "Ask your operator to configure Linear OAuth. Then connect Linear in Organization settings > Linear events."
+    ? "Ask an organization admin to configure the app in Organization settings > Linear events."
     : !connected
       ? "Ask an organization admin to connect Linear in Organization settings > Linear events. Personal connections only enable tools."
       : "Ask an organization admin to reconnect Linear in Organization settings > Linear events to restore the event webhook.";
-  return { configured, connected, webhookConfigured, ready, ...(install ? { workspaceName: install.workspaceName } : {}), ...(reason ? { reason } : {}) };
+  return { configured, ...(app ? { clientId: app.clientId, appSource: app.source } : {}), connected, webhookConfigured, ready, ...(install ? { workspaceName: install.workspaceName } : {}), ...(reason ? { reason } : {}) };
 }
 
 export async function linearEventArmBlock(

@@ -2549,6 +2549,9 @@ export interface WorkflowTriggerCatalogEntry {
 
 export interface EventIngressReadiness { ready: boolean; reason?: string; }
 export interface GetLinearConnectionResponse extends EventIngressReadiness {
+  clientId?: string;
+  appSource?: "organization" | "deployment";
+  redirectUri?: string;
   configured: boolean;
   connected: boolean;
   webhookConfigured: boolean;

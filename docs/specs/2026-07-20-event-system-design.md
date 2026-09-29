@@ -512,3 +512,17 @@ members. Optional MCP tools are collapsed in personal and team views; expanding
 them reveals the separate Connect via MCP button. MCP connection state and disconnect controls name MCP explicitly.
 Removing MCP credentials does not disconnect the organization's native webhook.
 Native event authorization does not currently replace MCP-backed action tools.
+
+## Organization Linear application setup (2026-09-29)
+
+Organization admins can configure their Linear application in Organization settings > Linear events.
+`PUT /api/org/linear/app` stores the client secret in the encrypted `linear_app` credential for the authenticated organization.
+The client ID is metadata. Status returns the client ID, configuration source, and redirect URI, but never the secret.
+Organization credentials override `LINEAR_CLIENT_ID` and `LINEAR_CLIENT_SECRET`. Those variables remain a deployment fallback.
+The connection, callback, readiness check, and disconnect operation use the same resolver.
+An admin must disconnect an existing installation before replacing app credentials.
+Disconnect removes the installation and workspace token, but preserves app configuration for reconnect.
+OAuth state binds the user, organization, and client ID. A changed application requires a new connection attempt.
+No database migration is required. Existing environment-configured deployments continue to work.
+App credentials are excluded from agent and workflow credential resolution. Generic credential mutation routes cannot change them.
+Application updates and callback persistence lock the organization row. The callback rechecks credentials after provider requests, before storing the installation.

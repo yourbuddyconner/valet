@@ -10,29 +10,28 @@
  * `linear_installations` (the `workspaceId -> orgId` mapping the ingest
  * route resolves against).
  *
- * OAuth app credentials come from env (`LINEAR_CLIENT_ID` /
- * `LINEAR_CLIENT_SECRET`) — deployment-level config, unlike the GitHub App's
- * per-org manifest flow, because Linear OAuth apps are created once by the
- * operator. State signing reuses `lib/oauth-state.ts` with the same
- * `{ userId, orgId, nonce, exp }` payload as `github-connect.ts` — the
- * callback rejects a state minted for a different signed-in user.
+ * Organization admins store app credentials in the encrypted credential store.
+ * Deployment environment credentials remain a fallback for existing installs.
+ * OAuth state binds the signed-in user, organization, and app client ID.
  *
  * Every route (callback included — the admin's own browser lands there with
  * their session cookie, same model as `github-connect.ts`'s callback) is
  * behind `requireOrgAdmin`.
  */
 import { randomBytes, randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Hono, type Context } from "hono";
 import type { AppEnv } from "../env.js";
 import { requireOrgAdmin } from "./_org-admin.js";
 import { publicUrlFromEnv } from "../channels/host.js";
-import { deriveSecretKey } from "../lib/secret-crypto.js";
+import { decryptSecret, deriveSecretKey } from "../lib/secret-crypto.js";
 import { isRecord, signState, verifyState, STATE_TTL_MS } from "../lib/oauth-state.js";
 import { resolveReturnOrigin } from "./credential-connect.js";
 import { createLinearService, resolveLinearOauthUrl, type LinearService } from "../services/linear.js";
+import { loadLinearAppConfig, LINEAR_APP_SERVICE } from "../services/linear-app.js";
 import { getLinearIngressStatus } from "../services/linear-ingress.js";
-import { linearInstallations } from "../schema/index.js";
+import { replaceCredential } from "../services/credential-insert.js";
+import { credentials, orgs, linearInstallations } from "../schema/index.js";
 
 export const linearConnectRouter = new Hono<AppEnv>();
 
@@ -48,6 +47,7 @@ interface ConnectState {
    * callback's referer is the provider. Empty when same-origin, which is
    * the deployed shape. */
   returnTo?: string;
+  clientId?: string;
 }
 
 function verifyConnectState(state: string, key: Buffer, nowMs: number): ConnectState | null {
@@ -57,21 +57,13 @@ function verifyConnectState(state: string, key: Buffer, nowMs: number): ConnectS
     if (typeof userId !== "string" || typeof orgId !== "string") return null;
     if (typeof nonce !== "string" || typeof exp !== "number") return null;
     if (exp < nowMs) return null;
-    return { userId, orgId, nonce, exp, returnTo: typeof returnTo === "string" ? returnTo : "" };
+    return { userId, orgId, nonce, exp, clientId: typeof payload.clientId === "string" ? payload.clientId : undefined, returnTo: typeof returnTo === "string" ? returnTo : "" };
   });
 }
 
 interface OauthAppConfig {
   clientId: string;
   clientSecret: string;
-}
-
-/** `null` when the deployment has no Linear OAuth app configured. */
-function loadOauthAppConfig(env: NodeJS.ProcessEnv): OauthAppConfig | null {
-  const clientId = env.LINEAR_CLIENT_ID;
-  const clientSecret = env.LINEAR_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
-  return { clientId, clientSecret };
 }
 
 /** Same fallback `github-app.ts`'s manifest route uses: the configured
@@ -89,19 +81,41 @@ function linearService(config: OauthAppConfig): LinearService {
   return createLinearService(config, process.env);
 }
 
+linearConnectRouter.put("/app", async (c) => {
+  const gate = await requireOrgAdmin(c);
+  if (gate) return gate;
+  const body: unknown = await c.req.json().catch(() => null);
+  if (!isRecord(body) || typeof body.clientId !== "string" || typeof body.clientSecret !== "string"
+    || !body.clientId.trim() || !body.clientSecret.trim() || body.clientId.length > 512 || body.clientSecret.length > 4096) {
+    return c.json({ error: "Enter the Linear application's client ID and client secret." }, 400);
+  }
+  const orgId = c.var.user.orgId;
+  const { db } = c.var.providers;
+  return db.transaction(async (tx) => {
+    await tx.select({ id: orgs.id }).from(orgs).where(eq(orgs.id, orgId)).for("update");
+    const [install] = await tx.select().from(linearInstallations).where(eq(linearInstallations.orgId, orgId)).limit(1);
+    if (install) return c.json({ error: "Disconnect Linear events before changing the application credentials." }, 409);
+    await replaceCredential(tx, c.var.providers.encryptionKey, { type: "org", id: orgId }, LINEAR_APP_SERVICE, {
+      type: "service_account", apiKey: body.clientSecret.trim(), metadata: { clientId: body.clientId.trim() },
+    });
+    return c.body(null, 204);
+  });
+});
+
 linearConnectRouter.post("/connect", async (c) => {
   const gate = await requireOrgAdmin(c);
   if (gate) return gate;
 
-  const config = loadOauthAppConfig(process.env);
+  const config = await loadLinearAppConfig(c.var.providers.engineCredentials, c.var.user.orgId);
   if (!config) {
-    return c.json({ error: "Linear OAuth is not configured: set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET" }, 503);
+    return c.json({ error: "Configure the Linear app in Organization settings > Linear events, or set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET." }, 503);
   }
 
   const user = c.var.user;
   const key = deriveSecretKey(c.var.providers.encryptionKey);
   const returnTo = resolveReturnOrigin(c.req.url, c.req.header("referer"), process.env);
   const statePayload: ConnectState = {
+    clientId: config.clientId,
     userId: user.id,
     orgId: user.orgId,
     nonce: randomBytes(16).toString("hex"),
@@ -130,20 +144,23 @@ linearConnectRouter.get("/callback", async (c) => {
   const state = c.req.query("state");
   if (!code || !state) return c.json({ error: "missing code or state" }, 400);
 
-  const config = loadOauthAppConfig(process.env);
+  const config = await loadLinearAppConfig(c.var.providers.engineCredentials, c.var.user.orgId);
   if (!config) {
-    return c.json({ error: "Linear OAuth is not configured: set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET" }, 503);
+    return c.json({ error: "Configure the Linear app in Organization settings > Linear events, or set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET." }, 503);
   }
 
   const user = c.var.user;
-  const { db, engineCredentials, encryptionKey } = c.var.providers;
+  const { db, encryptionKey } = c.var.providers;
   const key = deriveSecretKey(encryptionKey);
   const verified = verifyConnectState(state, key, Date.now());
   if (!verified) return c.json({ error: "invalid or expired state" }, 400);
-  if (verified.userId !== user.id) {
+  if (verified.orgId !== user.orgId || verified.userId !== user.id) {
     return c.json({ error: "this authorization was not started by the signed-in user" }, 400);
   }
 
+  if (verified.clientId && verified.clientId !== config.clientId) {
+    return c.json({ error: "Linear app configuration changed. Start the connection again." }, 409);
+  }
   const service = linearService(config);
   let accessToken: string;
   let workspaceId: string;
@@ -158,12 +175,23 @@ linearConnectRouter.get("/callback", async (c) => {
     return c.json({ error: "failed to complete the Linear connection" }, 502);
   }
 
+  const persisted = await db.transaction(async (tx) => {
+    await tx.select({ id: orgs.id }).from(orgs).where(eq(orgs.id, user.orgId)).for("update");
+    const [app] = await tx.select().from(credentials).where(and(
+      eq(credentials.ownerType, "org"), eq(credentials.ownerId, user.orgId), eq(credentials.service, LINEAR_APP_SERVICE),
+    )).limit(1);
+    // Recheck after the provider request, under the same lock as app writes.
+    const changed = app
+      ? config.source !== "organization" || app.metadata?.clientId !== config.clientId
+        || !app.apiKeyEnc || decryptSecret(app.apiKeyEnc, key) !== config.clientSecret
+      : config.source !== "deployment";
+    if (changed) return c.json({ error: "Linear app configuration changed. Start the connection again." }, 409);
   // One workspace per org: the org `linear` credential holds exactly one
   // access token, so a second workspace's install rows would be orphaned the
   // moment the credential is overwritten (its webhook could never be deleted
   // again — the stored token isn't scoped to it). Reject instead of silently
   // wedging; the admin disconnects first.
-  const orgInstalls = await db
+  const orgInstalls = await tx
     .select()
     .from(linearInstallations)
     .where(eq(linearInstallations.orgId, verified.orgId));
@@ -191,7 +219,7 @@ linearConnectRouter.get("/callback", async (c) => {
   // `webhookCreate` returns, and a delivery that arrives before the ingress
   // can resolve the install + secret is 204'd and never retried — permanent
   // loss. `webhookId` is patched in after creation succeeds.
-  await engineCredentials.save({ type: "org", id: verified.orgId }, LINEAR_CREDENTIAL_SERVICE, {
+  await replaceCredential(tx, encryptionKey, { type: "org", id: verified.orgId }, LINEAR_CREDENTIAL_SERVICE, {
     type: "oauth2",
     accessToken,
     metadata: { webhookSecret, workspaceId },
@@ -201,13 +229,13 @@ linearConnectRouter.get("/callback", async (c) => {
   let installId: string;
   if (existing) {
     installId = existing.id;
-    await db
+    await tx
       .update(linearInstallations)
       .set({ workspaceName, webhookId: null, connectedBy: user.id, updatedAt: now })
-      .where(eq(linearInstallations.id, existing.id));
+      .where(and(eq(linearInstallations.id, existing.id), eq(linearInstallations.orgId, user.orgId)));
   } else {
     installId = `lin_${randomUUID()}`;
-    await db.insert(linearInstallations).values({
+    await tx.insert(linearInstallations).values({
       id: installId,
       orgId: verified.orgId,
       workspaceId,
@@ -218,6 +246,11 @@ linearConnectRouter.get("/callback", async (c) => {
       updatedAt: now,
     });
   }
+
+  return installId;
+  });
+  if (persisted instanceof Response) return persisted;
+  const installId = persisted;
 
   try {
     ({ webhookId } = await service.createWebhook(accessToken, {
@@ -234,7 +267,7 @@ linearConnectRouter.get("/callback", async (c) => {
   await db
     .update(linearInstallations)
     .set({ webhookId, updatedAt: Date.now() })
-    .where(eq(linearInstallations.id, installId));
+    .where(and(eq(linearInstallations.id, installId), eq(linearInstallations.orgId, user.orgId)));
 
   return c.redirect(`${verified.returnTo ?? ""}/settings/organization/linear?setup=ok`, 302);
 });
@@ -244,7 +277,7 @@ linearConnectRouter.get("/", async (c) => {
   if (gate) return gate;
 
   const { db, engineCredentials } = c.var.providers;
-  return c.json(await getLinearIngressStatus(db,engineCredentials,c.var.user.orgId));
+  return c.json({ ...await getLinearIngressStatus(db,engineCredentials,c.var.user.orgId), redirectUri: callbackUrl(c) });
 });
 
 linearConnectRouter.delete("/", async (c) => {
@@ -261,7 +294,7 @@ linearConnectRouter.delete("/", async (c) => {
   // per org, so normally that's every install); a drifted row from another
   // workspace can't be cleaned with this token — log it loudly instead of
   // issuing a call Linear will reject.
-  const config = loadOauthAppConfig(process.env);
+  const config = await loadLinearAppConfig(c.var.providers.engineCredentials, c.var.user.orgId);
   const cred = await engineCredentials.get({ type: "org", id: orgId }, LINEAR_CREDENTIAL_SERVICE);
   if (config && cred?.accessToken) {
     const tokenWorkspaceId =

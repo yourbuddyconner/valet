@@ -14,3 +14,10 @@ export function useDisconnectLinear() {
     await Promise.all([client.invalidateQueries({ queryKey: key }), client.invalidateQueries({ queryKey: qkWorkflows.triggerCatalog() })]);
   } });
 }
+
+export function useSaveLinearApp() {
+  const client = useQueryClient();
+  return useMutation({ mutationFn: api.putLinearApp, onSuccess: async () => {
+    await client.invalidateQueries({ queryKey: key });
+  } });
+}

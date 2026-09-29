@@ -51,7 +51,7 @@ import {
  * services reads its row RAW, so a 1Password reference stored under one would
  * verify at save time and then be read as an empty credential forever. */
 export function isDeniedCredentialService(service: string): boolean {
-  return service === ONEPASSWORD_SERVICE || service === "github_app" || service.startsWith("llm:");
+  return service === ONEPASSWORD_SERVICE || service === "github_app" || service === "linear_app" || service.startsWith("llm:");
 }
 
 export interface CredentialReadDeps {

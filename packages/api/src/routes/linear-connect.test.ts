@@ -4,7 +4,7 @@
  * server (`startLinearFixture`) subbed in via `LINEAR_API_URL` /
  * `LINEAR_OAUTH_URL` — same shape as `github-app.test.ts`.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { bootTestApi, type TestApi } from "../integration/_setup.js";
 import { startLinearFixture, type LinearFixture, type LinearFixtureCall } from "../test-helpers/linear-fixture.js";
@@ -312,4 +312,84 @@ describe("DELETE /api/org/linear", () => {
     const rows = await api.providers.db.select().from(linearInstallations).where(eq(linearInstallations.orgId, "local-org"));
     expect(rows).toHaveLength(0);
   });
+});
+
+describe("organization Linear app configuration", () => {
+  it("lets an admin configure OAuth without environment secrets and never returns the secret", async () => {
+    api = await bootTestApi();
+    useFixture();
+    delete process.env.LINEAR_CLIENT_ID;
+    delete process.env.LINEAR_CLIENT_SECRET;
+    const save = await fetch(`${api.baseUrl}/api/org/linear/app`, {
+      method: "PUT", headers: HEADERS, body: JSON.stringify({ clientId: "org-client", clientSecret: "org-secret" }),
+    });
+    expect(save.status).toBe(204);
+    const status = await fetch(`${api.baseUrl}/api/org/linear`).then(r => r.json());
+    expect(status).toMatchObject({ configured: true, appSource: "organization", clientId: "org-client", redirectUri: `${api.baseUrl}/api/org/linear/callback` });
+    expect(JSON.stringify(status)).not.toContain("org-secret");
+    expect((await fetchAuthorizeUrl(api.baseUrl)).searchParams.get("client_id")).toBe("org-client");
+    expect((await completeConnect(api.baseUrl)).status).toBe(302);
+    const replace = await fetch(`${api.baseUrl}/api/org/linear/app`, {
+      method: "PUT", headers: HEADERS, body: JSON.stringify({ clientId: "replacement", clientSecret: "secret" }),
+    });
+    expect(replace.status).toBe(409);
+  });
+
+  it("rejects non-admin changes and invalid configuration", async () => {
+    api = await bootTestApi();
+    for (const [headers, body, expected] of [
+      [MEMBER_HEADERS, { clientId: "client", clientSecret: "secret" }, 403],
+      [HEADERS, { clientId: "client", clientSecret: " " }, 400],
+    ] as const) {
+      const response = await fetch(`${api.baseUrl}/api/org/linear/app`, { method: "PUT", headers, body: JSON.stringify(body) });
+      expect(response.status).toBe(expected);
+    }
+  });
+
+  it("does not use another organization's app credentials", async () => {
+    api = await bootTestApi();
+    delete process.env.LINEAR_CLIENT_ID;
+    delete process.env.LINEAR_CLIENT_SECRET;
+    await api.providers.engineCredentials.save({ type: "org", id: "other-org" }, "linear_app", {
+      type: "service_account", apiKey: "other-secret", metadata: { clientId: "other-client" },
+    });
+    const response = await fetch(`${api.baseUrl}/api/org/linear/connect`, { method: "POST", headers: HEADERS });
+    expect(response.status).toBe(503);
+  });
+});
+
+it("reserves Linear application credentials from generic mutation routes", async () => {
+  api = await bootTestApi();
+  for (const method of ["PUT", "DELETE"]) {
+    const response = await fetch(`${api.baseUrl}/api/credentials/linear_app?scope=org`, {
+      method, headers: HEADERS,
+      ...(method === "PUT" ? { body: JSON.stringify({ scope: "org", type: "api_key", apiKey: "secret" }) } : {}),
+    });
+    expect(response.status).toBe(400);
+  }
+});
+
+it("rejects an app change made while OAuth is completing", async () => {
+  api = await bootTestApi();
+  const target = api;
+  const provider = useFixture();
+  const originalFetch = globalThis.fetch;
+  let changed = false;
+  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const response = await originalFetch(input, init);
+    if (!changed && String(input) === `${provider.url}/graphql`) {
+      changed = true;
+      const save = await originalFetch(`${target.baseUrl}/api/org/linear/app`, {
+        method: "PUT", headers: HEADERS,
+        body: JSON.stringify({ clientId: "replacement", clientSecret: "new-secret" }),
+      });
+      expect(save.status).toBe(204);
+    }
+    return response;
+  });
+  try {
+    expect((await completeConnect(target.baseUrl)).status).toBe(409);
+    expect(await target.providers.db.select().from(linearInstallations)).toHaveLength(0);
+    expect(await target.providers.engineCredentials.get({ type: "org", id: "local-org" }, "linear")).toBeNull();
+  } finally { spy.mockRestore(); }
 });
