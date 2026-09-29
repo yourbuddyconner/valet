@@ -570,6 +570,8 @@ export const api = {
     request<WorkspaceBriefingsResponse>("GET", `/workspaces/${encodeURIComponent(owner.ownerType === "team" ? owner.ownerId : "user")}/briefings`),
   listWorkspaceOutcomes: (owner: OwnerFilter, cursor?: string) =>
     request<WorkspaceOutcomesResponse>("GET", `/workspaces/${encodeURIComponent(owner.ownerType === "team" ? owner.ownerId : "user")}/outcomes?limit=25${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
+  getThreadAddress: (id: string) =>
+    request<{ id: string; sessionId: string }>("GET", `/threads/${encodeURIComponent(id)}`),
   getSession: (id: string) =>
     request<GetSessionResponse>("GET", `/sessions/${encodeURIComponent(id)}`),
   /** GET /sessions/:id/security — the session's engagement + cells

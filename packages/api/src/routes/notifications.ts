@@ -20,7 +20,7 @@ import { Hono } from "hono";
 import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { NotFoundError } from "@valet/shared";
 import type { AppEnv } from "../env.js";
-import { agentSessions, notifications, userNotificationPreferences, type NotificationRow } from "../schema/index.js";
+import { agentSessions, workflowRuns, workflowDefinitions, notifications, userNotificationPreferences, type NotificationRow } from "../schema/index.js";
 import { canResolveSessionGate } from "../services/session-access.js";
 import { engineGateToWire } from "../engine/bridge.js";
 import type {
@@ -49,14 +49,14 @@ notificationsRouter.get("/decisions", async (c) => {
     for (const gate of gates) items.push({ sessionId: session.id, title: session.title || "Thread approval", gate: engineGateToWire(gate) });
   }
   // Workflow agent sessions have no app session row. Their run owns the gates.
-  const workflowSessions = await db.execute<{
-    session_id: string; owner_type: string; owner_id: string; title: string;
-  }>(sql`SELECT DISTINCT g.session_id, r.owner_type, r.owner_id, d.name AS title
-    FROM engine_decision_gates g
-    JOIN workflow_runs r ON r.id = split_part(g.session_id, ':', 2)
-    JOIN workflow_definitions d ON d.id = r.workflow_id
-    WHERE g.status = 'pending' AND g.session_id LIKE 'wf:%' AND d.org_id = ${c.var.user.orgId}`);
-  for (const session of workflowSessions.rows) {
+  const workflowSessions = await db.selectDistinct({
+    session_id: sql<string>`g.session_id`,
+    owner_type: workflowRuns.ownerType, owner_id: workflowRuns.ownerId, title: workflowDefinitions.name,
+  }).from(sql`engine_decision_gates g`)
+    .innerJoin(workflowRuns, sql`${workflowRuns.id} = split_part(g.session_id, ':', 2)`)
+    .innerJoin(workflowDefinitions, eq(workflowDefinitions.id, workflowRuns.workflowId))
+    .where(and(eq(workflowDefinitions.orgId, c.var.user.orgId), sql`g.status = 'pending' and g.session_id LIKE 'wf:%'`));
+  for (const session of workflowSessions) {
     if (!await canResolveSessionGate(db, {
       ownerType: session.owner_type, ownerId: session.owner_id,
       userId: session.owner_type === "user" ? session.owner_id : "",

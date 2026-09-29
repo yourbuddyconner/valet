@@ -10,8 +10,7 @@ import type { WorkspaceRuntimeInfoResponse, WorkspaceRuntimeResponse, EnsureWork
 
 export const workspaceRuntimeRouter = new Hono<AppEnv>();
 
-export async function authorizedWorkspaceOwner(c: Context<AppEnv>): Promise<Principal | null> {
-  const workspace = c.req.param("workspace");
+export async function authorizedWorkspaceOwner(c: Context<AppEnv>, workspace = c.req.param("workspace")): Promise<Principal | null> {
   const principal = c.var.principal;
   const { db } = c.var.providers;
   if (workspace === "user") return principal.type === "user" ? principal : null;

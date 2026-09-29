@@ -22,7 +22,7 @@ export function AssistantPanel({ title, sessionId, threadId, error, onRetry, onC
       <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
       {sessionId && threadId && (onOpen ?
         <button type="button" aria-label="Open assistant in Threads" className="rounded p-2 hover:bg-ink-wash" onClick={onOpen}><ExternalLink className="h-4 w-4" /></button> :
-        <Link to="/sessions/$sessionId" params={{ sessionId }} search={{ thread: threadId }} aria-label="Open assistant in Threads" className="rounded p-2 hover:bg-ink-wash"><ExternalLink className="h-4 w-4" /></Link>)}
+        <Link to="/threads/$threadId" params={{ threadId }} aria-label="Open assistant in Threads" className="rounded p-2 hover:bg-ink-wash"><ExternalLink className="h-4 w-4" /></Link>)}
       {summary}
       {onClose && <button type="button" aria-label="Close Valet" className="rounded p-2 hover:bg-ink-wash" onClick={onClose}><X className="h-4 w-4" /></button>}
     </header>

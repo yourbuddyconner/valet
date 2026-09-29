@@ -29,6 +29,7 @@ type CommandImporter = () => Promise<CommandModule>;
  */
 const COMMANDS: Record<string, CommandImporter> = {
   serve: () => import("./cli/commands/serve.js"),
+  threads: () => import("./cli/commands/threads.js"),
   sessions: () => import("./cli/commands/sessions.js"),
   send: () => import("./cli/commands/send.js"),
   upload: () => import("./cli/commands/upload.js"),
@@ -49,8 +50,9 @@ const USAGE = `valet <command> [options]
 
 Commands:
   serve       Boot the Valet server (the full product)
-  sessions    List and inspect sessions on an instance
-  send        Send a prompt to a session
+  threads     List, create, and inspect workspace threads
+  sessions    Legacy runtime commands (compatible with existing scripts)
+  send        Send a prompt to a thread
   upload      Upload files to a session sandbox
   handoff     Hand off work from a local agent to Valet
   gates       List and resolve decision gates
@@ -59,7 +61,7 @@ Commands:
   logout      Remove an instance profile
   instance    Manage instance profiles
   config      View or edit CLI config
-  chat        Interactive chat with a session
+  chat        Interactive chat with a thread
   mcp         MCP client operations
   reset       Reset local state
   prebuild    Test a repo's .valet/prebuild.yaml locally (plan / docker build)

@@ -343,6 +343,6 @@ describe("workflow grant isolation", () => {
     expect(chat.mode).toBe("require_approval");
     expect((await fetch(`${api.baseUrl}/api/workflows/${first}/permissions/allow`, { method: "DELETE" })).status).toBe(200);
     const preview = await fetch(`${api.baseUrl}/api/workflows/${first}/permissions`);
-    expect(byNodeId(await preview.json()).get("ship")?.mode).toBe("require_approval");
+    expect(await preview.json()).toMatchObject({ nodes: expect.arrayContaining([expect.objectContaining({ nodeId: "ship", mode: "require_approval" })]) });
   });
 });

@@ -70,6 +70,7 @@ function stubDeps(events: WireEvent[], overrides: Partial<SendClient> = {}): {
   const sent: { id: string; body: SendPromptRequest }[] = [];
   let ensureCalls = 0;
   const client: SendClient = {
+    getThread: () => Promise.resolve({ sessionId: "s1" }),
     ensureOrchestrator: () => {
       ensureCalls += 1;
       return Promise.resolve({ sessionId: "orch_1" });
@@ -249,6 +250,21 @@ describe("runSend", () => {
     expect(code).toBe(ExitCode.OK);
     expect(bundle.ensureCalls).toBe(1);
     expect(bundle.sent).toEqual([{ id: "orch_1", body: { text: "write hello.txt", threadId: undefined } }]);
+  });
+
+  it("resolves --thread without creating a runtime", async () => {
+    const bundle = stubDeps([settled("completed")]);
+    const code = await runSend(bundle.deps, parseGlobalFlags(["--thread", "t1", "--text", "hi"]));
+    expect(code).toBe(ExitCode.OK);
+    expect(bundle.ensureCalls).toBe(0);
+    expect(bundle.sent).toEqual([{ id: "s1", body: { text: "hi", threadId: "t1" } }]);
+  });
+
+  it("rejects a session that does not own the selected thread", async () => {
+    const bundle = stubDeps([]);
+    const code = await runSend(bundle.deps, parseGlobalFlags(["--thread", "t1", "--session", "other", "--text", "hi"]));
+    expect(code).toBe(ExitCode.Usage);
+    expect(bundle.sent).toHaveLength(0);
   });
 
   it("uses --session override and skips ensureOrchestrator", async () => {

@@ -31,6 +31,8 @@ function stubClient(
   const resolves: ResolveCall[] = [];
   let ensure = 0;
   const client: GatesClient = {
+    listThreadDecisions: () => Promise.resolve({ gates }),
+    resolveThreadDecision: (id, gateId, body) => { resolves.push({ id, gateId, body }); return Promise.resolve(); },
     ensureOrchestrator: () => {
       ensure += 1;
       return Promise.resolve({ sessionId: "orch_1" });
@@ -141,4 +143,10 @@ describe("formatGatesTable", () => {
     expect(table).toContain("approval");
     expect(table).toContain("approve");
   });
+});
+
+it("rejects conflicting legacy and thread selectors before resolving", async () => {
+  const { client, resolves } = stubClient([gate("g1")]);
+  expect(await runGates(client, parseGlobalFlags(["resolve", "g1", "approve", "--thread", "t1", "--session", "other"]))).toBe(ExitCode.Usage);
+  expect(resolves).toEqual([]);
 });

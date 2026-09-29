@@ -14,6 +14,8 @@
  */
 import { ApiError, AuthError, UnreachableError } from "./exit.js";
 import type {
+  CreateThreadRequest,
+  CreateThreadResponse,
   CreateSessionRequest,
   CreateSessionResponse,
   EnsureWorkspaceRuntimeResponse,
@@ -172,11 +174,32 @@ export class InstanceClient {
 
   // ── threads ────────────────────────────────────────────────────────────
 
+  getThread(id: string): Promise<{ id: string; sessionId: string; title: string | null; createdAt: number; archivedAt: number | null }> {
+    return this.request("GET", `/api/threads/${encodeURIComponent(id)}`);
+  }
+
+  listWorkspaceThreads(workspace?: string): Promise<ListThreadsResponse> {
+    return this.request("GET", `/api/threads${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ""}`);
+  }
+
+  createWorkspaceThread(body: CreateThreadRequest, workspace?: string): Promise<CreateThreadResponse> {
+    return this.request("POST", `/api/threads${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ""}`, body);
+  }
+
+
   listThreads(id: string): Promise<ListThreadsResponse> {
     return this.request<ListThreadsResponse>(
       "GET",
       `/api/sessions/${encodeURIComponent(id)}/threads`,
     );
+  }
+
+  listThreadDecisions(id: string): Promise<ListDecisionsResponse> {
+    return this.request("GET", `/api/threads/${encodeURIComponent(id)}/decisions`);
+  }
+
+  resolveThreadDecision(id: string, gateId: string, body: ResolveDecisionRequest): Promise<void> {
+    return this.request("POST", `/api/threads/${encodeURIComponent(id)}/decisions/${encodeURIComponent(gateId)}/resolve`, body);
   }
 
   // ── decision gates ─────────────────────────────────────────────────────

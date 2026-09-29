@@ -313,11 +313,13 @@ export async function run(args: string[], ctx: CliContext): Promise<number> {
   });
   const client = new InstanceClient({ url: instance.url, apiKey: instance.apiKey });
 
-  const sessionId =
-    typeof flags.flags.session === "string"
-      ? flags.flags.session
-      : (await client.ensureOrchestrator()).sessionId;
   let threadId = typeof flags.flags.thread === "string" ? flags.flags.thread : undefined;
+  const resolved = threadId ? await client.getThread(threadId) : undefined;
+  if (resolved && typeof flags.flags.session === "string" && flags.flags.session !== resolved.sessionId) {
+    printErr("The thread does not belong to the specified runtime.");
+    return ExitCode.Usage;
+  }
+  const sessionId = resolved?.sessionId ?? (typeof flags.flags.session === "string" ? flags.flags.session : (await client.ensureOrchestrator()).sessionId);
 
   printLine(chatBanner(instance.name, sessionId));
 

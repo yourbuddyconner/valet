@@ -62,6 +62,7 @@ function underSegment(path: string, root: string): boolean {
 export function teamApiKeyPathAllowed(path: string, method: string, teamId: string): boolean {
   if (path === "/api/me" && method === "GET") return true;
   if (underSegment(path, "/api/sessions")) return true;
+  if (underSegment(path, "/api/threads")) return true;
   if (underSegment(path, "/api/workflows")) return true;
   if (path === `/api/workspaces/${teamId}/runtime` && (method === "POST" || method === "GET")) return true;
   if (path === `/api/workspaces/${teamId}/briefings` && method === "GET") return true;

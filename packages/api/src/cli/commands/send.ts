@@ -25,6 +25,7 @@ import type {
 
 /** The subset of `InstanceClient` the `send` command needs. */
 export interface SendClient {
+  getThread(id: string): Promise<{ sessionId: string }>;
   ensureOrchestrator(): Promise<EnsureWorkspaceRuntimeResponse>;
   sendPrompt(id: string, body: SendPromptRequest): Promise<SendPromptResponse>;
 }
@@ -197,9 +198,13 @@ export async function runSend(deps: SendDeps, flags: ParsedFlags): Promise<numbe
   }
 
   const sessionOverride = flags.flags.session;
-  const sessionId =
-    typeof sessionOverride === "string" ? sessionOverride : (await deps.client.ensureOrchestrator()).sessionId;
   const threadOverride = typeof flags.flags.thread === "string" ? flags.flags.thread : undefined;
+  const resolved = threadOverride ? await deps.client.getThread(threadOverride) : undefined;
+  if (resolved && typeof sessionOverride === "string" && sessionOverride !== resolved.sessionId) {
+    printErr("The thread does not belong to the specified runtime.");
+    return ExitCode.Usage;
+  }
+  const sessionId = resolved?.sessionId ?? (typeof sessionOverride === "string" ? sessionOverride : (await deps.client.ensureOrchestrator()).sessionId);
 
   const sent = await deps.client.sendPrompt(sessionId, { text, threadId: threadOverride });
   // A null messageId means the text ran as a slash command: it executed

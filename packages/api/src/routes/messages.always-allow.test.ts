@@ -108,7 +108,11 @@ it("lets current team members reach an existing workflow agent gate without an a
   const outsider = { "x-valet-test-user-id": "test-member", "Content-Type": "application/json" };
   expect((await fetch(base, { headers: outsider })).status).toBe(404);
   expect((await fetch(`${base}/join-channel/resolve`, { method: "POST", headers: outsider, body: JSON.stringify({ actionId: "approve" }) })).status).toBe(404);
-  const approved = await fetch(`${base}/join-channel/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actionId: "approve" }) });
+  const threadBase = `${api.baseUrl}/api/threads/${threadId}/decisions`;
+  expect((await fetch(threadBase)).status).toBe(200);
+  expect((await fetch(threadBase, { headers: outsider })).status).toBe(404);
+  expect((await fetch(`${api.baseUrl}/api/threads/${threadId}/messages`)).status).toBe(404);
+  const approved = await fetch(`${threadBase}/join-channel/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actionId: "approve" }) });
   expect(approved.status).toBe(200);
   expect(await p.engineStore.getDecisionGate(sessionId, "join-channel")).toMatchObject({ status: "resolved", resolution: { actionId: "approve", resolvedBy: "local-user" } });
   const guessed = "wf:approval-run:never-created";

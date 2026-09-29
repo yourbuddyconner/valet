@@ -296,7 +296,6 @@ export function SessionView({
       agentStatus={threadStatus.status}
       turnStartedAt={threadStatus.turnStartedAt}
       conn={stream.conn}
-      notice={scopeNotice}
       sandbox={stream.sandbox}
       threadId={effectiveThreadId}
       messages={stream.messages}

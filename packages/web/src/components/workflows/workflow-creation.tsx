@@ -15,7 +15,7 @@ export function WorkflowCreation({ onBack, onBegin }: { onBack?: () => void; onB
   const assistant = useWorkspaceAssistant();
   const navigate = useNavigate();
   const create = useCreateWorkflow();
-  const workflowId = useRef<string>();
+  const workflowId = useRef<string | undefined>(undefined);
   const [draftId] = useState(() => `workflow-draft:${crypto.randomUUID()}`);
   const preparing = useRef(false);
   const mounted = useRef(true);
