@@ -234,7 +234,7 @@ export function FlowNode({ data, selected }: NodeProps<FlowXyNode>) {
       data-wave={parallel?.wave}
       style={{ width: NODE_CARD_WIDTH }}
       className={cn(
-        "flow-node-card rounded-md border bg-paper px-3 py-2 shadow-sm",
+        "flow-node-card min-h-[84px] rounded-md border bg-paper px-3 py-2 shadow-sm",
         nodeShellClasses(runStatus, !!selected),
         entering && "flow-node-enter",
       )}

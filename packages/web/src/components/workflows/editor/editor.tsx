@@ -501,7 +501,7 @@ function EditorDraft({
             covered conversation out of the tab order and out of the
             accessibility tree, so only one of the two answers a query. */}
         <div className={cn(
-          "relative min-w-0 w-full flex-col bg-paper lg:flex lg:w-[--editor-aside] lg:max-w-full lg:shrink-0 lg:border-l lg:border-line",
+          "relative min-h-0 min-w-0 w-full flex-col bg-paper lg:flex lg:w-[--editor-aside] lg:max-w-full lg:shrink-0 lg:border-l lg:border-line",
           compactView === "assistant" || inspector ? "flex" : "hidden",
         )}>
           <div className="flex min-h-0 flex-1 flex-col" inert={inspector !== null}>

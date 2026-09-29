@@ -1,11 +1,11 @@
 import { createContext, useContext, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Sparkles, X, ExternalLink } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { qk } from "~/api/queries";
 import { api } from "~/api/client";
 import { useWorkspaceScope } from "~/lib/workspace-scope";
-import { SessionView } from "~/components/session/session-view";
+import { AssistantPanel } from "~/components/session/assistant-panel";
 import { prefillComposerDraft } from "~/stores/composer-drafts";
 import { Button } from "~/components/primitives";
 
@@ -81,12 +81,7 @@ export function WorkspaceAssistantProvider({ children }: { children: ReactNode }
   const conversation = loaded[workspace];
   const visible = opened === workspace && pathname !== "/chat" && !/^\/workflows\/[^/]+$/.test(pathname);
   const panel = visible ? <aside aria-label="Valet assistant" className="absolute inset-0 z-40 flex min-h-0 flex-col border-l border-line bg-paper lg:static lg:w-[440px] lg:shrink-0">
-      <div className="flex h-[60px] shrink-0 items-center gap-2 border-b border-line px-4">
-        <Sparkles className="h-4 w-4" /><span className="min-w-0 flex-1 text-sm font-medium">Valet · {scope.teamId ? "Team workspace" : "Personal"}</span>
-        {conversation && <button aria-label="Open assistant in Threads" className="rounded p-2 hover:bg-ink-wash" onClick={() => { close(); void navigate({ to: "/chat", search: { workspace, thread: conversation.threadId } }); }}><ExternalLink className="h-4 w-4" /></button>}
-        <button aria-label="Close Valet" className="rounded p-2 hover:bg-ink-wash" onClick={close}><X className="h-4 w-4" /></button>
-      </div>
-      {errors[workspace] ? <div role="alert" className="p-4 text-sm">{errors[workspace]}<Button onClick={() => void open()}>Retry</Button></div> : conversation ? <SessionView chatOnly key={`${workspace}:${conversation.threadId}`} panel hidePanelHeader scopeNotice={scope.teamId ? "Shared with your team. Members can read and reply." : undefined} sessionId={conversation.sessionId} activeThreadId={conversation.threadId} /> : <p className="p-4 text-sm text-muted">Opening your workspace thread…</p>}
+      <AssistantPanel title={`Valet · ${scope.teamId ? "Team workspace" : "Personal"}`} sessionId={conversation?.sessionId} threadId={conversation?.threadId} error={errors[workspace]} onRetry={() => void open()} onClose={close} onOpen={() => { if (conversation) { close(); void navigate({ to: "/chat", search: { workspace, thread: conversation.threadId } }); } }} scopeNotice={scope.teamId ? "Shared with your team. Members can read and reply." : undefined} />
     </aside> : null;
   return <Context.Provider value={{ open: (prompt) => { void open(prompt); }, panel, close, isOpen: visible }}>{children}</Context.Provider>;
 }

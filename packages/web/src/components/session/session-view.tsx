@@ -1,6 +1,6 @@
 import { ListTree } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/primitives/popover";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { X, ExternalLink } from "lucide-react";
 import {
@@ -65,6 +65,7 @@ export function SessionView({
   sessionId,
   panel,
   hidePanelHeader = false,
+  renderPanelHeader,
   activeThreadId,
   onClose,
   onOpenChild,
@@ -80,6 +81,7 @@ export function SessionView({
   /** Renders the compact slide-over header instead of `SessionHeader`. */
   panel?: boolean;
   hidePanelHeader?: boolean;
+  renderPanelHeader?: (summary: ReactNode) => ReactNode;
   /**
    * Controlled active thread id, typically derived from the host route's
    * `?thread=` search param (full/standalone). When omitted (panel), the
@@ -240,16 +242,21 @@ export function SessionView({
 
   if (session.isLoading) {
     return (
-      <div className="flex-1 grid place-items-center text-sm text-muted">
-        <Spinner /> Loading session…
+      <div className="flex min-h-0 flex-1 flex-col">
+        {panel && !hidePanelHeader && renderPanelHeader?.(null)}
+        <div className="flex-1 grid place-items-center text-sm text-muted"><Spinner /> Loading conversation…</div>
       </div>
     );
   }
   if (session.error || !session.data) {
     return (
-      <div className="flex-1 grid place-items-center text-center text-sm text-danger-500 p-8">
-        Failed to load session
-        <div className="text-xs text-muted mt-1">{(session.error as Error)?.message}</div>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {panel && !hidePanelHeader && renderPanelHeader?.(null)}
+        <div role="alert" className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-sm text-danger-500">
+          Failed to load conversation
+          <div className="text-xs text-muted">{session.error?.message}</div>
+          <Button size="sm" variant="secondary" onClick={() => void session.refetch()}>Retry</Button>
+        </div>
       </div>
     );
   }
@@ -312,7 +319,7 @@ export function SessionView({
     <div ref={viewRef} className="flex-1 flex flex-col min-h-0 min-w-0">
       {(panel || tab !== "chat") && (
         <>
-          {panel ? (!hidePanelHeader && <div className="flex items-center"><PanelHeader sessionId={sessionId} threadId={effectiveThreadId} title={session.data.title} onClose={onClose} />{summaryControl}</div>) : sessionHeader}
+          {panel ? (!hidePanelHeader && (renderPanelHeader ? renderPanelHeader(summaryControl) : <div className="flex shrink-0 items-center border-b border-line pr-3"><PanelHeader sessionId={sessionId} threadId={effectiveThreadId} title={session.data.title} onClose={onClose} />{summaryControl}</div>)) : sessionHeader}
           {sandboxTabs}
         </>
       )}
@@ -395,7 +402,7 @@ function PanelHeader({
   onClose?: () => void;
 }) {
   return (
-    <header className="border-b border-line px-4 py-3 flex items-center gap-3">
+    <header className="min-w-0 flex-1 px-4 py-3 flex items-center gap-3">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold tracking-tight truncate text-ink">
           {title || "Untitled session"}
