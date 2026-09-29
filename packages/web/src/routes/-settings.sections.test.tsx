@@ -299,7 +299,7 @@ describe("ThreadDefaultsPage", () => {
 
   it("does not offer current-thread inheritance for new conversations", () => {
     render(<ThreadDefaultsPage />);
-    expect(screen.queryByLabelText("New thread behavior")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("New thread behavior")).toBeNull();
   });
 });
 
