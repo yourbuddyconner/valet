@@ -41,7 +41,7 @@ Final Linear security regression tests passed (64 tests), and a forced TypeScrip
 
 | Check | Evidence |
 | --- | --- |
-| Root test sweep | 817 files passed, 17 skipped; 11,118 tests passed, 65 skipped. |
+| Root test sweep | 817 files passed, 17 skipped; 11,121 tests passed, 65 skipped. |
 | Static/build | Typecheck, web build, API bundle, conventions, and docs checks passed. |
 | Docker | Browser, sandbox, workspace preparation, and prebuild stages passed. Nested execution now probes filesystem execution before selecting fuse-overlayfs. |
 | Kubernetes | Lifecycle, execution, provider, conformance, and real image build stages passed after local disk repair and expansion. The image test requires a successful push. |
