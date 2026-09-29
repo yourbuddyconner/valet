@@ -242,8 +242,7 @@ END $cost_view$`;
  * `0000_app.sql`. Delete this list at 1.0, when numbered migrations take
  * over.
  *
- * Except for the explicit development singleton cutover below, each entry
- * must also be safe to ROLL BACK: the previous release may boot
+ * Each entry must also be safe to ROLL BACK: the previous release may boot
  * this database again. Adding a column or a table is safe; renaming or
  * dropping is not, because the older release repairs the OLD name and its
  * statement then stops its boot. Do not rename or drop here.
@@ -271,25 +270,30 @@ const SCHEMA_REPAIRS: SchemaRepair[] = [
   "created_at" bigint NOT NULL, "updated_at" bigint NOT NULL
 )` },
   { describe: "event receipts page index", probe: { kind: "index", index: "event_receipts_page" }, sql: 'CREATE INDEX IF NOT EXISTS "event_receipts_page" ON "event_receipts" ("org_id", "created_at", "id")' },
-  // Development cutover: workspace configuration replaces retired profile fields.
+  // Retain retired fields for an older binary. Current application schemas
+  // deliberately omit them, so new code cannot change their saved values.
   ...["name", "avatar_url", "personality", "behavior", "model", "reasoning"].map((column): SchemaRepair => ({
-    describe: `remove assistants.${column}`,
-    probe: { kind: "removed-column", table: "assistants", column },
-    sql: `ALTER TABLE "assistants" DROP COLUMN IF EXISTS "${column}"`,
+    describe: `assistants.${column} rollback column`,
+    probe: { kind: "column", table: "assistants", column },
+    sql: `ALTER TABLE "assistants" ADD COLUMN IF NOT EXISTS "${column}" text`,
+  })),
+  { describe: "assistants.is_default rollback column", probe: { kind: "column", table: "assistants", column: "is_default" }, sql: 'ALTER TABLE assistants ADD COLUMN IF NOT EXISTS is_default boolean NOT NULL DEFAULT true' },
+  ...["followed_threads", "workflow_schedules"].map((table): SchemaRepair => ({
+    describe: `${table}.assistant_id rollback column`,
+    probe: { kind: "column", table, column: "assistant_id" },
+    sql: `ALTER TABLE "${table}" ADD COLUMN IF NOT EXISTS assistant_id text`,
   })),
   {
     describe: "workspace assistant singleton cutover",
     probe: { kind: "index", index: "assistants_workspace" },
-    // Dev-only cutover: older builds are not supported after this change.
-    // Existing duplicate profiles require a dev database reset, never silent history deletion.
+    // Duplicate profiles reject this transaction without deleting history.
+    // Preserve legacy default flags and routing fields for a bounded rollback.
     sql: `DO $$ BEGIN
-      DROP INDEX IF EXISTS assistants_default_owner;
-      ALTER TABLE assistants DROP COLUMN IF EXISTS is_default;
-      ALTER TABLE followed_threads DROP COLUMN IF EXISTS assistant_id;
-      ALTER TABLE workflow_schedules DROP COLUMN IF EXISTS assistant_id;
       CREATE UNIQUE INDEX assistants_workspace ON assistants(org_id, owner_type, owner_id);
+      ALTER TABLE assistants ALTER COLUMN is_default SET DEFAULT true;
     END $$`,
   },
+  { describe: "assistants legacy default index", probe: { kind: "index", index: "assistants_default_owner" }, sql: 'CREATE UNIQUE INDEX assistants_default_owner ON assistants(org_id, owner_type, owner_id) WHERE is_default' },
   { describe: "teams.slack_home_channel_id column", probe: { kind: "column", table: "teams", column: "slack_home_channel_id" }, sql: 'ALTER TABLE "teams" ADD COLUMN IF NOT EXISTS "slack_home_channel_id" text' },
   { describe: "user_notification_preferences.team_dm column", probe: { kind: "column", table: "user_notification_preferences", column: "team_dm" }, sql: 'ALTER TABLE "user_notification_preferences" ADD COLUMN IF NOT EXISTS "team_dm" boolean DEFAULT false NOT NULL' },
 

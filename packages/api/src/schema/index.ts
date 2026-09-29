@@ -553,6 +553,8 @@ export const teamJoinEligibilities = pgTable(
 /** One runtime identity per personal or team workspace. Ownership is unique,
  * including retired identities. Threads share this identity and execution
  * sessions retain separate sandbox lifecycles. */
+// Legacy profile/default columns remain in SQL for rollback. This model omits
+// them so the workspace runtime cannot overwrite an older binary's settings.
 export const assistants = pgTable(
   "assistants",
   {

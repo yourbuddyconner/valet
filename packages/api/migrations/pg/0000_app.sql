@@ -315,6 +315,14 @@ CREATE TABLE "assistants" (
 	"org_id" text NOT NULL,
 	"owner_type" text NOT NULL,
 	"owner_id" text NOT NULL,
+	-- Retained for the previous binary during bounded rollback.
+	"name" text,
+	"avatar_url" text,
+	"personality" text,
+	"behavior" text,
+	"model" text,
+	"reasoning" text,
+	"is_default" boolean DEFAULT true NOT NULL,
 	"session_id" text NOT NULL,
 	"created_at" bigint NOT NULL,
 	"archived_at" bigint
@@ -323,6 +331,8 @@ CREATE TABLE "assistants" (
 CREATE UNIQUE INDEX "assistants_session" ON "assistants" ("session_id");
 --> statement-breakpoint
 CREATE UNIQUE INDEX "assistants_workspace" ON "assistants" ("org_id","owner_type","owner_id");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "assistants_default_owner" ON "assistants" ("org_id","owner_type","owner_id") WHERE "is_default";
 --> statement-breakpoint
 CREATE INDEX "assistants_owner" ON "assistants" ("org_id","owner_type","owner_id");
 --> statement-breakpoint
@@ -1061,7 +1071,8 @@ CREATE TABLE "followed_threads" (
 	-- rule's CURRENT invocation audience, so a rule narrowed back to the team
 	-- narrows the threads it opened, and a disabled or deleted rule narrows
 	-- them too. NULL, like a rule that is gone, reads as team-only.
-	"subscription_id" text
+	"subscription_id" text,
+	"assistant_id" text
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX "followed_threads_key" ON "followed_threads" ("org_id","channel_type","channel_id","thread_ts");
@@ -1087,7 +1098,8 @@ CREATE TABLE "workflow_schedules" (
 	"next_fire_at" bigint NOT NULL,
 	"created_by" text NOT NULL,
 	"created_at" bigint NOT NULL,
-	"updated_at" bigint NOT NULL
+	"updated_at" bigint NOT NULL,
+	"assistant_id" text
 );
 --> statement-breakpoint
 CREATE INDEX "workflow_schedules_due" ON "workflow_schedules" ("enabled","next_fire_at");

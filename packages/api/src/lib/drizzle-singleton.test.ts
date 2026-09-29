@@ -11,17 +11,11 @@ describe("workspace singleton repair on an already migrated database", () => {
 
   async function restorePreviousSchema() {
     await db.query("DROP INDEX assistants_workspace");
-    await db.query("ALTER TABLE assistants ADD COLUMN is_default boolean NOT NULL DEFAULT false");
-    await db.query("CREATE UNIQUE INDEX assistants_default_owner ON assistants(org_id, owner_type, owner_id) WHERE is_default");
-    await db.query("ALTER TABLE followed_threads ADD COLUMN assistant_id text");
-    await db.query("ALTER TABLE workflow_schedules ADD COLUMN assistant_id text");
+    await db.query("ALTER TABLE assistants ALTER COLUMN is_default SET DEFAULT false");
   }
 
   it("repairs the previous columns with one executable statement and reserves retired owners", async () => {
     await restorePreviousSchema();
-    for (const column of ["name", "avatar_url", "personality", "behavior", "model", "reasoning"]) {
-      await db.query(`ALTER TABLE assistants ADD COLUMN ${column} text`);
-    }
     await db.query("ALTER TABLE teams DROP COLUMN slack_home_channel_id");
     await db.query("ALTER TABLE user_notification_preferences DROP COLUMN team_dm");
     await db.query("ALTER TABLE artifacts DROP COLUMN source_thread_id");
@@ -35,11 +29,11 @@ describe("workspace singleton repair on an already migrated database", () => {
     // The migration tracker is already populated, so this exercises the same
     // repair query path used at restart, including prepared-statement limits.
     await expect(applyAppMigrations(db)).resolves.toBeUndefined();
-    const removed = await db.query(`SELECT table_name, column_name FROM information_schema.columns
+    const retained = await db.query(`SELECT table_name, column_name FROM information_schema.columns
       WHERE table_schema = current_schema() AND
       ((table_name = 'assistants' AND column_name IN ('is_default', 'name', 'avatar_url', 'personality', 'behavior', 'model', 'reasoning')) OR
        (table_name IN ('followed_threads', 'workflow_schedules') AND column_name = 'assistant_id'))`);
-    expect(removed.rows).toEqual([]);
+    expect(retained.rows).toHaveLength(9);
     const added = await db.query(`SELECT table_name, column_name FROM information_schema.columns
       WHERE table_schema = current_schema() AND
       ((table_name = 'teams' AND column_name = 'slack_home_channel_id') OR
@@ -51,10 +45,10 @@ describe("workspace singleton repair on an already migrated database", () => {
       { table_name: "user_notification_preferences", column_name: "team_dm" },
     ]);
     const indexes = await db.query("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname IN ('assistants_workspace', 'assistants_default_owner')");
-    expect(indexes.rows).toHaveLength(1);
-    expect(indexes.rows[0].indexname).toBe("assistants_workspace");
-    expect(indexes.rows[0].indexdef).toContain("UNIQUE INDEX");
-    expect(indexes.rows[0].indexdef).not.toContain("WHERE");
+    expect(indexes.rows).toHaveLength(2);
+    const singleton = indexes.rows.find(row => row.indexname === "assistants_workspace");
+    expect(singleton?.indexdef).toContain("UNIQUE INDEX");
+    expect(singleton?.indexdef).not.toContain("WHERE");
     await expect(db.query(`INSERT INTO assistants(id, org_id, owner_type, owner_id, session_id, created_at)
       VALUES ('replacement', 'org', 'team', 'retired-owner', 'replacement-session', 3)`)).rejects.toThrow(/unique/i);
     const preserved = await db.query("SELECT id, session_id, archived_at FROM assistants WHERE org_id = 'org' ORDER BY id");
