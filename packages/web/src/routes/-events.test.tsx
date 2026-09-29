@@ -358,15 +358,15 @@ describe("EventsPage — Activity", () => {
     };
     render(<EventsPage />);
 
-    expect(screen.getByRole("tab", { name: "Problems" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("searchbox", { name: "Search problems" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Event Logs" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("searchbox", { name: "Search rejections and failures" })).toBeTruthy();
   });
 
   it("writes tab changes to the URL so history restores the selected tab", async () => {
     const page = render(<EventsPage />);
-    fireEvent.click(screen.getByRole("tab", { name: "Problems" }));
-    expect(searchState).toEqual({ tab: "problems" });
-    expect(screen.getByRole("tab", { name: "Problems" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: "Event Logs" }));
+    expect(searchState).toEqual({ tab: "logs" });
+    expect(screen.getByRole("tab", { name: "Event Logs" }).getAttribute("aria-selected")).toBe("true");
 
     searchState = {};
     page.rerender(<EventsPage />);
@@ -374,7 +374,7 @@ describe("EventsPage — Activity", () => {
 
     searchState = { tab: "problems" };
     page.rerender(<EventsPage />);
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Problems" }).getAttribute("aria-selected")).toBe("true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Event Logs" }).getAttribute("aria-selected")).toBe("true"));
   });
 
   it("keeps a Problems backward cursor when Activity scope changes", async () => {
@@ -730,17 +730,17 @@ describe("EventsPage — Subscriptions", () => {
   });
 });
 
-it("hides Delivery log and never queries receipts for a member deep link", () => {
+it("shows Event Logs without querying admin receipts for a member deep link", () => {
   searchState = { tab: "receipts" };
   render(<EventsPage />);
-  expect(screen.queryByRole("tab", { name: "Delivery log" })).toBeNull();
+  expect(screen.getByRole("tab", { name: "Event Logs" })).toBeTruthy();
   expect(receiptsHook).not.toHaveBeenCalled();
 });
-it("opens the admin Delivery log through the Events tab", () => {
+it("opens admin receipts within Event Logs", () => {
   orgRole = "admin";
   render(<EventsPage />);
-  fireEvent.click(screen.getByRole("tab", { name: "Delivery log" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Event Logs" }));
   expect(receiptsHook).toHaveBeenCalledWith("org_1", expect.anything(), true);
   expect(screen.getByText(/No receipts recorded in the last 7 days/)).toBeTruthy();
-  expect(searchState.tab).toBe("receipts");
+  expect(searchState.tab).toBe("logs");
 });

@@ -110,7 +110,7 @@ it("shows results without creation or artifact management controls", async () =>
   owner = { ownerType: "team", ownerId: "t" };
   vi.mocked(api.listWork).mockResolvedValue({ sessions: [], nextCursor: null });
   render(<WorkDiscovery />, { wrapper });
-  expect(await screen.findByText("No recent work to brief yet. Your goals and results will appear here as you work.")).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Nothing to brief yet" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Recent results" })).toBeNull();
   expect(api.listWork).not.toHaveBeenCalled();
   expect(screen.getByRole("heading", { name: "Briefing" })).toBeTruthy();

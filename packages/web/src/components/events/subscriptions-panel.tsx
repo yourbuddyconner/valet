@@ -1,3 +1,4 @@
+import { useWorkspaceAssistant } from "~/components/layout/workspace-assistant";
 import type {
   EventSubscriptionTargetWire,
   EventSubscriptionWire
@@ -111,6 +112,7 @@ function describeTarget(
  * option writes a row this page can never disable.
  */
 export function SubscriptionsPanel() {
+  const assistant = useWorkspaceAssistant();
   const owner = useListOwner();
   const meQ = useMe();
   // `useListOwner` also answers undefined when identity FAILS, and that
@@ -124,6 +126,13 @@ export function SubscriptionsPanel() {
   const workflowsQ = useWorkflows();
   const teamsQ = useTeams();
   const [creating, setCreating] = useState(false);
+  const [organizationScope, setOrganizationScope] = useState<string>();
+  const scopeKey = owner ? `${owner.ownerType}:${owner.ownerId}` : undefined;
+  const showOrganization = scopeKey !== undefined && organizationScope === scopeKey;
+  const subscriptions = (subsQ.data?.subscriptions ?? []).filter((sub) => showOrganization
+    ? sub.ownerType === "org"
+    : sub.ownerType === owner?.ownerType && sub.ownerId === owner?.ownerId);
+
 
   const workflowNames = useMemo(
     () => new Map((workflowsQ.data?.workflows ?? []).map((w) => [w.id, w.name])),
@@ -151,12 +160,20 @@ export function SubscriptionsPanel() {
         <p className="text-sm text-muted">
           A subscription runs a workflow or prompts an orchestrator when a matching event arrives.
         </p>
-        <Button type="button" size="sm" className="shrink-0 gap-1.5" onClick={() => setCreating(true)}>
+        <div className="flex items-center gap-2"><Button size="sm" onClick={() => assistant.open("Help me configure an event subscription in this workspace. Ask which event should trigger it, what should happen, and where replies should go. Explain the proposed configuration before changing it.")}>Create with Valet</Button>
+        <Button variant="ghost" type="button" size="sm" className="shrink-0 gap-1.5" onClick={() => setCreating(true)}>
           <Plus className="h-3.5 w-3.5" aria-hidden />
-          New automation
-        </Button>
+          Manual setup
+        </Button></div>
       </div>
 
+      <label className="flex items-center gap-2 text-sm text-muted">Show
+        <select aria-label="Subscription scope" value={showOrganization ? "organization" : "workspace"} onChange={(event) => setOrganizationScope(event.target.value === "organization" ? scopeKey : undefined)} className="rounded border border-line bg-paper px-3 py-2 text-ink">
+          <option value="workspace">This workspace</option>
+          <option value="organization">Organization rules</option>
+        </select>
+      </label>
+      {showOrganization && <p className="text-xs text-muted">These rules belong to the organization. Creation above uses the selected workspace.</p>}
       {/* `isPending`, not `isLoading`: a held query still counts as
           loading. */}
       {subsQ.isPending && !ownerFailed && <LoadingRow label="Loading subscriptions…" />}
@@ -168,13 +185,13 @@ export function SubscriptionsPanel() {
         </ErrorRow>
       )}
 
-      {subsQ.data && subsQ.data.subscriptions.length === 0 && (
+      {subsQ.data && subscriptions.length === 0 && (
         <EmptyRow>No subscriptions yet. Create one above.</EmptyRow>
       )}
 
-      {subsQ.data && subsQ.data.subscriptions.length > 0 && (
+      {subsQ.data && subscriptions.length > 0 && (
         <div className="divide-y divide-line border-t border-line">
-          {subsQ.data.subscriptions.map((sub) => (
+          {subscriptions.map((sub) => (
             <SubscriptionRow
               key={sub.id}
               sub={sub}

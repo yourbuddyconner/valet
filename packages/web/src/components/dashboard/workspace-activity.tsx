@@ -5,20 +5,20 @@ import type { ArtifactListItem, GlobalWorkflowRunSummary, SessionSummary, Worksp
 import type { OwnerFilter } from "~/api/client";
 import { useCatchUpWork, useWorkspaceOutcomes, useWorkspaceActiveWork } from "~/api/catch-up";
 import { useArtifacts } from "~/api/artifacts";
-import { useRuns, useWorkflows, useWorkflowActionRequired } from "~/api/workflows";
+import { useWorkflows, useWorkflowActionRequired } from "~/api/workflows";
 import { useMe } from "~/api/settings";
 import { useListOwner } from "~/lib/use-list-owner";
 import { relativeTime } from "~/lib/relative-time";
 import { Badge, Button, ErrorRow, LoadingRow } from "~/components/primitives";
 import { RunStateBadge } from "~/components/run-state-badge";
 
-export function WorkspaceActivity({ owner: explicitOwner }: { owner?: OwnerFilter }) {
+export function WorkspaceActivity({ owner: explicitOwner, compact = false }: { owner?: OwnerFilter; compact?: boolean }) {
   const selectedOwner = useListOwner();
   const me = useMe();
   const owner = explicitOwner ?? selectedOwner;
   if (me.error && (!owner || owner.ownerType === "user")) return <ErrorRow>Could not load your workspace. Reload to try again.</ErrorRow>;
   if (!owner) return <LoadingRow label="Loading work…" />;
-  return <ScopedCatchUp key={`${owner.ownerType}:${owner.ownerId}`} owner={owner} />;
+  return <ScopedCatchUp key={`${owner.ownerType}:${owner.ownerId}`} owner={owner} compact={compact} />;
 }
 
 export function safeResultUrl(value?: string): string | undefined {
@@ -57,23 +57,16 @@ function artifactResult(row: ArtifactListItem): ResultItem {
     sessionId: row.sourceSessionId ?? undefined, threadId: row.sourceThreadId ?? undefined, token: row.token };
 }
 
-function ScopedCatchUp({ owner }: { owner: OwnerFilter }) {
+function ScopedCatchUp({ owner, compact }: { owner: OwnerFilter; compact: boolean }) {
   const work = useCatchUpWork(owner);
   const activeWork = useWorkspaceActiveWork(owner);
   const outcomes = useWorkspaceOutcomes(owner);
   const [artifactCursor, setArtifactCursor] = useState<string>();
-  const [activeCursor, setActiveCursor] = useState<string>();
-  const [recentCursor, setRecentCursor] = useState<string>();
   const artifacts = useArtifacts(owner, { limit: 25, cursor: artifactCursor, refetchInterval: 10_000 });
-  const workflows = useWorkflows(owner);
+  const workflows = useWorkflows(owner, { refetchInterval: 10_000 });
   const gates = useWorkflowActionRequired();
-  const workflowIds = workflows.error ? undefined : workflows.data?.workflows.map(row => row.id);
-  const active = useRuns({ workflowIds: workflowIds ?? [], status: ["pending", "running", "parked", "terminalizing"], limit: 100, cursor: activeCursor },
-    { enabled: workflowIds !== undefined, refetchInterval: 10_000 });
-  const recent = useRuns({ workflowIds: workflowIds ?? [], status: ["settled"], limit: 25, cursor: recentCursor },
-    { enabled: workflowIds !== undefined, refetchInterval: 10_000 });
   const sessions = work.error ? [] : work.data?.pages.flatMap(page => page.sessions) ?? [];
-  const runs = workflows.error ? [] : [...(active.error ? [] : active.data?.runs ?? []), ...(recent.error ? [] : recent.data?.runs ?? [])];
+  const runs: GlobalWorkflowRunSummary[] = workflows.error ? [] : (workflows.data?.workflows ?? []).flatMap((workflow) => workflow.latestRun ? [{ ...workflow.latestRun, workflowName: workflow.name, needsApproval: !gates.error && Boolean(gates.data?.items.some((gate) => gate.runId === workflow.latestRun?.runId && gate.owner.type === owner.ownerType && gate.owner.id === owner.ownerId)) }] : []);
   const queueItems = activeWork.error ? [] : activeWork.data?.pages.flatMap(page => page.items) ?? [];
   const statePriority = { needs_you: 3, working: 2, failed: 1 };
   const activeThreadMap = new Map<string, WorkspaceActiveWorkItem>();
@@ -90,34 +83,37 @@ function ScopedCatchUp({ owner }: { owner: OwnerFilter }) {
   const resultItems: ResultItem[] = [
     ...(outcomes.error ? [] : outcomes.data?.pages.flatMap(page => page.items).map(outcomeResult) ?? []),
     ...(artifacts.error ? [] : artifacts.data?.artifacts.filter(row => !row.revoked).map(artifactResult) ?? []),
-    ...runs.filter(row => runCategory(row) === "result").map(row => ({ id: `run:${row.runId}`, title: row.workflowName, kind: row.outcome ?? "settled", time: row.updatedAt, runId: row.runId })),
+
   ];
   const otherWork = sessions.filter(row => !activeThreads.some(item => item.sessionId === row.id) && !resultItems.some(item => item.sessionId === row.id));
-  const loading = activeWork.isPending || workflows.isPending || gates.isPending || (workflowIds !== undefined && (active.isPending || recent.isPending));
+  const loading = activeWork.isPending || workflows.isPending || gates.isPending;
   const errors = [
     { label: "work", query: work }, { label: "active work", query: activeWork }, { label: "results", query: outcomes }, { label: "artifacts", query: artifacts },
     { label: "workflows", query: workflows }, { label: "approval details", query: gates },
-    ...(workflowIds !== undefined ? [{ label: "active workflow runs", query: active }, { label: "recent workflow runs", query: recent }] : []),
   ].filter(entry => entry.query.error);
-  const incomplete = (!activeWork.error && activeWork.hasNextPage) || (!active.error && !workflows.error && (active.data?.nextCursor || activeCursor));
+  const incomplete = !activeWork.error && activeWork.hasNextPage;
+  if (compact) return <div className="space-y-2">
+    {errors.filter(({ label }) => ["active work", "workflows", "approval details"].includes(label)).map(({ label, query }) => <ErrorRow key={label}>Could not load {label}. <button className="underline" onClick={() => void query.refetch()}>Retry</button></ErrorRow>)}
+    {loading && <LoadingRow label="Loading work…" />}
+    {(needsYou.length > 0 || attentionRuns.length > 0) && <div className="divide-y divide-line rounded-lg border border-line">{needsYou.slice(0, 3).map(row => <ActiveRow key={row.id} row={row} />)}{attentionRuns.slice(0, Math.max(0, 3 - needsYou.length)).map(row => <RunRow key={row.runId} row={row} />)}</div>}
+    {!loading && !activeWork.error && !workflows.error && !gates.error && !needsYou.length && !attentionRuns.length && <p className="text-sm text-muted">Nothing needs your attention right now.</p>}
+    {(needsYou.length + attentionRuns.length > 3 || incomplete) && <p className="text-xs text-muted">More activity is available in your briefing.</p>}
+  </div>;
   return <div className="space-y-7">
     {errors.map(({ label, query }) => <ErrorRow key={label}>Could not load {label}. <button className="underline" onClick={() => void query.refetch()}>Retry</button></ErrorRow>)}
     {loading && <LoadingRow label="Loading work…" />}
     {incomplete && <p className="text-xs text-muted">More active work is available. Use the paging controls below to see it.</p>}
-    <Section title="Needs attention" icon={<CircleAlert className="h-4 w-4 text-amber" />} count={needsYou.length + attentionRuns.length}>
+    {(needsYou.length + attentionRuns.length > 0) && <Section title="Needs attention" icon={<CircleAlert className="h-4 w-4 text-amber" />} count={needsYou.length + attentionRuns.length}>
       {needsYou.map(row => <ActiveRow key={row.id} row={row} />)}
       {attentionRuns.map(row => <RunRow key={row.runId} row={row} prompt={gates.error ? undefined : gates.data?.items.find(item => item.runId === row.runId && item.owner.type === owner.ownerType && item.owner.id === owner.ownerId)?.gate.prompt} />)}
-      {!loading && !activeWork.error && !workflows.error && !active.error && !recent.error && !gates.error && needsYou.length + attentionRuns.length === 0 && <p className="px-4 py-4 text-sm text-muted">No attention items in the loaded work.</p>}
-    </Section>
-    <Section title="In progress" icon={<LoaderCircle className="h-4 w-4 text-moss" />} count={inProgress.length + progressRuns.length}>
+    </Section>}
+    {(inProgress.length + progressRuns.length > 0) && <Section title="In progress" icon={<LoaderCircle className="h-4 w-4 text-moss" />} count={inProgress.length + progressRuns.length}>
       {inProgress.map(row => <ActiveRow key={row.id} row={row} />)}
       {progressRuns.map(row => <RunRow key={row.runId} row={row} />)}
-      {!loading && !activeWork.error && !workflows.error && !active.error && inProgress.length + progressRuns.length === 0 && <p className="px-4 py-4 text-sm text-muted">No active work in the loaded results.</p>}
-    </Section>
+    </Section>}
     {!activeWork.error && activeWork.hasNextPage && <Button variant="secondary" size="sm" disabled={activeWork.isFetchingNextPage} onClick={() => void activeWork.fetchNextPage()}>Load more active work</Button>}
-    {!active.error && !workflows.error && <PageControls cursor={activeCursor} next={active.data?.nextCursor} onPage={setActiveCursor} label="active runs" />}
-    <Section title="Recent results" icon={<CheckCheck className="h-4 w-4 text-moss" />} count={resultItems.length}>
-      {(outcomes.isPending || artifacts.isPending || (workflowIds !== undefined && recent.isPending)) && <LoadingRow label="Loading results…" />}
+    {(resultItems.length > 0 || outcomes.isPending || artifacts.isPending) && <Section title="Recent results" icon={<CheckCheck className="h-4 w-4 text-moss" />} count={resultItems.length}>
+      {(outcomes.isPending || artifacts.isPending) && <LoadingRow label="Loading results…" />}
       {groupResults(resultItems).map(group => {
         const first = group[0]!;
         const session = sessions.find(row => row.id === first.sessionId);
@@ -126,12 +122,10 @@ function ScopedCatchUp({ owner }: { owner: OwnerFilter }) {
           <ul className="space-y-3">{group.map(item => <ResultRow key={item.id} item={item} />)}</ul>
         </div>;
       })}
-      {!outcomes.isPending && !artifacts.isPending && !recent.isPending && !outcomes.error && !artifacts.error && !recent.error && !workflows.error && !resultItems.length && <p className="px-4 py-5 text-sm text-muted">No results yet. Published files, pull requests, and workflow results will appear here.</p>}
-    </Section>
+    </Section>}
     <div className="flex flex-wrap gap-3">
       {!outcomes.error && outcomes.hasNextPage && <Button size="sm" variant="secondary" disabled={outcomes.isFetchingNextPage} onClick={() => void outcomes.fetchNextPage()}>Load more results</Button>}
       {!artifacts.error && <PageControls cursor={artifactCursor} next={artifacts.data?.nextCursor} onPage={setArtifactCursor} label="artifacts" />}
-      {!recent.error && !workflows.error && <PageControls cursor={recentCursor} next={recent.data?.nextCursor} onPage={setRecentCursor} label="workflow results" />}
     </div>
     {(otherWork.length > 0 || work.hasNextPage) && <details><summary className="cursor-pointer text-sm text-muted">Recent work · {otherWork.length} loaded</summary><div className="mt-3"><Section title="Recent work" count={otherWork.length}><p className="px-4 py-3 text-xs text-muted">Idle and sleeping work may still have unfinished tasks. Open the conversation to check.</p>{otherWork.map(row => <SessionRow key={row.id} row={row} />)}</Section>    {!work.error && work.hasNextPage && <Button variant="secondary" size="sm" disabled={work.isFetchingNextPage} onClick={() => void work.fetchNextPage()}>Load more work</Button>}
 </div></details>}

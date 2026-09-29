@@ -38,10 +38,7 @@ function ChatPage() {
   if (!sessionId) return <div className="flex-1 grid place-items-center"><Spinner /> Opening threads…</div>;
   return <>
     <div className="flex-1 min-h-0 flex flex-col">
-      {team && <div role="status" className="border-b border-line px-4 py-1.5 text-xs text-muted">
-        Shared with {team.name}. Team members can read and reply.
-      </div>}
-      <SessionView key={sessionId} sessionId={sessionId} activeThreadId={thread}
+      <SessionView key={sessionId} sessionId={sessionId} activeThreadId={thread} scopeNotice={team ? `Shared with ${team.name}. Members can read and reply.` : undefined}
         onOpenChild={id => void navigate({ search: prev => ({ ...prev, child: id }) })} enableReplies />
     </div>
     {child && <ChildPanel childId={child} onClose={() => void navigate({ search: prev => ({ ...prev, child: undefined }) })} />}

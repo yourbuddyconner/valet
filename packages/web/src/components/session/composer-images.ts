@@ -46,7 +46,7 @@ export const SUPPORTED_IMAGE_TYPES = [
 export const IMAGE_ACCEPT_ATTRIBUTE = SUPPORTED_IMAGE_TYPES.join(",");
 
 /** Images allowed on one message. */
-export const MAX_IMAGES = 5;
+export const MAX_IMAGES = 20;
 
 /** Largest single image, in bytes. */
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;

@@ -137,7 +137,7 @@ describe("TopNav", () => {
     renderNav();
     await userEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
     const menu = screen.getByRole("menu");
-    expect(within(menu).getByRole("menuitem", { name: "Security" })).toBeTruthy();
+    expect(within(menu).queryByRole("menuitem", { name: "Security" })).toBeNull();
     await userEvent.click(within(menu).getByRole("menuitem", { name: "Skills" }));
     expect(screen.queryByRole("menu")).toBeNull();
   });
@@ -188,7 +188,6 @@ describe("TopNav", () => {
       "Threads",
       "Memory",
       "Workflows",
-      "Security",
       "Events",
       "Usage",
       "Skills",
@@ -197,13 +196,11 @@ describe("TopNav", () => {
     ]);
   });
 
-  it("renders a Security link beside Workflows", async () => {
+  it("opens Valet Security from the Plugins dropdown", async () => {
     renderNav();
-    const link = await screen.findByRole("link", { name: "Security" });
-    expect(link.getAttribute("href")).toBe("/security");
-
-    const labels = screen.getAllByRole("link").map((el) => el.textContent);
-    expect(labels.indexOf("Security")).toBe(labels.indexOf("Workflows") + 1);
+    expect(screen.queryByRole("link", { name: "Security" })).toBeNull();
+    await userEvent.click(await screen.findByRole("button", { name: "Plugins" }));
+    expect(screen.getByRole("menuitem", { name: "Valet Security" }).getAttribute("href")).toBe("/security");
   });
 
   it("hides the Security link when the plugin is not enabled for the caller", async () => {
@@ -219,14 +216,16 @@ describe("TopNav", () => {
     ];
     renderNav();
     await screen.findByText("Valet");
-    expect(screen.queryByRole("link", { name: "Security" })).toBeNull();
+    await userEvent.click(await screen.findByRole("button", { name: "Plugins" }));
+    expect(screen.queryByRole("menuitem", { name: "Valet Security" })).toBeNull();
   });
 
   it("hides the Security link when no security plugin is loaded", async () => {
     securityPlugins = [];
     renderNav();
     await screen.findByText("Valet");
-    expect(screen.queryByRole("link", { name: "Security" })).toBeNull();
+    await userEvent.click(await screen.findByRole("button", { name: "Plugins" }));
+    expect(screen.queryByRole("menuitem", { name: "Valet Security" })).toBeNull();
   });
 
   // The logo and the two icons sit OUTSIDE that scroller, so they stay put

@@ -15,7 +15,6 @@ import {
   sortThreads,
   threadIdsWithPendingGates,
   untitledThreadLabel,
-  visibleThreads,
 } from "./thread-tree";
 
 function child(overrides: Partial<ChildWorkSummary> = {}): ChildWorkSummary {
@@ -101,41 +100,6 @@ describe("threadIdsWithPendingGates", () => {
   it("returns an empty set for no gates and for an unseeded store slice", () => {
     expect(threadIdsWithPendingGates({})).toEqual(new Set());
     expect(threadIdsWithPendingGates(undefined)).toEqual(new Set());
-  });
-});
-
-/**
- * A gated thread is exempt from the origin-bucket and search filters:
- * hiding its row would hide the only in-session surface for the gate,
- * which is the gap TKAI-258 closes.
- */
-describe("visibleThreads", () => {
-  const t = (id: string, key: string, title: string): ThreadSummary => ({
-    id,
-    sessionId: "s1",
-    title,
-    createdAt: 1_000,
-    lastUserActivityAt: 1_000,
-    key,
-  });
-  const threads = [
-    t("t-web", "web:1", "Plan the launch"),
-    t("t-auto", "signal:workflow:r1", "Nightly digest"),
-  ];
-
-  it("applies bucket and search filters when no gates are pending", () => {
-    expect(visibleThreads(threads, "chat", "", new Set()).map((x) => x.id)).toEqual(["t-web"]);
-    expect(visibleThreads(threads, "all", "digest", new Set()).map((x) => x.id)).toEqual(["t-auto"]);
-  });
-
-  it("keeps a gated thread the bucket filter would hide", () => {
-    const ids = visibleThreads(threads, "chat", "", new Set(["t-auto"])).map((x) => x.id);
-    expect(ids).toEqual(["t-web", "t-auto"]);
-  });
-
-  it("keeps a gated thread the search query would hide, in original order", () => {
-    const ids = visibleThreads(threads, "all", "digest", new Set(["t-web"])).map((x) => x.id);
-    expect(ids).toEqual(["t-web", "t-auto"]);
   });
 });
 

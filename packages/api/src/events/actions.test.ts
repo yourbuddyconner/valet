@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { PluginActionContext } from "@valet/engine";
 import type { AppDb } from "../lib/drizzle.js";
 import { freshTestPgDb } from "../test-helpers/pg-test-db.js";
-import { eventDropLog, orgMembers, orgs, users } from "../schema/index.js";
+import { eventDropLog, eventReceipts, orgMembers, orgs, users } from "../schema/index.js";
 import { eventsActionPlugin } from "./actions.js";
 
 const ORG = "event-problems-org";
@@ -230,4 +230,31 @@ describe("eventsActionPlugin", () => {
     const result = await list().execute({}, context("not-a-member"));
     expect(result).toMatchObject({ success: false, error: "You are not a member of this organization." });
   });
+  it("keeps receipt access out of member and shared transcripts", async () => {
+    const logs = eventsActionPlugin(db).actions.find(entry => entry.id === "events.list_event_logs")!;
+    for (const ctx of [
+      context("member", { owner: { type: "user", id: "member" } }),
+      context("admin", { owner: { type: "team", id: "team" } }),
+      context("admin", { owner: { type: "user", id: "admin" }, sharedTranscript: true }),
+      context("admin"),
+    ]) {
+      expect(await logs.execute({}, ctx)).toMatchObject({ success: false });
+    }
+  });
+
+  it("scopes receipt logs by organization and retention and sanitizes metadata", async () => {
+    const now = Date.now();
+    await db.insert(eventReceipts).values([
+      { id: "visible", orgId: ORG, service: "slack", createdAt: now, updatedAt: now, metadata: { channelId: "C1", secret: "must-not-return" } },
+      { id: "other-org", orgId: "different-org", service: "slack", createdAt: now, updatedAt: now },
+      { id: "expired", orgId: ORG, service: "slack", createdAt: now - 8 * 86400000, updatedAt: now },
+    ]);
+    const logs = eventsActionPlugin(db).actions.find(entry => entry.id === "events.list_event_logs")!;
+    const result = await logs.execute({}, context("admin", { owner: { type: "user", id: "admin" } }));
+    expect(result).toMatchObject({ success: true, data: { receipts: [{ id: "visible", metadata: { channelId: "C1" } }], hasMore: false } });
+    expect(JSON.stringify(result)).not.toContain("must-not-return");
+    expect(JSON.stringify(result)).not.toContain("other-org");
+    expect(JSON.stringify(result)).not.toContain("expired");
+  });
+
 });

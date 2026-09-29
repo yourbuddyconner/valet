@@ -63,14 +63,16 @@ export function TriggerDialog({
   onOpenChange,
   workflowId,
   editing,
+  schedulesOnly = false,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   workflowId?: string;
   editing?: WorkflowTriggerItem;
+  schedulesOnly?: boolean;
 }) {
   const isEditing = editing !== undefined;
-  const lockedKind: TriggerKind | undefined = editing?.kind;
+  const lockedKind: TriggerKind | undefined = editing?.kind ?? (schedulesOnly ? "schedule" : undefined);
 
   // ── kind picker ────────────────────────────────────────────────────────
   const [kind, setKind] = useState<TriggerKind>(lockedKind ?? "schedule");
@@ -343,14 +345,14 @@ export function TriggerDialog({
     }
   }
 
-  const title = isEditing ? `Edit ${editing.name}` : "New trigger";
+  const title = isEditing ? `Edit ${editing.name}` : schedulesOnly ? "New schedule" : "New trigger";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title={title} className="max-w-2xl">
         <div className="grid gap-4">
           {/* Kind picker — only shown when creating */}
-          {!isEditing && (
+          {!lockedKind && (
             <div className="flex flex-wrap gap-2">
               <Button
                 variant={kind === "schedule" ? "primary" : "ghost"}
@@ -405,7 +407,7 @@ export function TriggerDialog({
               </div>
 
               {/* Target radio — locked when editing */}
-              {!isEditing && (
+              {!lockedKind && (
                 <fieldset className="grid gap-1">
                   <legend className="text-sm font-medium text-ink">Target</legend>
                   <div className="flex flex-wrap gap-x-4 pt-1">

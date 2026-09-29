@@ -31,11 +31,13 @@ export interface ApprovalCardProps {
   runId: string;
   nodeId: string;
   prompt?: string;
+  summary?: string;
+  details?: unknown;
   iteration?: number;
   confirmActions?: boolean;
 }
 
-export function ApprovalCard({ runId, nodeId, prompt, iteration, confirmActions = false }: ApprovalCardProps) {
+export function ApprovalCard({ runId, nodeId, prompt, summary, details, iteration, confirmActions = false }: ApprovalCardProps) {
   const [note, setNote] = useState("");
   const [confirmation, setConfirmation] = useState<boolean | null>(null);
   const resolve = useResolveApproval(runId);
@@ -58,15 +60,19 @@ export function ApprovalCard({ runId, nodeId, prompt, iteration, confirmActions 
 
   return (
     <div className="rounded-md border border-accent-300 bg-moss-wash p-4 space-y-3 dark:border-accent-800">
-      <div className="flex items-start gap-2.5">
-        <Hand className="mt-0.5 h-4 w-4 shrink-0 text-accent-600 dark:text-accent-400" aria-hidden />
-        <div className="min-w-0 flex-1 space-y-1">
-          <p className="text-xs font-medium uppercase tracking-wide text-accent-700 dark:text-accent-400">
+      <div className="space-y-1">
+        <div className="min-w-0 space-y-1">
+          <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-accent-700 dark:text-accent-400">
+            <Hand className="h-4 w-4 shrink-0" aria-hidden />
             Waiting on you
           </p>
           <p className="break-words text-sm font-medium text-ink">{prompt ?? `Approval required: ${nodeId}`}</p>
         </div>
       </div>
+      {summary && <p className="whitespace-pre-line text-sm leading-relaxed text-muted">{summary}</p>}
+      {details != null && <div className="rounded border border-line bg-paper p-3 text-sm">
+        {typeof details === "object" && !Array.isArray(details) ? <dl className="space-y-3">{Object.entries(details).map(([label, value]) => <div key={label}><dt className="mb-1 text-xs font-medium text-muted">{label}</dt><dd className="whitespace-pre-wrap break-words text-ink">{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</dd></div>)}</dl> : <p className="whitespace-pre-wrap break-words">{typeof details === "string" ? details : JSON.stringify(details, null, 2)}</p>}
+      </div>}
       <Input
         value={note}
         onChange={(e) => setNote(e.target.value)}

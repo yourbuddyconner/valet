@@ -203,6 +203,8 @@ export function RunDetailBody({
               runId={runId}
               nodeId={gate.nodeId}
               prompt={gate.prompt ?? findApprovalPrompt(run.definition, gate.nodeId)}
+              summary={gate.summary}
+              details={gate.details}
               iteration={gate.iteration}
             />
           ) : (

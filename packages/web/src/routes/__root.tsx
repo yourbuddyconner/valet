@@ -1,3 +1,4 @@
+import { WorkspaceAssistantProvider, WorkspaceAssistantDock } from "~/components/layout/workspace-assistant";
 import { useEffect } from "react";
 import { Link, Outlet, createRootRouteWithContext, useRouterState } from "@tanstack/react-router";
 import type { QueryClient } from "@tanstack/react-query";
@@ -90,12 +91,14 @@ function RootLayout() {
   return (
     <TooltipProvider>
       <WorkspaceScopeProvider>
+        <WorkspaceAssistantProvider>
         <SignedInEffects />
-        <AppShell topNav={<TopNav />} sidebar={sidebarForPath(pathname)}>
+        <AppShell topNav={<TopNav />} sidebar={sidebarForPath(pathname)} rightPanel={<WorkspaceAssistantDock />}>
           {/* Keybindings must sit under AppShell so sidebar controls resolve. */}
           <ChatKeybindingsHost />
           <Outlet />
         </AppShell>
+        </WorkspaceAssistantProvider>
       </WorkspaceScopeProvider>
     </TooltipProvider>
   );

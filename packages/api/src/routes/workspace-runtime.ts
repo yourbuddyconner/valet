@@ -36,6 +36,16 @@ workspaceRuntimeRouter.post("/:workspace/runtime", async (c) => {
   return c.json(body);
 });
 
+// A durable app-assistant Thread per viewer in this workspace. Opening it is
+// idempotent and never submits a model turn. Team threads retain team visibility.
+workspaceRuntimeRouter.post("/:workspace/conversation", async (c) => {
+  const owner = await authorizedWorkspaceOwner(c);
+  if (!owner) return c.json({ error: "Workspace not found." }, 404);
+  const { sessionId, session } = await ensureDefaultAssistantSession(c.var.providers, owner, { actorUserId: c.var.user.id, orgId: c.var.user.orgId });
+  const thread = await session.createThread(`app-assistant:${c.var.user.id}`);
+  return c.json({ sessionId, threadId: thread.id });
+});
+
 workspaceRuntimeRouter.get("/:workspace/runtime/info", async (c) => {
   const owner = await authorizedWorkspaceOwner(c);
   if (!owner) return c.json({ error: "Workspace not found." }, 404);

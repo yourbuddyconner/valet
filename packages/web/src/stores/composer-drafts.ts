@@ -128,3 +128,13 @@ export const useComposerDraftStore = create<ComposerDraftStore>((set) => {
 export function useComposerDraft(key: string): ComposerDraft {
   return useComposerDraftStore((s) => s.byKey[key] ?? EMPTY_DRAFT);
 }
+
+/** Starter buttons fill an empty draft; repeated clicks never append or erase user text. */
+export function prefillComposerDraft(sessionId: string, threadId: string, prompt: string): void {
+  const store = useComposerDraftStore.getState();
+  const key = draftKey(sessionId, threadId);
+  const existing = store.byKey[key]?.text;
+  if (!existing?.trim() || existing.split("\n\n").every((part) => part.trim() === prompt)) {
+    store.setText(key, prompt);
+  }
+}

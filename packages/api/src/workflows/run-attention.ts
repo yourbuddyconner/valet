@@ -29,7 +29,7 @@ import { sessionThreads, workflowDefinitions } from "../schema/index.js";
 import { workflowRunThreadKey } from "./engine-deps.js";
 
 export function workflowApprovalHref(runId: string, nodeId: string): string {
-  return `/workflows?tab=action-required&run=${encodeURIComponent(runId)}&gate=${encodeURIComponent(nodeId)}`;
+  return `/workflows/runs/${encodeURIComponent(runId)}?gate=${encodeURIComponent(nodeId)}`;
 }
 
 export interface RunSettledAttentionDeps {

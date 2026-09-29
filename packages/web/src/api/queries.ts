@@ -413,6 +413,10 @@ export function useDecisions(
   });
 }
 
+export function useNotificationDecisions() {
+  return useQuery({ queryKey: ["notification-decisions"], queryFn: api.listNotificationDecisions, refetchInterval: 5000 });
+}
+
 export function useResolveDecision(sessionId: string) {
   const qc = useQueryClient();
   return useMutation<
@@ -422,7 +426,10 @@ export function useResolveDecision(sessionId: string) {
   >({
     mutationFn: ({ gateId, body }) => api.resolveDecision(sessionId, gateId, body),
     // Approval-only views poll this query without a session stream.
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.decisions(sessionId) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.decisions(sessionId) });
+      void qc.invalidateQueries({ queryKey: ["notification-decisions"] });
+    },
   });
 }
 
@@ -431,7 +438,10 @@ export function useWithdrawDecision(sessionId: string) {
   return useMutation<{ ok: true }, Error, { gateId: string }>({
     mutationFn: ({ gateId }) =>
       api.withdrawDecision(sessionId, gateId, { reason: "cancel" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.decisions(sessionId) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.decisions(sessionId) });
+      void qc.invalidateQueries({ queryKey: ["notification-decisions"] });
+    },
   });
 }
 

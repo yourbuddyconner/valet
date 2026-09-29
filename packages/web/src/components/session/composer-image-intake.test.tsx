@@ -167,13 +167,14 @@ describe("Composer — image intake", () => {
     expect(screen.queryByAltText("pasted.png")).toBeNull();
   });
 
-  it("keeps Send disabled for images with no message, and says what to do", async () => {
+  it("sends images without requiring text", async () => {
     renderComposer();
     pasteFiles(screen.getByPlaceholderText(/Send a message/i), [png("pasted.png")]);
     await waitFor(() => expect(screen.getByAltText("pasted.png")).toBeDefined());
     const send = screen.getByRole("button", { name: /send/i }) as HTMLButtonElement;
-    expect(send.disabled).toBe(true);
-    expect(send.getAttribute("title")).toBe("Add a message to send with the attachments.");
+    expect(send.disabled).toBe(false);
+    fireEvent.click(send);
+    await waitFor(() => expect(sendMutateAsync).toHaveBeenCalledWith(expect.objectContaining({ text: "", attachments: expect.arrayContaining([expect.objectContaining({ kind: "image" })]) })));
   });
 
   it("clears the held images after the message goes out", async () => {

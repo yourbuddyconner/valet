@@ -15,7 +15,7 @@ export function ComposerImageStrip({
 }) {
   if (images.length === 0) return null;
   return (
-    <ul aria-label="Attached images" className="mb-2 flex flex-wrap gap-2">
+    <ul aria-label="Attached images" className="mb-2 flex flex-wrap gap-2 px-3 pt-2">
       {images.map((image) => (
         <li key={image.id} className="relative">
           {/* The alt text is the file name: a screen reader user picks the

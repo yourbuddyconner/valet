@@ -884,8 +884,8 @@ messagesRouter.post("/:id/messages", async (c) => {
     typeof body.promoteItemId === "string" && body.promoteItemId.length > 0
       ? body.promoteItemId
       : undefined;
-  if (!promoteItemId && (!body.text || typeof body.text !== "string")) {
-    return c.json({ error: "text is required" }, 400);
+  if (!promoteItemId && typeof body.text !== "string") {
+    return c.json({ error: "text must be a string (it may be empty with attachments)" }, 400);
   }
   if (body.queueMode !== undefined && body.queueMode !== "followup" && body.queueMode !== "steer") {
     return c.json(
@@ -906,6 +906,9 @@ messagesRouter.post("/:id/messages", async (c) => {
       );
     }
   }
+  if (Array.isArray(body.attachments) && body.attachments.length > 20) {
+    return c.json({ error: "At most 20 images are allowed per message." }, 400);
+  }
   if (body.fileRefs !== undefined) {
     const valid =
       Array.isArray(body.fileRefs) &&
@@ -916,6 +919,10 @@ messagesRouter.post("/:id/messages", async (c) => {
         400,
       );
     }
+  }
+
+  if (!promoteItemId && !body.text.trim() && !body.attachments?.length && !body.fileRefs?.length) {
+    return c.json({ error: "Add a message or an attachment." }, 400);
   }
 
   try {

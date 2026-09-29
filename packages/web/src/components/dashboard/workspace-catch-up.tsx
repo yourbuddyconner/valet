@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, ArrowUpRight, FileText, GitPullRequest, MessageSquare, Workflow } from "lucide-react";
 import type { WorkspaceBriefing, WorkspaceBriefingSource } from "@valet/api/wire";
@@ -10,7 +10,7 @@ import { relativeTime } from "~/lib/relative-time";
 import { Badge, Button, ErrorRow, LoadingRow } from "~/components/primitives";
 import { WorkspaceActivity, safeResultUrl } from "./workspace-activity";
 
-export function WorkspaceCatchUp({ owner: explicitOwner }: { owner?: OwnerFilter }) {
+export function WorkspaceCatchUp({ owner: explicitOwner, compact = false }: { owner?: OwnerFilter; compact?: boolean }) {
   const selectedOwner = useListOwner();
   const me = useMe();
   const owner = explicitOwner ?? selectedOwner;
@@ -18,12 +18,16 @@ export function WorkspaceCatchUp({ owner: explicitOwner }: { owner?: OwnerFilter
     return <ErrorRow>Could not load your workspace. Reload to try again.</ErrorRow>;
   }
   if (!owner) return <LoadingRow label="Preparing your briefing…" />;
+  if (compact) return <div className="space-y-4">
+    <div className="flex items-center justify-between"><h2 className="font-display text-lg">Needs attention</h2><Link to="/chat" search={{ view: "work", workspace: owner.ownerType === "team" ? owner.ownerId : undefined }} className="inline-flex items-center gap-1 text-sm text-moss hover:underline">View briefing <ArrowRight className="h-4 w-4" /></Link></div>
+    <WorkspaceActivity owner={owner} compact />
+  </div>;
   return <ScopedBriefings key={`${owner.ownerType}:${owner.ownerId}`} owner={owner} />;
 }
 
 function ScopedBriefings({ owner }: { owner: OwnerFilter }) {
   const briefings = useWorkspaceBriefings(owner);
-  const [showActivity, setShowActivity] = useState(false);
+
   return <div className="space-y-6">
     {briefings.isError ? (
       <ErrorRow>Could not prepare your briefing. <button className="underline" onClick={() => void briefings.refetch()}>Retry</button></ErrorRow>
@@ -32,23 +36,47 @@ function ScopedBriefings({ owner }: { owner: OwnerFilter }) {
     ) : briefings.data.refreshing && briefings.data.briefings.length === 0 ? (
       <LoadingRow label="Updating your briefing…" />
     ) : briefings.data.unavailable ? (
-      <div className="space-y-3 rounded-lg border border-line p-5">
-        <p className="text-sm text-muted">Your briefing is unavailable. Retry to prepare it from your recent work.</p>
+      <BriefingPlaceholder title="Could not prepare your briefing">
+        <p role="alert">Valet could not prepare a briefing from your recent work. Select Retry to prepare it again.</p>
         <Button variant="secondary" size="sm" disabled={briefings.isFetching} onClick={() => void briefings.refetch()}>Retry</Button>
-      </div>
+      </BriefingPlaceholder>
     ) : briefings.data.briefings.length === 0 ? (
-      <p className="rounded-lg border border-line px-5 py-6 text-sm text-muted">No recent work to brief yet. Your goals and results will appear here as you work.</p>
+      <BriefingPlaceholder title="Nothing to brief yet">
+        <p>Briefings appear after conversations or workflow runs exist in this workspace.</p>
+      </BriefingPlaceholder>
     ) : (
       <div className="space-y-4">
         {briefings.data.briefings.map(briefing => <BriefingCard key={briefing.id} briefing={briefing} />)}
         <p className="text-xs text-muted">Based on recent work{briefings.data.checkedAt ? ` · Checked ${relativeTime(briefings.data.checkedAt)}` : ""}{briefings.data.refreshing ? " · Updating…" : ""}</p>
       </div>
     )}
-    <details onToggle={event => setShowActivity(event.currentTarget.open)}>
-      <summary className="cursor-pointer text-sm text-muted hover:text-ink">Activity details</summary>
-      {showActivity && <div className="mt-5"><WorkspaceActivity owner={owner} /></div>}
-    </details>
+    <WorkspaceActivity owner={owner} />
   </div>;
+}
+
+const BRIEFING_FACTS = [
+  { term: "Goal", detail: "One outcome from recent conversations and workflow runs." },
+  { term: "Result", detail: "What finished, and what is still open." },
+  { term: "Sources", detail: "The latest thread, pull request, or run." },
+] as const;
+
+/** Empty and failed briefings use the same card as a real briefing, so the page still shows what will appear. */
+function BriefingPlaceholder({ title, children }: { title: string; children: ReactNode }) {
+  const headingId = useId();
+  return (
+    <section aria-labelledby={headingId} className="rounded-xl border border-line bg-paper p-5 sm:p-6">
+      <h2 id={headingId} className="font-display text-xl text-ink">{title}</h2>
+      <div className="mt-3 max-w-2xl space-y-3 text-sm leading-relaxed text-muted">{children}</div>
+      <dl className="mt-6 grid gap-4 border-t border-line pt-4 sm:grid-cols-3">
+        {BRIEFING_FACTS.map((fact) => (
+          <div key={fact.term}>
+            <dt className="text-sm font-medium text-ink">{fact.term}</dt>
+            <dd className="mt-1 text-sm text-muted">{fact.detail}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
 }
 
 const STATUS: Record<WorkspaceBriefing["status"], { label: string; variant: "warning" | "accent" | "neutral" }> = {

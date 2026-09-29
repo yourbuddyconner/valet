@@ -300,9 +300,9 @@ describe("buildRunThreadArchive", () => {
 });
 
 describe("workflowApprovalHref", () => {
-  it("deep-links to the action-required tab and encodes the gate target", () => {
+  it("deep-links to the run and encodes the gate target", () => {
     expect(workflowApprovalHref("run/1", "approve me")).toBe(
-      "/workflows?tab=action-required&run=run%2F1&gate=approve%20me",
+      "/workflows/runs/run%2F1?gate=approve%20me",
     );
   });
 });

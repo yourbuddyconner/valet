@@ -48,7 +48,11 @@ function digest(value: string): string { return createHash("sha256").update(valu
 
 /** The model may group known evidence; it never chooses IDs, times, statuses or links. */
 export function parseWorkspaceBriefings(text: string, evidence: readonly BriefingEvidence[]): WorkspaceBriefing[] {
-  const parsed: unknown = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
+  const trimmed = text.trim();
+  // Models can append an explanation after the JSON fence, even for an empty result.
+  // Only the fenced payload enters validation; surrounding prose is never evidence.
+  const fenced = /^```(?:json)?[^\S\r\n]*\r?\n([\s\S]*?)\r?\n```(?:\s|$)/i.exec(trimmed);
+  const parsed: unknown = JSON.parse(fenced?.[1] ?? trimmed);
   if (!record(parsed) || !Array.isArray(parsed.briefings) || parsed.briefings.length > 8) throw new Error("Invalid briefing response.");
   const sources = new Map(evidence.map(item => [item.source.id,item]));
   return parsed.briefings.map((brief): WorkspaceBriefing => {
@@ -130,7 +134,7 @@ export function createBriefingGenerator(options: {
 
 const generateBriefings = createBriefingGenerator();
 // Bump the algorithm prefix for changes to source collection, grouping or rendering.
-const CACHE_VERSION = `briefings-v2:${digest(SYSTEM_PROMPT)}`;
+const CACHE_VERSION = `briefings-v3-latest-run:${digest(SYSTEM_PROMPT)}`;
 export const getWorkspaceBriefings = createDurableBriefingCache({
   version: CACHE_VERSION,
   collect: collectWorkspaceBriefingSources,

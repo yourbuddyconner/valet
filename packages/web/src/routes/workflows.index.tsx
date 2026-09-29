@@ -1,70 +1,39 @@
+import { useWorkspaceAssistant } from "~/components/layout/workspace-assistant";
 import { createFileRoute, Link, useNavigate, useSearch } from "@tanstack/react-router";
 import type {
-  ListWorkflowActionRequiredResponse,
-  WorkflowActionRequiredItem,
   WorkflowDefinitionSummary,
   WorkflowTriggerItem,
 } from "@valet/api/wire";
 import { triggerDataSchema, visibleTriggerFields } from "@valet/workflow";
-import { Clock, ShieldAlert, Trash2, Zap } from "lucide-react";
+import { AlertCircle, Clock, Trash2, Zap, MoreHorizontal } from "lucide-react";
 import { useState } from "react";
 import {
-  useAllWorkflowRuns,
   useDeleteWorkflow,
   useStartRun,
-  useWorkflowActionRequired,
-  useWorkflowRuns,
   useWorkflows,
   useWorkflowTriggers,
 } from "~/api/workflows";
+import { WorkflowCreation } from "~/components/workflows/workflow-creation";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "~/components/primitives/dropdown-menu";
 import { OwnerBadge } from "~/components/owner-badge";
-import { Pager } from "~/components/pager";
 import { Button, ConfirmDialog, Spinner } from "~/components/primitives";
-import { ApprovalCard } from "~/components/workflows/approval-card";
 import { ImportWorkflowDialog } from "~/components/workflows/import-workflow-dialog";
 import { NewWorkflowDialog } from "~/components/workflows/new-workflow-dialog";
-import { PolicyGateCard } from "~/components/workflows/policy-gate-card";
-import { RunStatusChip } from "~/components/workflows/run-status-chip";
 import { RunWorkflowDialog } from "~/components/workflows/run-workflow-dialog";
-import { TemplateGallery } from "~/components/workflows/template-gallery";
 import { TriggerList } from "~/components/workflows/trigger-list";
 import { WorkspaceClause } from "~/components/workspace-clause";
-import { currentCursor, pageNumber, popCursor, pushCursor } from "~/lib/cursor-stack";
 import { relativeTime } from "~/lib/relative-time";
-import { runCountLabel } from "~/lib/run-count";
 import { useListOwner } from "~/lib/use-list-owner";
 
-/**
- * `/workflows` — tabbed hub (Workflows | Runs | Triggers | Templates). The
- * Workflows tab is the definitions list: each row's name links to
- * `/workflows/$workflowId` (the visual editor), and "New workflow" opens
- * `NewWorkflowDialog`, which POSTs the entered name plus a minimal
- * definition and navigates straight to the editor. Editing an existing
- * definition happens on its editor page, not here. Runs shows the global
- * runs feed; Triggers shows the unified `TriggerList`.
- *
- * Templates are the fourth tab — one click away, never between somebody and
- * the twenty workflows they came here to open. The gallery is mounted only
- * when its tab is shown, so the templates request is never made for a caller
- * who stays on the list. The Workflows tab shows the gallery inline when the
- * list is empty: an automation product with no starting points is the
- * hardest possible first run, so the zero state offers one instead of a
- * dead end.
- *
- * Tab state lives in the `?tab=` search param so each tab is linkable.
- */
-
-type HubTab = "workflows" | "action-required" | "runs" | "triggers" | "templates";
+/** Workflow definitions and schedules; failures link directly to run details. */
+type HubTab = "workflows" | "scheduled";
 
 export const Route = createFileRoute("/workflows/")({
   component: WorkflowsIndexPage,
   validateSearch: (search: Record<string, unknown>): { tab?: HubTab; run?: string; gate?: string } => ({
     tab:
-      search.tab === "action-required" ||
-      search.tab === "runs" ||
-      search.tab === "triggers" ||
-      search.tab === "templates"
-        ? search.tab
+      search.tab === "scheduled" || search.tab === "triggers"
+        ? "scheduled"
         : undefined,
     run: typeof search.run === "string" ? search.run : undefined,
     gate: typeof search.gate === "string" ? search.gate : undefined,
@@ -73,10 +42,7 @@ export const Route = createFileRoute("/workflows/")({
 
 const TABS: { id: HubTab; label: string }[] = [
   { id: "workflows", label: "Workflows" },
-  { id: "action-required", label: "Needs your approval" },
-  { id: "runs", label: "Runs" },
-  { id: "triggers", label: "Triggers" },
-  { id: "templates", label: "Templates" },
+  { id: "scheduled", label: "Scheduled" },
 ];
 
 export function WorkflowsIndexPage() {
@@ -89,9 +55,11 @@ export function WorkflowsIndexPage() {
   };
   const navigate = useNavigate();
   const tab: HubTab = search.tab ?? "workflows";
+  const assistant = useWorkspaceAssistant();
+  const [creating, setCreating] = useState(false);
+  const createWithValet = () => { assistant.close(); setCreating(true); void navigate({ to: "/workflows", search: {} }); };
   const [newOpen, setNewOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-  const actionRequired = useWorkflowActionRequired();
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -104,12 +72,14 @@ export function WorkflowsIndexPage() {
             <WorkspaceClause />
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Button size="sm" variant="ghost" onClick={() => setImportOpen(true)}>
-              Import
-            </Button>
-            <Button size="sm" onClick={() => setNewOpen(true)}>
-              New workflow
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" aria-label="Workflow options"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setImportOpen(true)}>Import workflow</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setNewOpen(true)}>Manual setup</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button size="sm" onClick={createWithValet}>Create with Valet</Button>
           </div>
         </div>
         <div role="tablist" className="mt-3 flex max-w-full gap-1 overflow-x-auto">
@@ -131,11 +101,7 @@ export function WorkflowsIndexPage() {
               }`}
             >
               {t.label}
-              {t.id === "action-required" && (actionRequired.data?.count ?? 0) > 0 && (
-                <span className="ml-1.5 rounded-full bg-warning-wash px-1.5 py-0.5 text-xs text-warning-fg">
-                  {actionRequired.data!.count}
-                </span>
-              )}
+
             </button>
           ))}
         </div>
@@ -144,156 +110,22 @@ export function WorkflowsIndexPage() {
       <NewWorkflowDialog open={newOpen} onOpenChange={setNewOpen} />
       <ImportWorkflowDialog open={importOpen} onOpenChange={setImportOpen} />
 
-      <div className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
-        {tab === "workflows" && <WorkflowsTab onNew={() => setNewOpen(true)} onImport={() => setImportOpen(true)} />}
-        {tab === "action-required" && (
-          <ActionRequiredTab
-            data={actionRequired.data}
-            isLoading={actionRequired.isLoading}
-            error={actionRequired.error}
-            focusRun={search.run}
-            focusGate={search.gate}
-          />
-        )}
-        {tab === "runs" && <RunsTab />}
-        {tab === "triggers" && <TriggersTab />}
-        {tab === "templates" && <TemplateGallery />}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
+        {tab === "workflows" && <WorkflowsTab creating={creating} onBegin={() => setCreating(true)} onBack={() => setCreating(false)} />}
+        {tab === "scheduled" && <ScheduledTab />}
       </div>
     </div>
   );
 }
 
-function ActionRequiredTab({
-  data,
-  isLoading,
-  error,
-  focusRun,
-  focusGate,
-}: {
-  data?: ListWorkflowActionRequiredResponse;
-  isLoading: boolean;
-  error: unknown;
-  focusRun?: string;
-  focusGate?: string;
-}) {
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-muted">
-        <Spinner size={14} /> Loading approvals…
-      </div>
-    );
-  }
-  if (error) return <div className="text-sm text-danger-500">Failed to load approvals. Try again.</div>;
-  if (!data || data.items.length === 0) {
-    return (
-      <div className="rounded border border-line bg-paper p-6 text-sm text-muted">
-        No workflow runs need your approval.
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted">These runs are paused. The oldest request appears first.</p>
-      <ul className="space-y-4">
-        {data.items.map((item) => (
-          <ActionRequiredRow
-            key={item.id}
-            item={item}
-            focused={item.runId === focusRun && (!focusGate || item.gate.nodeId === focusGate)}
-          />
-        ))}
-      </ul>
-    </div>
-  );
-}
 
-function ActionRequiredRow({
-  item,
-  focused,
-}: {
-  item: WorkflowActionRequiredItem;
-  focused: boolean;
-}) {
-  const { gate } = item;
-  const policy = gate.kind === "policy_gate";
-  const action = policy && gate.service && gate.action ? `${gate.service}.${gate.action}` : gate.nodeId;
-  const reason = policy
-    ? gate.provenance === "resolver_error"
-      ? "The policy check failed. Valet paused the action for a safe decision."
-      : "Your tool policy requires permission before Valet can run this action."
-    : (gate.prompt ?? "This workflow includes a human approval step.");
-  const denyEffect = gate.onDeny === "skip" ? "skips this step" : "stops this run";
-  return (
-    <li
-      data-testid="action-required-item"
-      className={`min-w-0 rounded-lg border bg-paper p-3 sm:p-4 ${focused ? "border-warning-fg ring-2 ring-warning-fg/20" : "border-line"}`}
-    >
-      <div className="mb-3 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1 rounded-full bg-warning-wash px-2 py-0.5 text-xs font-medium text-warning-fg">
-              <ShieldAlert className="h-3 w-3" aria-hidden />
-              {policy ? "Tool permission" : "Workflow approval"}
-            </span>
-            {/* The run's OWN snapshot names this assistant, so re-pinning
-                the workflow while the run waits does not move the badge
-                beside a permission decision. Absent means the snapshot pins
-                none, and the owner's default assistant runs it. */}
-            <OwnerBadge
-              ownerType={item.owner.type}
-              ownerId={item.owner.id}
-            />
-          </div>
-          <Link
-            to="/workflows/$workflowId"
-            params={{ workflowId: item.workflowId }}
-            className="block break-words text-sm font-semibold text-ink hover:underline"
-          >
-            {item.workflowName}
-          </Link>
-          <p className="break-all font-mono text-xs text-muted">Blocked step: {action}</p>
-        </div>
-        <div className="shrink-0 text-left text-xs text-muted sm:text-right">
-          <div>Waiting {relativeTime(gate.waitingSince ?? item.runCreatedAt)}</div>
-          <div>
-            Started by {item.trigger.type}
-            {item.trigger.triggerId ? ` (${item.trigger.triggerId})` : ""}
-          </div>
-          <Link
-            to="/workflows/runs/$runId"
-            params={{ runId: item.runId }}
-            className="inline-flex min-h-11 items-center underline sm:min-h-0"
-          >
-            Open run
-          </Link>
-        </div>
-      </div>
-      <div className="mb-3 rounded bg-ink-wash px-3 py-2 text-xs text-ink">
-        <p>{reason}</p>
-        <p className="mt-1 text-muted">Approving continues the run and performs this step. Denying {denyEffect}.</p>
-      </div>
-      {policy ? (
-        <PolicyGateCard runId={item.runId} gate={gate} confirmActions />
-      ) : (
-        <ApprovalCard
-          runId={item.runId}
-          nodeId={gate.nodeId}
-          prompt={gate.prompt}
-          iteration={gate.iteration}
-          confirmActions
-        />
-      )}
-    </li>
-  );
-}
-
-function WorkflowsTab({ onNew, onImport }: { onNew: () => void; onImport: () => void }) {
+function WorkflowsTab({ creating, onBegin, onBack }: { creating: boolean; onBegin: () => void; onBack: () => void }) {
   // The nav's workspace switcher decides which workspace this list is FOR.
   // Without it the list answers with the caller's own workflows plus every
   // team's, which is a union that does not change when the switcher does —
   // so switching appeared to do nothing.
   const owner = useListOwner();
-  const { data, isLoading, error } = useWorkflows(owner);
+  const { data, isLoading, error } = useWorkflows(owner, { refetchInterval: 5_000, enabled: owner !== undefined });
   // Scoped to the same workspace, so the per-row schedule/event badge counts
   // match the list they annotate rather than the caller's whole reach.
   const triggersQ = useWorkflowTriggers(undefined, owner);
@@ -318,42 +150,19 @@ function WorkflowsTab({ onNew, onImport }: { onNew: () => void; onImport: () => 
   if (error) {
     return <div className="text-sm text-danger-500">Failed to load workflows.</div>;
   }
-  if (workflows.length === 0) {
-    // The gallery is the zero state, not a pointer to another tab. A person
-    // with nothing to list needs a starting point on the screen they landed
-    // on.
-    return (
-      <div className="space-y-4">
-        <p className="text-sm text-muted">
-          No workflows yet. Start from a template, build one from scratch with{" "}
-          <button
-            type="button"
-            onClick={onNew}
-            className="text-ink underline underline-offset-2 hover:text-moss"
-          >
-            New workflow
-          </button>
-          , or{" "}
-          <button
-            type="button"
-            onClick={onImport}
-            className="text-ink underline underline-offset-2 hover:text-moss"
-          >
-            import one you already have
-          </button>
-          .
-        </p>
-        <TemplateGallery />
-      </div>
-    );
+  if (workflows.length === 0 || creating) {
+    return <WorkflowCreation key={owner?.ownerId} onBegin={onBegin} onBack={workflows.length > 0 ? onBack : undefined} />;
   }
 
   return (
-    <ul className="space-y-2">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-muted">{workflows.length} workflow{workflows.length === 1 ? "" : "s"} in this workspace</p><p className="text-xs text-muted">Open a workflow to edit its steps and schedule.</p></div>
+    <ul className="space-y-3">
       {workflows.map((wf) => (
         <DefinitionRow key={wf.id} workflow={wf} triggers={triggersByWf.get(wf.id) ?? []} />
       ))}
     </ul>
+    </div>
   );
 }
 
@@ -365,13 +174,8 @@ function DefinitionRow({
   triggers: WorkflowTriggerItem[];
 }) {
   const startRun = useStartRun(workflow.id);
-  const runsQ = useWorkflowRuns(workflow.id);
   const del = useDeleteWorkflow();
   const navigate = useNavigate();
-  const runs = runsQ.data?.runs ?? [];
-  const runCount = runsQ.data?.runs.length;
-  const countLabel = runCountLabel(runsQ.data);
-  const latestRun = runs[0];
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [runOpen, setRunOpen] = useState(false);
@@ -427,7 +231,7 @@ function DefinitionRow({
     // `relative` anchors the name link's stretched hit area below. The whole
     // row opens the workflow, because a row that looks like one target should
     // be one: clicking the empty space beside the name did nothing before.
-    <li className="group relative flex flex-wrap items-center justify-between gap-3 rounded border border-line bg-paper px-4 py-3 hover:border-ink-wash-strong">
+    <li className="group relative flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-paper px-4 py-4 hover:border-ink-wash-strong">
       {/* The assistant badge is a link of its own, so it sits beside the name
           link, not inside it. Anything interactive here must sit ABOVE the
           stretched area — nesting it inside the anchor would be invalid and
@@ -454,11 +258,9 @@ function DefinitionRow({
             {workflow.upstream.repoFullName}:{workflow.upstream.path}
           </span>
         )}
-        {countLabel !== undefined && (
-          <span className="shrink-0 text-xs font-normal text-muted">
-            {countLabel} run{runCount === 1 && !runsQ.data?.nextCursor ? "" : "s"}
-          </span>
-        )}
+
+        <p className="basis-full text-xs leading-5 text-muted">Updated {relativeTime(workflow.updatedAt)}</p>
+        <p className="basis-full text-xs text-muted">{nextFireAt ? `Next run ${new Date(nextFireAt).toLocaleString()}` : scheduleCount > 0 ? "Schedule paused" : eventCount > 0 ? "Runs when a matching event arrives" : "Run when needed"}{workflow.latestRun ? ` · Last run ${workflow.latestRun.outcome ?? workflow.latestRun.status}` : " · No runs yet"}</p>
       </div>
       {hasSchema && (
         <RunWorkflowDialog
@@ -488,8 +290,15 @@ function DefinitionRow({
             <Zap className="h-3 w-3" /> {eventCount}
           </span>
         )}
-        {latestRun && (
-          <RunStatusChip status={latestRun.status} outcome={latestRun.outcome} needsApproval={false} />
+        {workflow.latestFailedRun && (
+          <Link
+            to="/workflows/runs/$runId"
+            params={{ runId: workflow.latestFailedRun.runId }}
+            title={`Last failed ${relativeTime(workflow.latestFailedRun.failedAt)}`}
+            className="inline-flex min-h-8 items-center gap-1.5 rounded border border-danger-500/30 px-2.5 py-1 text-xs font-medium text-danger-500 hover:bg-danger-500/10"
+          >
+            <AlertCircle className="h-3.5 w-3.5" /> View latest failed run
+          </Link>
         )}
         <Button size="sm" onClick={() => void handleRun()} disabled={startRun.isPending}>
           {startRun.isPending ? "Starting…" : "Run"}
@@ -526,82 +335,7 @@ function DefinitionRow({
   );
 }
 
-/** Renders the hub's flat Triggers tab under the active workspace. A thin
- * wrapper so `TriggerList` (also used per-workflow) reads the switcher only
- * here, where there is no workflow id to scope it. */
-function TriggersTab() {
+function ScheduledTab() {
   const owner = useListOwner();
-  return <TriggerList owner={owner} />;
-}
-
-function RunsTab() {
-  const owner = useListOwner();
-  return <ScopedRunsTab key={`${owner?.ownerType}:${owner?.ownerId}`} />;
-}
-
-function ScopedRunsTab() {
-  // The Runs tab is a workspace list like the others: without the switcher's
-  // owner it shows the caller's runs plus every team's, ignoring the scope.
-  const owner = useListOwner();
-  const [cursors, setCursors] = useState<string[]>([]);
-  const cursor = currentCursor(cursors);
-  const { data, isLoading, error } = useAllWorkflowRuns(
-    owner,
-    cursor === undefined ? undefined : { cursor },
-  );
-  const runs = data?.runs ?? [];
-  const hasNext = data?.nextCursor != null;
-  const paged = !isLoading && !error && (cursors.length > 0 || hasNext);
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-muted">
-        <Spinner size={14} /> Loading runs…
-      </div>
-    );
-  }
-  if (error) {
-    return <div className="text-sm text-danger-500">Failed to load runs.</div>;
-  }
-  return (
-    <div>
-      {runs.length === 0 && (
-        <div className="text-sm text-muted">
-          No runs yet. Run a workflow from the Workflows tab.
-        </div>
-      )}
-      <ul className="space-y-2">
-        {runs.map((r) => (
-          <li key={r.runId}>
-            <Link
-              to="/workflows/runs/$runId"
-              params={{ runId: r.runId }}
-              className="flex flex-col items-start justify-between gap-3 rounded border sm:flex-row sm:items-center border-line bg-paper px-4 py-3 hover:border-ink-wash-strong"
-            >
-              <div className="min-w-0 max-w-full">
-                <div className="break-words text-sm font-medium text-ink sm:truncate">{r.workflowName}</div>
-                <div className="break-all text-xs text-muted font-mono sm:truncate">{r.runId}</div>
-              </div>
-              <div className="flex max-w-full flex-wrap items-center gap-3">
-                <span className="text-xs text-muted">{new Date(r.createdAt).toLocaleString()}</span>
-                <RunStatusChip status={r.status} outcome={r.outcome} needsApproval={false} />
-              </div>
-            </Link>
-          </li>
-        ))}
-      </ul>
-      {paged && (
-        <Pager
-          label="runs"
-          page={pageNumber(cursors)}
-          hasPrevious={cursors.length > 0}
-          hasNext={hasNext}
-          onPrevious={() => setCursors(popCursor(cursors))}
-          onNext={() => {
-            if (data?.nextCursor != null) setCursors(pushCursor(cursors, data.nextCursor));
-          }}
-        />
-      )}
-    </div>
-  );
+  return <TriggerList owner={owner} schedulesOnly />;
 }

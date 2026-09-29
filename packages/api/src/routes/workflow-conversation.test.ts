@@ -24,17 +24,24 @@ describe("workflow editor conversation", () => {
     expect(new Set(opened.map(row => row.threadId)).size).toBe(1);
     expect(await open(api.baseUrl, wf.id)).toEqual(opened[0]);
     const threads = await api.providers.engineStore.listThreads(opened[0]!.sessionId);
-    expect(threads.filter(thread => thread.key === `workflow:${wf.id}`)).toHaveLength(1);
+    expect(threads.filter(thread => thread.key === "app-assistant:local-user")).toHaveLength(1);
     expect(await api.providers.engineStore.getEntries(opened[0]!.sessionId, opened[0]!.threadId)).toEqual([]);
     const other = await workflow(api.baseUrl);
-    expect((await open(api.baseUrl, other.id)).threadId).not.toBe(opened[0]!.threadId);
+    expect((await open(api.baseUrl, other.id)).threadId).toBe(opened[0]!.threadId);
+    const appConversation = await fetch(`${api.baseUrl}/api/workspaces/user/conversation`, { method: "POST" });
+    expect(appConversation.status).toBe(200);
+    expect(await appConversation.json()).toEqual(opened[0]);
   });
-  it("shares a team thread with members and rejects unrelated users and workflows", async () => {
+  it("keeps each viewer’s app thread in the team runtime and rejects unrelated workflows", async () => {
     api = await bootTestApi();
     const team = await createTeam(api.providers.db, { orgId: "local-org", name: "Editors", creatorUserId: "local-user" });
     await addMember(api.providers.db, { teamId: team.id, userId: "test-member", role: "member" });
     const wf = await workflow(api.baseUrl, team.id);
-    expect(await open(api.baseUrl, wf.id, "test-member")).toEqual(await open(api.baseUrl, wf.id));
+    const member = await open(api.baseUrl, wf.id, "test-member");
+    const creator = await open(api.baseUrl, wf.id);
+    expect(member.sessionId).toBe(creator.sessionId);
+    expect(member.threadId).not.toBe(creator.threadId);
+    expect(await open(api.baseUrl, wf.id, "test-member")).toEqual(member);
     const personal = await workflow(api.baseUrl);
     for (const id of [personal.id, "missing"]) {
       const response = await fetch(`${api.baseUrl}/api/workflows/${id}/conversation`, { method: "POST", headers: { "x-valet-test-user-id": "test-member" } });

@@ -64,6 +64,10 @@ export async function collectWorkspaceBriefingSources(db: AppDb, orgId: string, 
       SELECT r.id,d.name AS title,r.updated_at,r.status,r.outcome,r.waiting_on,r.definition
       FROM workflow_runs r JOIN workflow_definitions d ON d.id=r.workflow_id
       WHERE d.org_id=${orgId} AND r.owner_type=${owner.type} AND r.owner_id=${owner.id}
+        AND d.owner_type=r.owner_type AND d.owner_id=r.owner_id
+        AND NOT EXISTS (SELECT 1 FROM workflow_runs newer
+          WHERE newer.workflow_id=r.workflow_id AND newer.owner_type=r.owner_type AND newer.owner_id=r.owner_id
+            AND (newer.created_at,newer.id) > (r.created_at,r.id))
       ORDER BY r.updated_at DESC,r.id DESC LIMIT 12
     ) SELECT r.id,r.title,r.updated_at,r.status,
       CASE WHEN r.status='parked' THEN left((SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(

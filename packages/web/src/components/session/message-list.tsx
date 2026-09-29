@@ -164,7 +164,7 @@ export function MessageList({
             No messages yet — try sending a prompt below.
           </div>
         ) : (
-          <div className="shrink-0 divide-y divide-[--border]">
+          <div className="shrink-0 space-y-2 py-4">
             {visible.map((m, i) =>
               m.compaction ? (
                 <CompactionDivider key={m.id} message={m} />

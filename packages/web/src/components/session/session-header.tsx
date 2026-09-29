@@ -8,19 +8,15 @@ import {
   MoreHorizontal,
   RefreshCw,
   SquareTerminal,
-  ThumbsDown,
-  ThumbsUp,
   Trash2,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ApiError } from "~/api/client";
 import {
   useDeleteSession,
   usePauseSession,
-  useRateSession,
   useRenameSession,
   useReplaceSandbox,
-  useSessionRatings,
   useSetSessionModel,
   useSetSessionProfile,
   useSetSessionReasoning,
@@ -34,7 +30,6 @@ import {
   Button,
   ConfirmDialog,
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -48,17 +43,17 @@ import { useResponsiveOverlay } from "~/hooks/use-responsive-overlay";
 import { cn } from "~/lib/cn";
 import { sameModelSpec } from "~/lib/models";
 import { useCopyToClipboard } from "~/lib/use-copy";
-import { formatElapsed, useElapsedSeconds } from "~/lib/use-elapsed";
 import {
   queueBusy,
   useActiveModelForThread,
+  usePendingGateForThread,
   useQueueStateForThread,
   type AgentStatus,
   type ConnectionStatus,
 } from "~/stores/stream";
 import { ModelPicker } from "./model-picker";
 import { MoveSessionDialog } from "./move-session-dialog";
-import { RatingButtons } from "./rating-buttons";
+import { ThreadStatusIcon } from "./thread-status-icon";
 import { buildTranscript } from "./transcript";
 
 /** Collapse a workspace path down to a header-friendly badge: any
@@ -91,11 +86,11 @@ function extractActionError(err: unknown, fallback: string): string {
 export function SessionHeader({
   session,
   agentStatus,
-  turnStartedAt,
   conn,
   sandbox,
   threadId,
   messages,
+  summaryControl,
 }: {
   session: SessionDetail;
   agentStatus: AgentStatus;
@@ -105,6 +100,7 @@ export function SessionHeader({
   sandbox?: { state: string; epoch: number };
   threadId?: string;
   messages?: Message[];
+  summaryControl?: ReactNode;
 }) {
   const navigate = useNavigate();
   const sessionMenu = useResponsiveOverlay("sm");
@@ -137,8 +133,6 @@ export function SessionHeader({
   const pause = usePauseSession(session.id);
   const replace = useReplaceSandbox(session.id);
   const rename = useRenameSession(session.id);
-  const ratings = useSessionRatings(session.id);
-  const rateSession = useRateSession(session.id);
   const setProfile = useSetSessionProfile(session.id);
   const me = useMe();
   const org = useOrg();
@@ -160,6 +154,7 @@ export function SessionHeader({
   // Durable busy fallback for the status badge — same signal the composer's
   // Stop/Escape affordance uses. Without it, a page that connects mid-turn
   // shows "idle" next to a visible Stop button until the next status event.
+  const pendingGate = usePendingGateForThread(session.id, threadId);
   const threadBusy = queueBusy(useQueueStateForThread(session.id, threadId));
   const { copied, copy: copyToClipboard } = useCopyToClipboard();
   const [editingTitle, setEditingTitle] = useState(false);
@@ -336,9 +331,7 @@ export function SessionHeader({
         </span>
         <div className="ml-auto hidden max-w-full flex-wrap items-center gap-1.5 sm:flex">
           {actionError && <span className="text-xs text-danger-500">{actionError}</span>}
-          <SandboxChip sandbox={sandbox} />
-          <ConnectionBadge conn={conn} />
-          <AgentStatusBadge status={agentStatus} turnStartedAt={turnStartedAt} queueBusy={threadBusy} />
+          <ThreadStatusIcon status={agentStatus} busy={threadBusy} needsApproval={Boolean(pendingGate)} conn={conn} />
         </div>
       </header>
     );
@@ -416,15 +409,7 @@ export function SessionHeader({
           </Tooltip>
         )}
         <div className="hidden sm:contents">
-          <SandboxChip sandbox={sandbox} />
-          <ConnectionBadge conn={conn} />
-          <AgentStatusBadge status={agentStatus} turnStartedAt={turnStartedAt} queueBusy={threadBusy} />
-          <RatingButtons
-            subject="session"
-            value={ratings.data?.session ?? null}
-            disabled={rateSession.isPending}
-            onRate={(rating) => rateSession.mutate(rating)}
-          />
+          <ThreadStatusIcon status={agentStatus} busy={threadBusy} needsApproval={Boolean(pendingGate)} conn={conn} />
           <Tooltip content={copied ? "Copied to clipboard" : "Copy debug transcript (session/thread + raw tool calls + env)"}>
             <Button
               variant="ghost"
@@ -470,24 +455,8 @@ export function SessionHeader({
                 {title}{teamId !== null ? ` · ${team?.name ?? "Team"}` : ""}
               </DropdownMenuLabel>
               <div className="flex max-w-64 flex-wrap items-center gap-2 px-2 py-1.5">
-                <SandboxChip sandbox={sandbox} />
-                <ConnectionBadge conn={conn} />
-                <AgentStatusBadge status={agentStatus} turnStartedAt={turnStartedAt} queueBusy={threadBusy} />
+                <ThreadStatusIcon status={agentStatus} busy={threadBusy} needsApproval={Boolean(pendingGate)} conn={conn} />
               </div>
-              <DropdownMenuCheckboxItem
-                checked={ratings.data?.session === "positive"}
-                disabled={rateSession.isPending}
-                onCheckedChange={(checked) => rateSession.mutate(checked ? "positive" : null)}
-              >
-                <ThumbsUp className="h-4 w-4" aria-hidden />Good session
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={ratings.data?.session === "negative"}
-                disabled={rateSession.isPending}
-                onCheckedChange={(checked) => rateSession.mutate(checked ? "negative" : null)}
-              >
-                <ThumbsDown className="h-4 w-4" aria-hidden />Bad session
-              </DropdownMenuCheckboxItem>
               <DropdownMenuItem
                 onSelect={(event) => {
                   event.preventDefault();
@@ -546,6 +515,7 @@ export function SessionHeader({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+        {summaryControl}
       </div>
       {actionError && <p role="alert" className="basis-full min-w-0 break-words text-xs text-danger-500">{actionError}</p>}
       {moving && (
@@ -593,18 +563,6 @@ export function SessionHeader({
   );
 }
 
-function ConnectionBadge({ conn }: { conn: ConnectionStatus }) {
-  const map: Record<ConnectionStatus, { label: string; variant: "neutral" | "success" | "danger" }> = {
-    idle: { label: "idle", variant: "neutral" },
-    connecting: { label: "connecting", variant: "neutral" },
-    open: { label: "live", variant: "success" },
-    closed: { label: "offline", variant: "neutral" },
-    error: { label: "error", variant: "danger" },
-  };
-  const { label, variant } = map[conn];
-  return <Badge variant={variant}>{label}</Badge>;
-}
-
 /**
  * Ambient workspace-sandbox indicator: a dot + short label, not a full
  * `Badge` — this is a background signal, not something the user acts on.
@@ -630,48 +588,5 @@ export function SandboxChip({ sandbox }: { sandbox?: { state: string; epoch: num
         <span className={cn("h-1.5 w-1.5 rounded-full", entry.dot)} />
       </span>
     </Tooltip>
-  );
-}
-
-function AgentStatusBadge({
-  status,
-  turnStartedAt,
-  queueBusy = false,
-}: {
-  status: AgentStatus;
-  turnStartedAt?: number;
-  /**
-   * Durable fallback: the thread's queue holds an abortable submission. When
-   * the live `status` still reads idle (mid-turn connect before the seed
-   * frame, or a dropped event), the badge shows a generic "working" instead
-   * of a false "idle".
-   */
-  queueBusy?: boolean;
-}) {
-  const busy = status !== "idle" || queueBusy;
-  const elapsed = useElapsedSeconds(busy ? turnStartedAt : undefined);
-  if (!busy) return <Badge variant="neutral">idle</Badge>;
-  // replaceAll, not replace: "blocked_on_decision_gate" has four segments
-  // and a single replace rendered "blocked on_decision_gate".
-  const label = status === "idle" ? "working" : status.replaceAll("_", " ");
-  // "queued" and "blocked_on_decision_gate" stay neutral on purpose (the
-  // pre-fallback behavior): nothing is executing while queued, and a
-  // gate-blocked turn already renders the prominent DecisionGateCard — an
-  // accent badge would signal the same thing twice. "idle" here is the
-  // queue-busy fallback (`busy` gate above), so it reads as active work.
-  const variant =
-    status === "error"
-      ? "danger"
-      : status === "thinking" || status === "tool_calling" || status === "idle"
-        ? "accent"
-        : "neutral";
-  return (
-    <Badge variant={variant} className={cn("inline-flex items-center gap-1.5 tabular-nums")}>
-      {status !== "queued" && (
-        <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse motion-reduce:animate-none" />
-      )}
-      {label}
-      {elapsed !== undefined && <span className="text-current/70">{formatElapsed(elapsed)}</span>}
-    </Badge>
   );
 }

@@ -4,7 +4,7 @@
  * while the threads query loaded) into the real thread.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { draftKey, EMPTY_DRAFT, useComposerDraftStore } from "./composer-drafts";
+import { draftKey, EMPTY_DRAFT, useComposerDraftStore, prefillComposerDraft } from "./composer-drafts";
 
 const SESSION = "sess-1";
 const THREAD = "thread-1";
@@ -75,5 +75,23 @@ describe("composer draft store", () => {
     // the stable fallback value.
     expect(store().byKey["nope"]).toBeUndefined();
     expect(EMPTY_DRAFT.text).toBe("");
+  });
+});
+
+describe("starter drafts", () => {
+  it("does not append repeated starters and repairs identical legacy copies", () => {
+    const key = draftKey(SESSION, THREAD);
+    store().setText(key, "Create a workflow\n\nCreate a workflow");
+    prefillComposerDraft(SESSION, THREAD, "Create a workflow");
+    prefillComposerDraft(SESSION, THREAD, "Create a workflow");
+    expect(store().byKey[key]?.text).toBe("Create a workflow");
+  });
+  it("preserves user text and keeps workspace drafts separate", () => {
+    const key = draftKey(SESSION, THREAD);
+    store().setText(key, "My unfinished request");
+    prefillComposerDraft(SESSION, THREAD, "Create a workflow");
+    prefillComposerDraft("another-workspace", THREAD, "Create a workflow");
+    expect(store().byKey[key]?.text).toBe("My unfinished request");
+    expect(store().byKey[draftKey("another-workspace", THREAD)]?.text).toBe("Create a workflow");
   });
 });

@@ -94,8 +94,10 @@ it("hides personal context immediately when switching to a team", async () => {
 it("shows a retry state when generation is unavailable without inventing context", async () => {
   vi.mocked(api.getWorkspaceBriefings).mockResolvedValue({ briefings: [], generatedAt: null, coverage: "recent", unavailable: true });
   setup();
-  expect(await screen.findByText("Your briefing is unavailable. Retry to prepare it from your recent work.")).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Could not prepare your briefing" })).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toContain("Select Retry to prepare it again.");
   expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  expect(screen.getByText("One outcome from recent conversations and workflow runs.")).toBeTruthy();
   expect(screen.queryByRole("article")).toBeNull();
 });
 it("keeps activity details closed and mounts them only on request", async () => {
@@ -116,7 +118,9 @@ it("shows an honest briefing when no source links are available", async () => {
 it("distinguishes an empty workspace from unavailable generation", async () => {
   vi.mocked(api.getWorkspaceBriefings).mockResolvedValue({ briefings: [], generatedAt: null, coverage: "recent" });
   setup();
-  expect(await screen.findByText("No recent work to brief yet. Your goals and results will appear here as you work.")).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Nothing to brief yet" })).toBeTruthy();
+  expect(screen.getByText("Briefings appear after conversations or workflow runs exist in this workspace.")).toBeTruthy();
+  expect(screen.getByText("The latest thread, pull request, or run.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
 

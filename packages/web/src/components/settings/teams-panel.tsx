@@ -1,3 +1,4 @@
+import { AutomationWizard } from "~/components/events/automation-wizard";
 import { Link } from "@tanstack/react-router";
 import type { OrgDirectoryUserWire, TeamSummary } from "@valet/api/wire";
 import { Bot, ChevronRight, MoreHorizontal, UserPlus, X } from "lucide-react";
@@ -681,12 +682,20 @@ function AddMemberPicker({
 
 function TeamHomeChannel({ team, canMutate }: { team: TeamSummary; canMutate: boolean }) {
   const [channel, setChannel] = useState(team.slackHomeChannelId ?? "");
+  const [replySetup, setReplySetup] = useState(false);
   const patch = usePatchTeam();
   useEffect(() => { setChannel(team.slackHomeChannelId ?? ""); }, [team.slackHomeChannelId]);
   return <div className="space-y-2 py-3">
-    <div className="text-sm font-medium">Slack home channel</div>
+    <div className="text-sm font-medium">Slack routing</div>
+    <label htmlFor={`home-channel-${team.id}`} className="block text-xs text-muted">Home channel for team notifications</label>
     <p className="text-sm text-muted">New team notifications go here. Replies stay in their original Slack thread. This does not subscribe to channel messages. Add the Valet bot to the channel first.</p>
-    {canMutate ? <div className="flex gap-2"><Input aria-label="Slack home channel ID" placeholder="C0123456789" value={channel} onChange={(event) => setChannel(event.target.value)} /><Button disabled={patch.isPending || channel.trim() === (team.slackHomeChannelId ?? "")} onClick={() => patch.mutate({ id: team.id, body: { slackHomeChannelId: channel.trim() || null } })}>Save</Button></div> : <p className="text-sm">{team.slackHomeChannelId ?? "No home channel configured"}</p>}
+    {canMutate ? <div className="flex gap-2"><Input id={`home-channel-${team.id}`} aria-label="Slack home channel ID" placeholder="C0123456789" value={channel} onChange={(event) => setChannel(event.target.value)} /><Button disabled={patch.isPending || channel.trim() === (team.slackHomeChannelId ?? "")} onClick={() => patch.mutate({ id: team.id, body: { slackHomeChannelId: channel.trim() || null } })}>Save</Button></div> : <p className="text-sm">{team.slackHomeChannelId ?? "No home channel configured"}</p>}
     {patch.error && <ErrorRow>{errorText(patch.error)}</ErrorRow>}
+    <div className="flex flex-wrap items-center gap-3 pt-2">
+      <Button variant="secondary" size="sm" onClick={() => setReplySetup(true)}>Set up Slack replies</Button>
+      <Link to="/events" search={{ tab: "subscriptions" }} className="text-sm text-moss hover:underline">Manage subscriptions</Link>
+      <Link to="/settings/notifications" className="text-sm text-moss hover:underline">My DM preferences</Link>
+    </div>
+    {replySetup && <AutomationWizard key={team.id} open onOpenChange={setReplySetup} replyTeam={{ id: team.id, name: team.name }} />}
   </div>;
 }

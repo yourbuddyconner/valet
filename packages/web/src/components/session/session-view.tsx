@@ -1,3 +1,5 @@
+import { ListTree } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "~/components/primitives/popover";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { X, ExternalLink } from "lucide-react";
@@ -29,7 +31,8 @@ import { PageDropTarget } from "~/components/session/page-drop-target";
 import { SandboxTabs, type SandboxTabId } from "~/components/session/sandbox-tabs";
 import { BrowserOverlay } from "~/components/session/browser/browser-overlay";
 import { useBrowserWatch } from "~/components/session/browser/use-browser-watch";
-import { WorkArtifacts } from "~/components/session/work-discovery";
+import { ThreadContextPanel } from "~/components/session/thread-context-panel";
+import { draftKey, useComposerDraftStore } from "~/stores/composer-drafts";
 import { SessionHeader } from "~/components/session/session-header";
 import { useMe } from "~/api/settings";
 import { useInvalidateSessionOnModelSwitch } from "~/hooks/use-invalidate-session-on-model-switch";
@@ -61,16 +64,26 @@ import { defaultThreadId } from "~/lib/thread-default";
 export function SessionView({
   sessionId,
   panel,
+  hidePanelHeader = false,
   activeThreadId,
   onClose,
   onOpenChild,
   activeTab,
   onTabChange,
   enableReplies = false,
+  scopeNotice,
+  introduction,
+  beforeSend,
+  onSent,
 }: {
+  introduction?: React.ReactNode;
+  beforeSend?: (text: string) => Promise<string>;
+  onSent?: () => void;
+  scopeNotice?: string;
   sessionId: string;
   /** Renders the compact slide-over header instead of `SessionHeader`. */
   panel?: boolean;
+  hidePanelHeader?: boolean;
   /**
    * Controlled active thread id, typically derived from the host route's
    * `?thread=` search param (full/standalone). When omitted (panel), the
@@ -118,6 +131,7 @@ export function SessionView({
     restoreTabFocus.current = next !== tab && active instanceof HTMLElement
       && active.getAttribute("role") === "tab"
       && Boolean(viewRef.current?.contains(active));
+    if (tab === "browser" && next !== "browser") browserWatch.open();
     setTab(next);
   }
   useLayoutEffect(() => {
@@ -190,7 +204,7 @@ export function SessionView({
   function closeBrowserPreview() {
     browserWatch.close();
     viewRef.current
-      ?.querySelector<HTMLElement>('[aria-label="Watch browser"]')
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
       ?.focus({ preventScroll: true });
   }
   function expandBrowserPreview() {
@@ -242,15 +256,46 @@ export function SessionView({
     );
   }
 
+  const summaryControl = effectiveThreadId ? (
+    <Popover key={`${sessionId}:${effectiveThreadId}`} defaultOpen={!panel}>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label="Toggle summary" title="Toggle summary" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-ink-wash hover:text-ink data-[state=open]:bg-ink-wash focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">
+          <ListTree className="h-4 w-4" aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent aria-label="Thread summary" align="end" sideOffset={12} onOpenAutoFocus={(event) => event.preventDefault()} className="w-80 p-0 rounded-2xl">
+                <ThreadContextPanel
+                  key={`${sessionId}:${effectiveThreadId}`}
+                  owner={{ ownerType: session.data.owner.type, ownerId: session.data.owner.id }}
+                  sessionId={sessionId} threadId={effectiveThreadId} messages={stream.messages} busy={agentBusy}
+                  onCreate={() => {
+                    const key = draftKey(sessionId, effectiveThreadId);
+                    const store = useComposerDraftStore.getState();
+                    const text = store.byKey[key]?.text ?? "";
+                    store.setText(key, text ? `${text}\nCreate a file or site: ` : "Create a file or site: ");
+                    viewRef.current?.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus();
+                  }}
+                  onAttach={() => viewRef.current?.querySelector<HTMLButtonElement>('[aria-label="Attach files"], [aria-label="Attach images"]')?.click()}
+                  onReveal={(messageId) => {
+                    const row = [...(viewRef.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])].find((el) => el.dataset.messageId === messageId);
+                    row?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }}
+                />
+      </PopoverContent>
+    </Popover>
+  ) : null;
+
   const sessionHeader = (
     <SessionHeader
       session={session.data}
       agentStatus={threadStatus.status}
       turnStartedAt={threadStatus.turnStartedAt}
       conn={stream.conn}
+      notice={scopeNotice}
       sandbox={stream.sandbox}
       threadId={effectiveThreadId}
       messages={stream.messages}
+      summaryControl={summaryControl}
     />
   );
   const sandboxTabs = (
@@ -259,29 +304,26 @@ export function SessionView({
       profile={session.data.profile}
       activeTab={tab}
       onTabChange={changeTab}
+      notice={scopeNotice}
       sandbox={stream.sandbox}
-      onWatchBrowser={browserWatch.open}
-      browserPreviewOpen={browserWatch.mode === "open"}
     />
   );
 
   return (
     <ComposerDropContext.Provider value={dropChannel}>
     <div ref={viewRef} className="flex-1 flex flex-col min-h-0 min-w-0">
-      {(panel || tab !== "chat") && (
+      {!introduction && (panel || tab !== "chat") && (
         <>
-          {panel ? <PanelHeader sessionId={sessionId} title={session.data.title} onClose={onClose} /> : sessionHeader}
+          {panel ? (!hidePanelHeader && <div className="flex items-center"><PanelHeader sessionId={sessionId} title={session.data.title} onClose={onClose} />{summaryControl}</div>) : sessionHeader}
           {sandboxTabs}
         </>
       )}
       {tab === "chat" ? (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <PageDropTarget>
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            {effectiveThreadId && <div className="border-b border-line px-4 pb-2"><WorkArtifacts
-              key={`${sessionId}:${effectiveThreadId}`} sessionId={sessionId} threadId={effectiveThreadId}
-              owner={{ ownerType: session.data.owner.type, ownerId: session.data.owner.id }}
-            /></div>}
-            <MessageList
+            {introduction ?? <MessageList
               header={panel ? undefined : <>{sessionHeader}{sandboxTabs}</>}
               messages={stream.messages}
               threadId={effectiveThreadId}
@@ -290,7 +332,7 @@ export function SessionView({
               pendingIds={threadQueueState?.pendingIds}
               viewerId={me.data?.id}
               onReply={enableReplies ? setReplyTarget : undefined}
-            />
+            />}
             {(browserWatch.mode === "open" || browserWatch.mode === "minimized") && (
               <BrowserOverlay
                 key={JSON.stringify([sessionId, effectiveThreadId])}
@@ -325,6 +367,8 @@ export function SessionView({
               a thread switch swaps the draft without a remount (a remount
               would orphan in-flight uploads). */}
           <Composer
+            beforeSend={beforeSend}
+            onSent={onSent}
             sessionId={sessionId}
             threadId={effectiveThreadId}
             agentStatus={threadStatus.status}
@@ -334,6 +378,9 @@ export function SessionView({
             onCancelReply={() => setReplyTarget(undefined)}
           />
         </PageDropTarget>
+        </div>
+
+        </div>
       ) : null}
     </div>
     </ComposerDropContext.Provider>

@@ -15,7 +15,7 @@ export function ComposerFileStrip({ files, onRemove, onRetry }: FileStripProps) 
   if (files.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap gap-2 mb-2" aria-label="Attached files">
+    <div className="mb-2 flex flex-wrap gap-2 px-3 pt-2" aria-label="Attached files">
       {files.map((file) => (
         <FileChip key={file.id} file={file} onRemove={onRemove} onRetry={onRetry} />
       ))}

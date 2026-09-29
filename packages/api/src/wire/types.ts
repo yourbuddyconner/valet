@@ -1733,6 +1733,10 @@ export interface ListNotificationsResponse {
   notifications: NotificationSummary[];
 }
 
+export interface ListNotificationDecisionsResponse {
+  items: Array<{ sessionId: string; title: string; gate: DecisionGate }>;
+}
+
 export interface NotificationPreferenceSummary {
   /** Personal copies of team attention in linked direct messages. Default off. */
   teamDm?: boolean;
@@ -1776,6 +1780,10 @@ export interface MemoryTreeEntry {
 // one owner, and an owner the caller cannot reach 404s.
 
 export interface WorkflowDefinitionSummary {
+  /** Most recently started run, scoped to the current workflow owner. */
+  latestRun?: WorkflowRunSummary;
+  /** Present only when the most recently started run failed. */
+  latestFailedRun?: { runId: string; failedAt: number };
   id: string;
   name: string;
   definition: unknown;
@@ -1938,6 +1946,9 @@ export interface WorkflowRunCheckpoint {
 
 /** One pending approval gate on a parked workflow run. */
 export interface WorkflowPendingGate {
+  /** Context supplied by the approval node in the run snapshot. */
+  summary?: string;
+  details?: unknown;
   nodeId: string;
   /** When this gate first parked. Used for the waiting duration. */
   waitingSince?: number;

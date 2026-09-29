@@ -103,7 +103,11 @@ export function Composer({
   queuedItemCount = 0,
   replyTarget,
   onCancelReply,
+  beforeSend,
+  onSent,
 }: {
+  beforeSend?: (text: string) => Promise<string>;
+  onSent?: () => void;
   sessionId: string;
   /**
    * Active thread id. Required for sending — when undefined (threads still
@@ -129,6 +133,8 @@ export function Composer({
   const key = draftKey(sessionId, threadId);
   const { text, images, files, imageErrors, fileErrors } = useComposerDraft(key);
   const setText = (value: string) => useComposerDraftStore.getState().setText(key, value);
+  const submitting = useRef(false);
+  const [preparing, setPreparing] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [selected, setSelected] = useState(false);
   useAutosizeTextarea(inputRef, text);
@@ -321,7 +327,7 @@ export function Composer({
   // composer steers that item in place. New text queues another followup.
   const action: SubmitAction = !working
     ? "send"
-    : queuedFollowup && text.trim().length === 0
+    : queuedFollowup && text.trim().length === 0 && images.length === 0 && files.length === 0
       ? "steer"
       : "queue";
   // A send with a still-uploading file would drop it (the ref does not
@@ -332,17 +338,8 @@ export function Composer({
     !send.isPending &&
     !!threadId &&
     !uploadsPending &&
-    (action === "steer" || text.trim().length > 0);
-  // An attachment alone cannot go out: the route requires text on the
-  // prompt. Say so on the disabled button instead of leaving the user
-  // guessing.
-  const sendTitle = working
-    ? ACTION_HINT[action]
-    : uploadsPending
-      ? "Wait for the file uploads to finish."
-      : (images.length > 0 || files.length > 0) && text.trim().length === 0
-        ? "Add a message to send with the attachments."
-        : undefined;
+    (action === "steer" || text.trim().length > 0 || images.length > 0 || toFileRefs(files).length > 0);
+  const sendTitle = working ? ACTION_HINT[action] : uploadsPending ? "Wait for the file uploads to finish." : undefined;
 
   /** True while the composer refuses new files. */
   const intakeBlocked =
@@ -521,7 +518,7 @@ export function Composer({
   }
 
   async function submit() {
-    if (send.isPending || !threadId || uploadsPending) return;
+    if (submitting.current || send.isPending || !threadId || uploadsPending) return;
 
     // Empty Enter after a self-queued followup promotes that item. Do not
     // POST the same text again — that would write a second user entry.
@@ -531,7 +528,7 @@ export function Composer({
     }
 
     const t = text.trim();
-    if (!t) return;
+    if (!t && images.length === 0 && toFileRefs(files).length === 0) return;
     setSubmitError(null);
     // Capture the draft slot at send time: the failure path below must
     // restore into the thread the message was written for, even if the
@@ -552,9 +549,12 @@ export function Composer({
     // the server's persisted copy. File chips are not rendered optimistically
     // — the server owns their sandbox paths; they appear on the next init.
     const localId = addUserMessage(sessionId, t, threadId, attachments, replyTarget);
+    submitting.current = true;
+    setPreparing(true);
     try {
+      const preparedText = beforeSend ? await beforeSend(t) : t;
       const res = await send.mutateAsync({
-        text: t,
+        text: preparedText,
         threadId,
         attachments,
         fileRefs: fileRefs.length > 0 ? fileRefs : undefined,
@@ -577,6 +577,7 @@ export function Composer({
           }));
         }
       }
+      onSent?.();
       // Recency ranking for the command popup. Recorded only for a name the
       // registry knows, and only after the send succeeded — a typo or a
       // failed send is not a "use". Matched case-insensitively (dispatch
@@ -634,6 +635,9 @@ export function Composer({
               : "Unknown error.";
       drafts.setFileErrors(slot, [`The message did not send. ${detail}`]);
       console.error("send failed:", err);
+    } finally {
+      submitting.current = false;
+      setPreparing(false);
     }
   }
 
@@ -799,7 +803,7 @@ export function Composer({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       className={cn(
-        "flex min-h-0 flex-col p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-paper",
+        "mx-auto w-full max-w-[52rem] flex min-h-0 flex-col px-5 pt-3 sm:px-8 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-paper",
         dragActive && "ring-2 ring-inset ring-moss",
       )}
     >
@@ -859,7 +863,7 @@ export function Composer({
           </div>
         )}
         {dragActive && (
-          <p className="mb-2 text-xs text-muted">
+          <p className="mb-2 px-3 pt-1 text-xs leading-5 text-muted">
             {FILE_UPLOADS_ENABLED ? "Drop the files to attach them." : "Drop the images to attach them."}
           </p>
         )}
@@ -877,7 +881,7 @@ export function Composer({
           onDismiss={() => setSubmitError(null)}
         />
         <ComposerFileStrip files={files} onRemove={removeFile} onRetry={retryFile} />
-        {working && <p className="mb-2 text-xs text-muted">{ACTION_HINT[action]}</p>}
+        {working && <p className="mb-2 px-3 pt-1 text-xs leading-5 text-muted">{ACTION_HINT[action]}</p>}
         {/* `relative` anchors the command popup to the input row, so the hint
             above it never moves the popup. */}
         <div className={cn("relative flex min-h-0", expanded ? "flex-col" : "items-end")}>
@@ -911,7 +915,7 @@ export function Composer({
                 ? "min-h-20 max-h-[min(14rem,35dvh)] py-3 max-sm:py-3"
                 : "min-h-11 max-h-11 flex-1 py-2.5 max-sm:py-2.5",
             )}
-            disabled={send.isPending || !threadId}
+            disabled={preparing || send.isPending || !threadId}
           />
           <div className={cn("flex shrink-0 items-center gap-2", expanded && "px-1 pb-1 pt-1")}>
             {(IMAGE_ATTACHMENTS_ENABLED || FILE_UPLOADS_ENABLED) && (
@@ -981,7 +985,7 @@ export function Composer({
             )}
             <Button
               type="submit"
-              disabled={!canSend}
+              disabled={preparing || !canSend}
               size="lg"
               title={sendTitle}
               className={cn(
@@ -1052,6 +1056,6 @@ function QueueIndicator({
   }
   if (parts.length === 0) return null;
   return (
-    <div role="status" className="mb-2 text-xs text-muted">{parts.join(" • ")}</div>
+    <div role="status" className="mb-2 px-3 pt-1 text-xs leading-5 text-muted">{parts.join(" • ")}</div>
   );
 }

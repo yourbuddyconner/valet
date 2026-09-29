@@ -3,7 +3,9 @@ import { Type } from "typebox";
 import type { Static, TSchema } from "typebox";
 import type { ActionPlugin, PluginAction, PluginActionContext, PluginActionResult } from "@valet/engine";
 import type { AppDb } from "../lib/drizzle.js";
-import { eventDropLog, orgMembers, type EventDropLogRow } from "../schema/index.js";
+import { eventDropLog, eventReceipts, orgMembers, type EventDropLogRow } from "../schema/index.js";
+
+import { receiptWire, RECEIPT_RETENTION_DAYS } from "./receipts.js";
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
@@ -87,7 +89,7 @@ export function eventsActionPlugin(db: AppDb): ActionPlugin {
         return { success: false, error: "Text and bot ID filters require an organization admin in a private session that did not originate from a channel." };
       }
       const conditions = [eq(eventDropLog.orgId, ctx.orgId)];
-      if (!canReadAdminMetadata) conditions.push(ne(eventDropLog.reason, "slack_interaction_unmatched"));
+      if (!canReadAdminMetadata) conditions.push(ne(eventDropLog.reason, "slack_interaction_unmatched"), ne(eventDropLog.reason, "slack_classifier_rejected"));
       if (event_key !== undefined) conditions.push(eq(eventDropLog.eventKey, event_key));
       if (since !== undefined) conditions.push(gte(eventDropLog.createdAt, since));
       if (until !== undefined) conditions.push(lte(eventDropLog.createdAt, until));
@@ -119,5 +121,40 @@ export function eventsActionPlugin(db: AppDb): ActionPlugin {
       };
     },
   });
-  return { service: "events", description: "Inspect received event problems without changing event records.", actions: [listProblems] };
+  const listLogs = action(Type.Object({
+    receipt_id: Type.Optional(Type.String({ description: "Exact receipt reference from Event Logs." })),
+    event_key: Type.Optional(Type.String({ description: "Normalized event key, for example slack.message." })),
+    channel: Type.Optional(Type.String({ description: "Provider channel ID." })),
+    since: Type.Optional(Type.Integer({ minimum: MIN_TIMESTAMP, maximum: MAX_TIMESTAMP })),
+    until: Type.Optional(Type.Integer({ minimum: MIN_TIMESTAMP, maximum: MAX_TIMESTAMP })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIMIT })),
+  }))({
+    id: "events.list_event_logs",
+    name: "Inspect event processing logs",
+    description: "Read incoming event metadata, classification stages, subscription decisions, and linked event IDs. " +
+      "Use events.list_problems for failures before receipt creation. Use workflows.get_run and workflows.get_node_result for workflow execution failures. " +
+      "Receipts are retained for up to 7 days; an absent receipt does not prove the provider sent an event. Requires an organization admin in a private, non-channel session.",
+    riskLevel: "low",
+    execute: async ({ receipt_id, event_key, channel, since, until, limit }, ctx) => {
+      const userId = ctx.actor?.id ?? ctx.userId;
+      if (!userId || !ctx.orgId || transcriptIsShared(ctx)) return { success: false, error: "Event receipt logs require an organization admin in a private, non-channel session." };
+      const [membership] = await db.select({ role: orgMembers.role }).from(orgMembers)
+        .where(and(eq(orgMembers.orgId, ctx.orgId), eq(orgMembers.userId, userId))).limit(1);
+      if (membership?.role !== "admin") return { success: false, error: "Organization admin required." };
+      if (!timestampIsSafe(since) || !timestampIsSafe(until) || (since !== undefined && until !== undefined && since > until)) {
+        return { success: false, error: "Use safe epoch-millisecond timestamps with since earlier than or equal to until." };
+      }
+      const conditions = [eq(eventReceipts.orgId, ctx.orgId), gte(eventReceipts.createdAt, Date.now() - RECEIPT_RETENTION_DAYS * 86400000)];
+      if (receipt_id !== undefined) conditions.push(eq(eventReceipts.id, receipt_id));
+      if (event_key !== undefined) conditions.push(eq(eventReceipts.eventKey, event_key));
+      if (channel !== undefined) conditions.push(sql`${eventReceipts.metadata}->>'channelId' = ${channel}`);
+      if (since !== undefined) conditions.push(gte(eventReceipts.createdAt, since));
+      if (until !== undefined) conditions.push(lte(eventReceipts.createdAt, until));
+      const pageLimit = Math.min(MAX_LIMIT, Math.max(1, Math.trunc(limit ?? DEFAULT_LIMIT)));
+      const rows = await db.select().from(eventReceipts).where(and(...conditions))
+        .orderBy(desc(eventReceipts.createdAt), desc(eventReceipts.id)).limit(pageLimit + 1);
+      return { success: true, data: { receipts: rows.slice(0, pageLimit).map(receiptWire), hasMore: rows.length > pageLimit, retentionDays: RECEIPT_RETENTION_DAYS } };
+    },
+  });
+  return { service: "events", description: "Diagnose event receipt, filtering, and delivery failures without changing records.", actions: [listProblems, listLogs] };
 }

@@ -7,7 +7,7 @@ import { ownedDefinitionRow } from "../workflows/service.js";
 export const workflowConversationRouter = new Hono<AppEnv>();
 
 // The definition's owner determines the conversation. Never accept routing
-// from the browser: every authorized team member opens the same thread.
+// from the browser. Each viewer reuses their app-assistant Thread in that owner workspace.
 workflowConversationRouter.post("/:id/conversation", async (c) => {
   const { db, engineHost } = c.var.providers;
   const user = c.var.user;
@@ -25,7 +25,7 @@ workflowConversationRouter.post("/:id/conversation", async (c) => {
     { type: workflow.ownerType, id: workflow.ownerId },
     { actorUserId: user.id, orgId: user.orgId },
   );
-  const thread = await session.createThread(`workflow:${workflow.id}`);
+  const thread = await session.createThread(`app-assistant:${user.id}`);
   // Opening the editor does not submit a model turn. Reopens cannot duplicate
   // an automatic introduction, including after a lost HTTP response.
   const response: EnsureWorkflowConversationResponse = { sessionId, threadId: thread.id };

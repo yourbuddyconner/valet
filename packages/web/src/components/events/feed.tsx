@@ -147,8 +147,8 @@ export function EventFeed({
       {eventsQ.data && eventsQ.data.events.length === 0 && (
         <EmptyRow>
           {scope === "workspace"
-            ? `No events reached this workspace's subscriptions in the last ${WORKSPACE_WINDOW_DAYS} days. Select All to see every event a subscription in the organization matched, or open the Problems tab for events that arrived but matched nothing.`
-            : "No events yet. An event appears here when a webhook matches a subscription. If you expected one, open the Problems tab to see what arrived and why it was dropped."}
+            ? `No events reached this workspace's subscriptions in the last ${WORKSPACE_WINDOW_DAYS} days. Select All to see every event a subscription in the organization matched, or open the Event Logs tab for events that arrived but matched nothing.`
+            : "No events yet. An event appears here when a webhook matches a subscription. If you expected one, open the Event Logs tab to see what arrived and why it was dropped."}
         </EmptyRow>
       )}
 

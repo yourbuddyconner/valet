@@ -1,5 +1,6 @@
+import { WorkspaceAssistantButton } from "./workspace-assistant";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Menu, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
+import { ChevronDown, Menu, PanelLeftClose, PanelLeftOpen, Settings, ShieldCheck } from "lucide-react";
 import { useChangelog } from "~/api/changelog";
 import { useWorkspaceRuntimeInfo } from "~/api/workspace-runtime";
 import { useSession } from "~/api/queries";
@@ -148,15 +149,15 @@ export function TopNav() {
   });
   const routeSession = useSession(sessionRouteId ?? "");
   const onSecuritySession = routeSession.data?.kind === "security";
+  const onSecurityPage = useRouterState({ select: (st) => st.location.pathname.startsWith("/security") });
   // Gate the Security link on the `security` plugin's entitlement for this
   // caller. `undefined` (org not yet loaded) hides the link — no flash of a
   // link the caller may not have, matching the settings rail's no-flash rule.
   const securityEnabled = pluginEnabledForCaller(orgQ.data, "security") === true;
-  const destinations = [
+  const destinations: Array<{ to: string; label: string; active?: boolean }> = [
     { to: "/chat", label: "Threads" },
     { to: "/memory", label: "Memory" },
     { to: "/workflows", label: "Workflows" },
-    ...(securityEnabled ? [{ to: "/security", label: "Security", active: onSecuritySession ? true : undefined }] : []),
     { to: "/events", label: "Events" },
     { to: "/usage", label: "Usage" },
     { to: "/skills", label: "Skills" },
@@ -208,6 +209,18 @@ export function TopNav() {
           <NavLink key={to} to={to} active={active}>{destinationLabel(label)}</NavLink>
         ))}
       </nav>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className={`shrink-0 gap-1 ${onSecurityPage || onSecuritySession ? NAV_ACTIVE : NAV_INACTIVE}`}>
+            Plugins <ChevronDown className="h-3 w-3" aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" aria-label="Plugins" className="w-56">
+          {securityEnabled ? <DropdownMenuItem asChild>
+            <Link to="/security"><ShieldCheck className="h-4 w-4" aria-hidden />Valet Security</Link>
+          </DropdownMenuItem> : <div className="px-2 py-3 text-xs text-muted">No plugins available.</div>}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <div className="ml-auto shrink-0 md:hidden">
         <DropdownMenu open={mobileNav.open} onOpenChange={mobileNav.setOpen}>
           <DropdownMenuTrigger asChild>
@@ -233,6 +246,7 @@ export function TopNav() {
       </div>
 
       <div className="shrink-0">
+        <WorkspaceAssistantButton />
         <NotificationsBell />
       </div>
 

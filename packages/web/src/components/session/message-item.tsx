@@ -1,4 +1,4 @@
-import { Bot, User as UserIcon, FileText, Reply } from "lucide-react";
+import { FileText, Reply } from "lucide-react";
 import { memo, useMemo } from "react";
 import type {
   MessagePart,
@@ -8,7 +8,6 @@ import type {
   MessageReplyReference,
 } from "@valet/api/wire";
 import type { SettledOutcome, StreamMessage } from "~/stores/stream";
-import { Avatar, AvatarFallback } from "~/components/primitives/avatar";
 import { Markdown } from "~/components/markdown";
 import { CopyButton } from "./tool-renderers/tool-shell";
 import { pickRenderer, ToolShell } from "./tool-renderers";
@@ -18,7 +17,6 @@ import { Thinking } from "./tool-renderers/thinking";
 import { extractSkillInvocation, type SkillBlock } from "./tool-renderers/skill";
 import { cn } from "~/lib/cn";
 import { shortModelLabel } from "~/lib/models";
-import { userInitials } from "~/lib/user-initials";
 import { useRateMessage, useSessionRatings } from "~/api/queries";
 import { RatingButtons } from "./rating-buttons";
 
@@ -73,25 +71,14 @@ export const MessageItem = memo(function MessageItem({
   // viewer's own messages (and authorless rows) keep the "You" treatment.
   const teammate = isUser ? senderLabel(message.author, viewerId) : undefined;
   return (
-    <article className={cn("group min-w-0 px-3 py-3 sm:px-4", isUser && "bg-neutral-100/50 dark:bg-neutral-900/40")}>
+    <article data-message-id={message.id} className="group min-w-0 px-5 py-3 sm:px-8">
       {/* Row background spans full width; the content column is capped at a
           readable measure and centered — prose and tool cards both benefit. */}
       <div className={cn(
-        "mx-auto flex w-full min-w-0 max-w-4xl gap-3",
-        isUser && "border-l-4 border-moss pl-3"
+        "mx-auto flex w-full min-w-0 max-w-3xl justify-end"
       )}>
-        <Avatar size="sm" className="hidden sm:flex">
-          <AvatarFallback>
-            {teammate ? (
-              userInitials(teammate)
-            ) : isUser ? (
-              <UserIcon className="h-3.5 w-3.5" />
-            ) : (
-              <Bot className="h-3.5 w-3.5" />
-            )}
-          </AvatarFallback>
-        </Avatar>
-        <div className="flex-1 min-w-0 space-y-2">
+
+        <div className={cn("flex-1 min-w-0 space-y-2", isUser && "sm:max-w-[85%] rounded-2xl bg-ink-wash px-4 py-3")}>
           <div className="text-xs text-muted flex min-w-0 flex-wrap items-center gap-2">
             <span className="font-medium text-[--fg]/80">
               {isUser ? teammate ?? "You" : message.role === "assistant" ? "Assistant" : message.role}

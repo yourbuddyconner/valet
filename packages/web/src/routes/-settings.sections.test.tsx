@@ -273,12 +273,8 @@ describe("ThreadDefaultsPage", () => {
     const input = screen.getByLabelText("Default model");
     fireEvent.focus(input);
 
-    // "Team or organization default", not "System default": clearing the
-    // personal tier falls to the team default (team workspace) or the org
-    // preference list, not to a fixed product-wide model. Scoped to the
-    // combobox's own listbox — the reasoning select below shares the same
-    // fallback wording in its empty option.
-    fireEvent.click(within(screen.getByRole("listbox")).getByText("Team or organization default"));
+    // Personal threads do not inherit team defaults.
+    fireEvent.click(within(screen.getByRole("listbox")).getByText("Organization default"));
     expect(patchMeMutate).toHaveBeenCalledWith({ defaultModel: null });
   });
 

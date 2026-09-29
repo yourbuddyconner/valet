@@ -53,7 +53,7 @@ export function DropsPanel({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted">
-        Receipt only means Valet recorded an incoming event. Classification determines its event type; subscription filters determine matches. Problems below explain recorded rejections. Activity shows matched events, delivery attempts, and workflow outcomes. An absent receipt does not establish that the provider delivered the event.
+        Why events were rejected, filtered out, or could not be delivered. Some failures happen before an incoming event is recorded.
       </p>
 
       {dropsQ.data && (
@@ -67,15 +67,15 @@ export function DropsPanel({
       <SearchInput
         value={query}
         onSettled={(next) => onQueryChange?.(next)}
-        placeholder="Search problems"
-        aria-label="Search problems"
+        placeholder="Search rejections and failures"
+        aria-label="Search rejections and failures"
         maxLength={200}
       />
 
       {searchTooLong && (
         <ErrorRow>Search is too long. Shorten the search to 200 characters or fewer.</ErrorRow>
       )}
-      {!searchTooLong && dropsQ.isPending && <LoadingRow label="Loading problems…" />}
+      {!searchTooLong && dropsQ.isPending && <LoadingRow label="Loading rejections…" />}
       {dropsQ.error != null && !searchTooLong && (
         <ErrorRow>
           {cursor ? <><span>That page is no longer available. </span><button type="button" className="underline" onClick={() => onPrevious?.("")}>Return to the first page</button></> : "Failed to load. Reload the page and try again."}
@@ -83,7 +83,7 @@ export function DropsPanel({
       )}
       {dropsQ.data && dropsQ.data.drops.length === 0 && (
         <EmptyRow>
-          {query ? "No problems match this search." : "No recorded problems in this window. If a workflow did not run, check its subscription and the integration's delivery logs."}
+          {query ? "No rejections match this search." : "No recorded problems in this window. If a workflow did not run, check its subscription and the integration's delivery logs."}
         </EmptyRow>
       )}
 
@@ -93,7 +93,7 @@ export function DropsPanel({
         </ul>
       )}
 
-      <nav className="flex gap-2" aria-label="Problems pages">
+      <nav className="flex gap-2" aria-label="Rejection pages">
         <Button type="button" variant="secondary" disabled={!dropsQ.data?.previousCursor} aria-busy={dropsQ.isPending} onClick={() => !dropsQ.isPending && dropsQ.data?.previousCursor && onPrevious?.(dropsQ.data.previousCursor)}>
           Previous
         </Button>

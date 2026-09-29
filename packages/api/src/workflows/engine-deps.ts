@@ -440,6 +440,9 @@ export function buildWorkflowEngineDeps(opts: WorkflowEngineDepsOpts): WorkflowE
           maxTokens: req.maxOutputTokens,
         },
       );
+      if (result.stopReason === "error" || result.stopReason === "aborted") {
+        throw new Error(`Workflow model "${req.model}" ${result.stopReason}: ${result.errorMessage || "The provider did not complete the request."}`);
+      }
       const text = result.content
         .filter((b): b is { type: "text"; text: string } => b.type === "text")
         .map((b) => b.text)

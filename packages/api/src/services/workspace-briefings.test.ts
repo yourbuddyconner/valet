@@ -16,6 +16,12 @@ const answer = JSON.stringify({ briefings: [{ title: "Intake deduplication",
   summary: "Sequential deliveries pass. Approve the concurrent check before release.", sourceIds: ["first","latest","run","artifact"] }] });
 
 describe("workspace briefing synthesis", () => {
+  it("reads fenced JSON when the model appends an explanation", () => {
+    const wrapped = `\`\`\`json\n${answer}\n\`\`\`\n\nThese sources describe the same goal.`;
+    expect(parseWorkspaceBriefings(wrapped,evidence)).toEqual(parseWorkspaceBriefings(answer,evidence));
+    expect(parseWorkspaceBriefings('```json\n{"briefings":[]}\n```\n\nNo substantive goal has evidence.',evidence)).toEqual([]);
+    expect(() => parseWorkspaceBriefings(wrapped.replace('"first"','"made-up"'),evidence)).toThrow("Unknown briefing source");
+  });
   it("groups evidence from two conversations and a run while the server chooses the latest conversation", () => {
     const [brief] = parseWorkspaceBriefings(answer,evidence);
     expect(brief).toMatchObject({ title: "[Demo] Intake deduplication", status: "needs_attention", updatedAt: 30,

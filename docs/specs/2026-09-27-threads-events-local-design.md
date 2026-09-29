@@ -62,6 +62,19 @@ Sources:
 
 ## Events and notifications
 
+The Bell opens an inline Needs action panel for workflow and session decisions.
+Pending session gates come from durable storage with current organization and
+resolver access checks. Reading notifications does not remove pending decisions.
+The separate Workflows approval tab is removed. Workflow notification links use
+the run detail route. Contextual run and transcript cards remain available.
+
+Primary navigation groups Valet Security under Plugins. The dropdown preserves
+the existing plugin entitlement check and marks security pages as active.
+
+This iteration has local visual verification only. The full validation run was
+stopped at the user's request. Child-to-parent signals and durable Slack delivery
+remain separate follow-up work in the consolidated attention proposal.
+
 The existing automation wizard and advanced subscription editor remain the event
 configuration surfaces. They use validated workspace ownership and cannot select
 an assistant. No second matcher or delivery engine was introduced.
@@ -268,6 +281,11 @@ access, pagination, and UI primitives.
 
 ### Workspace catch-up
 
+Briefing synthesis accepts plain JSON or a leading JSON code block from the model.
+An explanation after that block does not invalidate the response. Only the JSON
+payload enters source and content validation. An empty result shows the empty
+briefing state instead of a generation failure.
+
 Home and Briefing share a workspace-scoped catch-up view. Briefing replaces the
 Work and artifacts execution list. Activity details remain collapsed below the
 briefs. Source pages retain creation and artifact-management controls.
@@ -343,3 +361,90 @@ working setup path or explain what is missing before it can be activated.
 
 Remaining adjacent gap: GitHub event triggers do not yet check App and webhook
 readiness before activation. Apply the existing GitHub setup status to that path.
+
+### Workflow hub and thread context visual iteration
+
+The workflow hub has Workflows and Scheduled tabs. Templates and the global Runs tab are removed, including the empty-list template gallery. Scheduled shows schedules and opens a schedule-only form. Event triggers remain available through Events and workflow editing.
+
+Each workflow summary includes a failure link only when its most recently started run failed. The API selects the latest run by creation time within the authorized workflow owner and organization. A newer successful or active run removes the link. Run detail routes remain available for diagnosis. Local visual checks confirmed both the failed detail and removal after a successful demo run.
+
+Each selected thread has an Outputs, Background processes, and Sources panel. It appears to the right on wide screens and can expand below the composer on narrow screens. Outputs query published artifacts by workspace, runtime, and thread. Sources list files and HTTP(S) links from loaded user messages in that thread. File rows jump to the source message. The plus actions prepare an output request in the composer or open its attachment picker; they do not send a message automatically.
+
+Background processes currently projects running tool calls while the thread is busy. Detached process tracking after a tool call returns is not implemented. Sources cover the loaded transcript, rather than unloaded older messages. These are known limits of the local visual iteration.
+
+Full validation remains deferred at the user's request. The local preview uses the threads/events refactor worktree.
+
+### Response ratings and thread status
+
+Ratings remain on assistant responses. The session header and its phone overflow menu no longer offer session ratings. Header and sidebar thread rows use compact activity dots with accessible labels and tooltips: blue for work, amber for approval, red for failure, and no icon for ready. An outlined dot indicates disconnected status. Connection and activity words no longer occupy header space.
+
+PR and merged icons require a durable thread-to-PR association and verified provider state. Neither exists in the current thread summary, so readiness must not imply a merged PR. Project grouping is proposed, not implemented: explicit project membership, repository defaults, manual moves, and an Unfiled group. Memory paths may suggest membership but must not silently determine it.
+
+This iteration was checked in the local browser. Full validation remains deferred.
+
+### Project folders visual pass
+
+The sidebar now has a Projects heading with an add button and an overflow menu. The menu contains Organize sidebar and Sort chats by submenus. Users can create named folders, expand or collapse them, and move threads through Move to project. Threads outside a folder appear under Recents. Recents-only organization shows every thread without removing folder assignments.
+
+This visual implementation saves folder names, assignments, grouping, and collapsed state in browser preferences, keyed by viewer and workspace runtime. It does not create filesystem directories or change agent memory. Cross-device persistence and repository-based assignment are not implemented. The local browser check created a turnkey folder, moved a demo thread, and confirmed the assignment after reload.
+
+The approval card no longer repeats the generic explanation of Approve and Deny. The request and actions remain visible. Ready threads no longer show a gray status dot.
+
+Project folders and Recents now accept dragged thread rows. Drop targets highlight during dragging, and a folder opens after a drop. Moves reuse the menu assignment path and remain scoped to the current workspace runtime. Empty folders say “Move a thread here”. Browser checks covered dragging to Recents, dragging back to a folder, and persistence after reload.
+
+The desktop sidebar has a fixed width of 18rem (288px at the default font size). Folder expansion and long thread titles do not resize it. Long titles truncate; the existing mobile drawer remains constrained to its viewport.
+
+### Homepage briefing
+
+Personal and team home pages show the full narrative briefing, current attention items, completed work, and next steps. The team Slack setup CTA appears above the briefing. Briefing is also accessible from Threads. Activity is visible without expanding Activity details. Empty sections are hidden. Recent results contain published artifacts and recorded outcomes, not generic successful-run rows.
+
+Workflow definitions expose their latest run, selected by creation time within the current owner and organization. Activity uses that single run per workflow rather than paging through historical failures. Briefing evidence applies the same latest-run rule. The Bell remains the approval action surface.
+
+Browser checks confirmed the homepage briefing, one current failure row, and absence of empty activity sections. Full validation remains deferred.
+
+
+### Approval context and personal defaults
+
+Approval gates expose the approval node's summary and details alongside its prompt. The Bell and run detail render them. The local fixture identifies the UI changes under review, unfinished validation, and the exact effect of accepting the checkpoint. It does not represent a code push or deployment approval.
+
+Personal thread settings say Organization default. Personal runtimes never read team defaults. Existing threads retain their model and reasoning settings.
+
+### Event Logs consolidation
+
+Event Logs replaces the separate Problems and Delivery log tabs. It contains rejection diagnostics and, for organization administrators, incoming receipts with processing timelines. The stores remain separate: a rejection can happen before receipt creation. Legacy problems and receipts URLs open Event Logs; rejection search and cursor parameters remain supported. The first visual pass keeps each source's search and pagination separate.
+
+The existing events.list_problems action remains available. The new events.list_event_logs action reads sanitized receipt metadata, stage decisions, and event references. It filters by organization, receipt, event key, channel, and time, enforces seven-day retention, and limits results. Only an authenticated organization administrator in a private non-channel transcript can read receipt logs. Shared transcripts retain the existing restricted rejection view, excluding sensitive classifier and interaction diagnostics.
+
+Workflow inspection already has workflows.get_run and workflows.get_node_result. A unified diagnosis tool across event delivery, skill loading, and chat execution is not part of this visual pass. Add correlation IDs and scoped diagnostic records for the missing sources before claiming unified coverage. Automated checks, including the new action authorization checks, remain deferred at the user's request.
+
+
+### Shared alignment pass
+
+Dropdown items use a single icon width and gap. Direct icon margins no longer add extra spacing. Thread project and sort choices reserve their checkmark column when unselected. Composer queue and action hints share the input text inset; file and image previews use the same inset. Settings fields use shared grid columns, with labels aligned to the control text and a single-column layout on narrow screens. Approval prompts, summaries, details, and actions share a left edge; the hand icon stays beside the status label. This is a visual pass, with full automated validation still deferred.
+
+
+### Conversation layout and summary toggle
+
+Thread context no longer occupies a permanent third column. Toggle summary opens a bounded popover with Outputs, Active tools, and Sources. Escape and outside clicks dismiss it; changing thread resets it. Active tools names the implemented behavior rather than claiming detached-process tracking. Messages share a centered 48rem content measure with the composer. User messages use inset bubbles; assistant responses use an open layout. Repeated message borders and avatars are removed, while sender names, times, response ratings, and tool details remain available.
+
+The summary toggle is the final header control, aligned to the right content gutter. Summary opens by default for each thread without taking keyboard focus. Its right edge aligns with the toggle. A single border surrounds the summary; the Briefing row matches the conversation header minimum height.
+
+
+### App-wide assistant and latest visual feedback
+
+Ask Valet is docked in the app shell and backed by the same durable workspace Thread used by workflow assistance, keyed per viewer. It remains outside regular sidebar/search results. Workflow and event creation reuse this conversation. Starter buttons preserve nonempty drafts and do not append repeated prompts. Workflows has a guided empty state and list rows with update time and run mode. Personal and organization subscription lists are explicitly separated.
+
+Thread search opens a centered picker with keyboard navigation, project names, and New thread. Hover pin actions collect browser-local pins into a Pinned section. Collapsed project ancestors retain approval indicators. Browser preview opens when leaving the Browser tab; the separate Watch browser control is removed. Messages accept up to 20 images, retaining the 5 MB per-image and 15 MB total client limits, and accept attachment-only submissions. Workflow LLM completions now throw on provider error/aborted responses instead of producing an empty success. Regression cases were added but not executed during the requested visual-only pass.
+
+
+### Shared Personal and team sidebar
+
+Removed origin chips (All, Chat, Auto, Channels, Other) and the saved origin-filter state from the sidebar. Both Personal and team workspaces use the same ThreadTree with search, pins, projects, recency sorting, and archive controls. The organization menu uses “By project” and “In one list.” Team sharing notices and owner-scoped configurations remain team-specific; removing the origin filter does not broaden workspace access. Obsolete tests for origin-filter exemptions were removed; pending approval indicators remain on threads and collapsed project ancestors. Automated validation remains deferred.
+
+## Workflow creation through the shared Thread
+
+Workflows opens with the existing SessionView composer. Its first successful send creates a minimal unscheduled definition and opens the existing editor, retaining the workspace helper Thread in the assistant column. Existing patch watching refetches saved changes onto the canvas. Failed sends retain the draft and saved definition id for retry while the creation view stays mounted. Workspace changes suppress late navigation.
+
+Import and manual setup live in the overflow menu. The old preset picker and preset builders were removed; manual setup uses the same minimal definition. The workflow list shows the latest outcome and links to a failed run only when the latest run failed.
+
+Visual check on localhost: a personal text-only demo moved from the first-message composer into the editor and added a Set values node through real tool patches. No workflow execution or scheduling occurred. The model initially guessed incorrect node schemas before correcting them; tool schema guidance remains a follow-up. Full validation and regression tests remain deferred at the user's request.

@@ -37,14 +37,16 @@ function triggerSummary(t: WorkflowTriggerItem): string {
 export function TriggerList({
   workflowId,
   owner,
+  schedulesOnly = false,
 }: {
   workflowId?: string;
   /** Scopes the flat hub list to one workspace. Unset per-workflow, where
    * `workflowId` already narrows the list. */
   owner?: OwnerFilter;
+  schedulesOnly?: boolean;
 }) {
   const { data, isLoading, error } = useWorkflowTriggers(workflowId, owner);
-  const workflowsQ = useWorkflows();
+  const workflowsQ = useWorkflows(owner);
   const updateSchedule = useUpdateSchedule();
   const updateEvent = useUpdateEventTrigger();
   const deleteSchedule = useDeleteSchedule();
@@ -62,7 +64,7 @@ export function TriggerList({
   const nameById = new Map(
     (workflowsQ.data?.workflows ?? []).map((w) => [w.id, w.name]),
   );
-  const triggers = data?.triggers ?? [];
+  const triggers = (data?.triggers ?? []).filter((trigger) => !schedulesOnly || trigger.kind === "schedule");
 
   async function guarded(fn: () => Promise<unknown>) {
     setActionError(null);
@@ -98,7 +100,7 @@ export function TriggerList({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-ink">Triggers</span>
+        <span className="text-sm font-medium text-ink">{schedulesOnly ? "Scheduled" : "Triggers"}</span>
         <Button
           size="sm"
           onClick={() => {
@@ -106,22 +108,22 @@ export function TriggerList({
             setDialogOpen(true);
           }}
         >
-          New trigger
+          {schedulesOnly ? "New schedule" : "New trigger"}
         </Button>
       </div>
 
       {actionError && <div className="text-xs text-danger-500">{actionError}</div>}
       {isLoading && (
         <div className="flex items-center gap-2 text-sm text-muted">
-          <Spinner size={14} /> Loading triggers…
+          <Spinner size={14} /> Loading {schedulesOnly ? "schedules" : "triggers"}…
         </div>
       )}
       {!isLoading && error && (
-        <div className="text-sm text-danger-500">Failed to load triggers.</div>
+        <div className="text-sm text-danger-500">Failed to load {schedulesOnly ? "schedules" : "triggers"}.</div>
       )}
       {!isLoading && !error && triggers.length === 0 && (
         <div className="text-sm text-muted">
-          {workflowId
+          {schedulesOnly ? "No schedules yet. Create one to run a workflow on a schedule." : workflowId
             ? "No triggers yet. Create one to run this on a schedule or on an event."
             : "No triggers yet. Create one to run a workflow on a schedule or on an event."}
         </div>
@@ -214,6 +216,7 @@ export function TriggerList({
         onOpenChange={setDialogOpen}
         workflowId={workflowId}
         editing={editing}
+        schedulesOnly={schedulesOnly}
       />
     </div>
   );

@@ -259,6 +259,7 @@ vi.mock("~/components/workflows/template-gallery", () => ({
 
 import { PERSONAL, WorkspaceScopeProvider, useWorkspaceScope } from "~/lib/workspace-scope";
 import { WorkflowsIndexPage } from "./workflows.index";
+import { WorkflowApprovalItem } from "~/components/workflows/workflow-approval-item";
 
 /** `workspace` selects the workspace the page is being read in — what the
  * nav's switcher sets. Seeded through localStorage, which is where the real
@@ -280,10 +281,16 @@ function renderPage(workspace = PERSONAL) {
   );
 }
 
+function renderApprovals(focusRun?: string) {
+  return render(<TooltipProvider><WorkspaceScopeProvider><ul>{actionRequiredData.items.map(item =>
+    <WorkflowApprovalItem key={item.id} item={item} focused={item.runId === focusRun} />
+  )}</ul></WorkspaceScopeProvider></TooltipProvider>);
+}
+
 const populated = [...workflowsData.workflows];
 
 beforeEach(() => {
-  workflowsData.workflows = [...populated];
+  workflowsData.workflows = structuredClone(populated);
   searchState = {};
   navigate.mockClear();
   createMutateAsync.mockClear();
@@ -292,39 +299,6 @@ beforeEach(() => {
 });
 
 describe("WorkflowsIndexPage", () => {
-  it("resets the runs cursor before querying a different workspace", () => {
-    searchState = { tab: "runs" };
-    renderPage();
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    expect(runsQuery).toHaveBeenLastCalledWith({ ownerType: "user", ownerId: "u-1" }, { cursor: "cursor_2" });
-    runsQuery.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: "Switch workspace" }));
-    expect(runsQuery).toHaveBeenCalledWith({ ownerType: "team", ownerId: "team_1" }, undefined);
-    expect(runsQuery.mock.calls.every((call) => call[1] === undefined)).toBe(true);
-    expect(screen.getByText("Page 1")).toBeTruthy();
-  });
-
-  it("retains Previous when a later runs page is empty", () => {
-    searchState = { tab: "runs" };
-    renderPage();
-    const savedRuns = allRunsData.runs;
-    allRunsData.runs = [];
-    const savedCursor = allRunsData.nextCursor;
-    delete allRunsData.nextCursor;
-    try {
-      fireEvent.click(screen.getByRole("button", { name: "Next" }));
-      expect(screen.getByText(/No runs yet/)).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Previous" })).toMatchObject({
-        disabled: false,
-      });
-      fireEvent.click(screen.getByRole("button", { name: "Previous" }));
-      expect(runsQuery).toHaveBeenLastCalledWith({ ownerType: "user", ownerId: "u-1" }, undefined);
-    } finally {
-      allRunsData.runs = savedRuns;
-      allRunsData.nextCursor = savedCursor;
-    }
-  });
-
   it("renders each workflow definition's name as a link to its editor page", () => {
     renderPage();
     const link = screen.getByText("Deploy pipeline").closest("a");
@@ -426,14 +400,17 @@ describe("WorkflowsIndexPage", () => {
     expect(screen.getByLabelText(/1 schedule/)).toBeTruthy();
   });
 
-  it("shows both gate classes in the action-required tab with a cross-workflow count", () => {
-    searchState = { tab: "action-required" };
+  it("removes the separate approval tab", () => {
     renderPage();
+    expect(screen.queryByRole("tab", { name: /Needs your approval/ })).toBeNull();
+  });
 
-    expect(screen.getByRole("tab", { name: /Needs your approval 2/ })).toBeTruthy();
+  it("shows both gate classes in the shared approval cards", () => {
+    renderApprovals();
+
     expect(screen.getByText("Workflow approval")).toBeTruthy();
     expect(screen.getByText("Tool permission")).toBeTruthy();
-    expect(screen.getAllByText("Ship this release?")).toHaveLength(2);
+    expect(screen.getAllByText("Ship this release?")).toHaveLength(1);
     expect(screen.getAllByText("slack.send_message").length).toBeGreaterThan(0);
     expect(screen.getByText("Started by schedule (sched_1)")).toBeTruthy();
   });
@@ -443,25 +420,21 @@ describe("WorkflowsIndexPage", () => {
       configurable: true,
       value: 390,
     });
-    searchState = { tab: "action-required" };
-    renderPage();
+    renderApprovals();
     const row = screen.getAllByTestId("action-required-item")[0];
     expect(row.className).toContain("min-w-0");
     expect(row.querySelector(".flex-col")).toBeTruthy();
-    expect(screen.getByRole("tab", { name: /Needs your approval/ }).className).toContain("min-h-11");
   });
 
   it("uses the notification search target to focus one gate", () => {
-    searchState = { tab: "action-required", run: "wfrun_policy", gate: "send" };
-    renderPage();
+    renderApprovals("wfrun_policy");
     const rows = screen.getAllByTestId("action-required-item");
     expect(rows[0].className).not.toContain("ring-2");
     expect(rows[1].className).toContain("ring-2");
   });
 
   it("confirms an explicit approval before it resolves", () => {
-    searchState = { tab: "action-required" };
-    renderPage();
+    renderApprovals();
     fireEvent.click(screen.getAllByRole("button", { name: "Approve" })[0]);
     expect(resolveMutate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Approve step" }));
@@ -471,55 +444,43 @@ describe("WorkflowsIndexPage", () => {
     });
   });
 
-  it("renders the Runs tab from the global runs feed", () => {
-    searchState = { tab: "runs" };
-    renderPage();
-    expect(screen.getByText("Deploy pipeline")).toBeTruthy(); // workflowName column
-    expect(screen.getByText("completed")).toBeTruthy(); // RunStatusChip label
-    expect(screen.getByRole("button", { name: "Next" })).toBeTruthy();
-  });
-
   it("badges a mirrored workflow with its repository path", () => {
     renderPage();
     expect(screen.getByText("tkhq/automation:.valet/workflows/nightly.yaml")).toBeTruthy();
     expect(screen.queryByLabelText("Delete Nightly digest")).toBeNull();
   });
 
-  it("renders the Triggers tab with the unified list", () => {
-    searchState = { tab: "triggers" };
+  it("renders the Scheduled tab", () => {
+    searchState = { tab: "scheduled" };
     renderPage();
     expect(screen.getByText("Nightly build")).toBeTruthy();
   });
 
   it("tab buttons navigate via search params", () => {
     renderPage();
-    fireEvent.click(screen.getByRole("tab", { name: /Triggers/ }));
-    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ search: { tab: "triggers" } }));
+    fireEvent.click(screen.getByRole("tab", { name: /Scheduled/ }));
+    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ search: { tab: "scheduled" } }));
   });
 
-  it("puts templates behind a tab so an existing list stays the page", () => {
+  it("shows only Workflows and Scheduled tabs", () => {
     renderPage();
-
-    expect(screen.getByText("Deploy pipeline")).toBeTruthy();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Workflows", "Scheduled"]);
     expect(screen.queryByTestId("template-gallery")).toBeNull();
-
-    fireEvent.click(screen.getByRole("tab", { name: "Templates" }));
-    expect(navigate).toHaveBeenCalledWith(
-      expect.objectContaining({ search: { tab: "templates" } }),
-    );
-
-    searchState = { tab: "templates" };
-    renderPage();
-    expect(screen.getByTestId("template-gallery")).toBeTruthy();
   });
 
-  it("makes the gallery the zero state when there are no workflows", () => {
+  it("offers creation without templates when the list is empty", () => {
     workflowsData.workflows = [];
     renderPage();
-
-    expect(screen.getByTestId("template-gallery")).toBeTruthy();
+    expect(screen.queryByTestId("template-gallery")).toBeNull();
     expect(screen.getByText(/no workflows yet/i)).toBeTruthy();
   });
+
+  it("links the workflow directly to its latest failed run", () => {
+    workflowsData.workflows[0].latestFailedRun = { runId: "failed_1", failedAt: 1 };
+    renderPage();
+    expect(screen.getByText("View latest failed run").getAttribute("data-params")).toBe(JSON.stringify({ runId: "failed_1" }));
+  });
+
 });
 
 describe("WorkflowsIndexPage — team ownership", () => {

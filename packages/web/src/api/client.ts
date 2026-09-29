@@ -123,6 +123,7 @@ import type {
   ListMessagesResponse,
   ListNotificationPreferencesResponse,
   ListNotificationsResponse,
+  ListNotificationDecisionsResponse,
   ListModelsResponse,
   ListPluginsResponse,
   ListSessionsResponse,
@@ -722,6 +723,8 @@ export const api = {
     request<{ ok: true }>("POST", `/sessions/${encodeURIComponent(id)}/sandbox/replace`),
   // orchestrator (session ids contain colons — always encoded above too, but
   // this entry point never touches a raw id itself, only ensures one exists)
+  ensureWorkspaceConversation: (workspace: string) =>
+    request<{ sessionId: string; threadId: string }>("POST", `/workspaces/${encodeURIComponent(workspace)}/conversation`),
   ensureWorkspaceRuntime: (workspace: string) =>
     request<EnsureWorkspaceRuntimeResponse>("POST", `/workspaces/${encodeURIComponent(workspace)}/runtime`),
   getWorkspaceRuntime: (workspace: string) =>
@@ -881,6 +884,7 @@ export const api = {
     ),
 
   // decision gates
+  listNotificationDecisions: () => request<ListNotificationDecisionsResponse>("GET", "/notifications/decisions"),
   listDecisions: (sessionId: string) =>
     request<ListDecisionsResponse>(
       "GET",

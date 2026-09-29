@@ -541,10 +541,39 @@ export async function listWorkflowDefinitions(
   const rows = await deps.db
     .select()
     .from(workflowDefinitions)
-    .where(where)
+    .where(and(eq(workflowDefinitions.orgId, owner.orgId), where))
     .orderBy(desc(workflowDefinitions.updatedAt));
   const names = await repoNamesFor(deps.db, rows);
-  return rows.map((row) => rowToDefinition(row, row.sourceId ? names.get(row.sourceId) : undefined));
+  const latestRuns = rows.length === 0 ? [] : await deps.db
+    .selectDistinctOn([workflowRuns.workflowId], {
+      workflowId: workflowRuns.workflowId,
+      runId: workflowRuns.id,
+      failedAt: workflowRuns.updatedAt,
+      status: workflowRuns.status,
+      createdAt: workflowRuns.createdAt,
+      updatedAt: workflowRuns.updatedAt,
+      outcome: workflowRuns.outcome,
+    })
+    .from(workflowRuns)
+    .innerJoin(workflowDefinitions, eq(workflowDefinitions.id, workflowRuns.workflowId))
+    .where(and(
+      inArray(workflowRuns.workflowId, rows.map((row) => row.id)),
+      eq(workflowDefinitions.orgId, owner.orgId),
+      eq(workflowRuns.ownerType, workflowDefinitions.ownerType),
+      eq(workflowRuns.ownerId, workflowDefinitions.ownerId),
+    ))
+    .orderBy(workflowRuns.workflowId, desc(workflowRuns.createdAt), desc(workflowRuns.id));
+  const latestByWorkflow = new Map(latestRuns.map((run) => [run.workflowId, { runId: run.runId, workflowId: run.workflowId, status: run.status, outcome: run.outcome ?? undefined, createdAt: run.createdAt, updatedAt: run.updatedAt }]));
+  const failureByWorkflow = new Map(
+    latestRuns.filter((run) => run.outcome === "failed").map((run) => [
+      run.workflowId, { runId: run.runId, failedAt: run.failedAt },
+    ]),
+  );
+  return rows.map((row) => ({
+    ...rowToDefinition(row, row.sourceId ? names.get(row.sourceId) : undefined),
+    latestFailedRun: failureByWorkflow.get(row.id),
+    latestRun: latestByWorkflow.get(row.id),
+  }));
 }
 
 export async function getWorkflowDefinition(
@@ -1920,6 +1949,8 @@ export async function getWorkflowRunDetail(
       };
       if (iteration !== undefined) gate.iteration = iteration;
       if (node && typeof node.prompt === "string") gate.prompt = node.prompt;
+      if (node && typeof node.summary === "string") gate.summary = node.summary;
+      if (node && node.details !== undefined) gate.details = node.details;
       if (node && (node.onDeny === "fail" || node.onDeny === "skip")) gate.onDeny = node.onDeny;
       if (typeof w.timeoutAt === "number") gate.timeoutAt = w.timeoutAt;
       pendingGates.push(gate);

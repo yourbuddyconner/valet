@@ -59,16 +59,16 @@ export function ReceiptsPanel() {
       <div className="mt-2 space-y-2">
         <p>Organization-wide metadata only. No message bodies. Retained for up to 7 days or 10,000 receipts, whichever comes first.</p>
         <p>Open a matched event for delivery attempts and outcomes.</p>
-        <p>Missing an event? Check <Link to="/events" search={{ tab: "problems" }} className="text-moss underline">Problems</Link> for verification or credential errors, then the provider’s delivery logs. A missing receipt does not confirm a delivery failure.</p>
+        <p>Missing an event? Check the rejections above for verification or credential errors, then the provider’s delivery logs. A missing receipt does not confirm a delivery failure.</p>
       </div>
     </details>
     {data && <p className="text-xs text-muted">{data.lastReceiptAt !== null ? <>Last recorded receipt: <Timestamp value={data.lastReceiptAt} /></> : "No recent receipts."}</p>}
-    <SearchInput aria-label="Search delivery log" placeholder="Search provider ID, channel, event key, or reference" value={query} maxLength={200} onSettled={next => { setQuery(next.trim()); setCursors([]); }} />
-    {receiptsQ.isPending && <LoadingRow label="Loading delivery log…" />}
+    <SearchInput aria-label="Search incoming events" placeholder="Search provider ID, channel, event key, or reference" value={query} maxLength={200} onSettled={next => { setQuery(next.trim()); setCursors([]); }} />
+    {receiptsQ.isPending && <LoadingRow label="Loading incoming events…" />}
     {receiptsQ.error && <ErrorRow>Could not load delivery receipts. <button className="underline" onClick={() => void receiptsQ.refetch()}>Retry</button>{cursor && <> or <button className="underline" onClick={() => setCursors([])}>Return to the first page</button>.</>}</ErrorRow>}
     {data?.receipts.length === 0 && <EmptyRow>{query ? "No receipts match this search in the last 7 days." : "No receipts recorded in the last 7 days. Check the provider’s delivery logs for missing events."}</EmptyRow>}
     {data && <ul className="divide-y divide-line border-y border-line">{data.receipts.map(receipt => <ReceiptRow key={receipt.id} receipt={receipt} />)}</ul>}
-    <nav aria-label="Delivery log pages" className="flex gap-2">
+    <nav aria-label="Incoming event pages" className="flex gap-2">
       <Button variant="secondary" disabled={!cursor || receiptsQ.isFetching} onClick={() => setCursors(previous => previous.slice(0, -1))}>Previous</Button>
       <Button variant="secondary" disabled={!data?.nextCursor || receiptsQ.isFetching} onClick={() => { const next = data?.nextCursor; if (next) setCursors(previous => [...previous, next]); }}>Next</Button>
     </nav>

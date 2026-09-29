@@ -17,13 +17,13 @@ export function FieldRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-2 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-      <div className="min-w-0 sm:w-48 sm:shrink-0">
+    <div className="grid grid-cols-1 gap-2 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] sm:items-start sm:gap-6">
+      <div className="min-w-0 sm:pt-2">
         <div className="text-sm font-medium text-ink">{label}</div>
-        {hint && <p className="mt-0.5 text-xs text-muted">{hint}</p>}
+        {hint && <p className="mt-0.5 max-w-xs text-xs leading-5 text-muted">{hint}</p>}
         {error && <p className="mt-0.5 text-xs text-danger-500">{error}</p>}
       </div>
-      <div className="min-w-0 flex-1 sm:max-w-sm">{children}</div>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }

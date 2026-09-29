@@ -79,6 +79,7 @@ function loadStoredCollapsed(): boolean {
 export function AppShell({
   topNav,
   sidebar,
+  rightPanel,
   children,
   className,
 }: {
@@ -89,6 +90,7 @@ export function AppShell({
    * "no thread sidebar").
    */
   sidebar?: ReactNode;
+  rightPanel?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
@@ -139,7 +141,7 @@ export function AppShell({
                   silently dead for anyone whose collapsed state persisted. */}
               <aside
                 className={cn(
-                  "shrink-0 flex-col w-max min-w-[200px] max-w-[320px] border-r border-line",
+                  "shrink-0 flex-col w-72 min-w-0 border-r border-line",
                   collapsed ? "hidden" : "hidden md:flex",
                 )}
                 aria-hidden={collapsed}
@@ -168,6 +170,7 @@ export function AppShell({
             </>
           )}
           <main className="flex-1 min-w-0 min-h-0 flex flex-col">{children}</main>
+          {rightPanel}
         </div>
       </div>
     </SidebarControlsContext.Provider>

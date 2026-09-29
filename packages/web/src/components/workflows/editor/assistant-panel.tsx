@@ -24,7 +24,7 @@ import { Sparkles } from "lucide-react";
 import type { WorkflowDefinition } from "@valet/workflow";
 import { SessionView } from "~/components/session/session-view";
 import { Button, Spinner } from "~/components/primitives";
-import { useComposerPrefillStore } from "~/stores/composer-prefill";
+import { prefillComposerDraft } from "~/stores/composer-drafts";
 import type { WorkflowAssistant } from "~/hooks/use-workflow-assistant";
 import { workflowSuggestions } from "./assistant-suggestions";
 
@@ -71,7 +71,8 @@ export function WorkflowAssistantPanel({
               <li key={suggestion.label}>
                 <button
                   type="button"
-                  onClick={() => useComposerPrefillStore.getState().set(suggestion.prompt)}
+                  disabled={!assistant.sessionId || !assistant.threadId}
+                  onClick={() => { if (assistant.sessionId && assistant.threadId) prefillComposerDraft(assistant.sessionId, assistant.threadId, suggestion.prompt); }}
                   className="min-h-11 rounded-full border border-line sm:min-h-0 px-2.5 py-1 text-[11px] text-ink transition-colors hover:border-moss hover:bg-moss-wash focus:outline-none focus-visible:ring-2 focus-visible:ring-moss"
                 >
                   {suggestion.label}

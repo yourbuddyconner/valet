@@ -380,19 +380,13 @@ describe("SessionHeader — pause control", () => {
 });
 
 describe("SessionHeader — overflow menu", () => {
-  it("clears an active phone rating and disables ratings while saving", async () => {
-    sessionRating = "positive";
-    const view = renderHeader({ state: "ready", epoch: 1 });
-    await userEvent.click(screen.getByRole("button", { name: "Thread menu" }));
-    const good = screen.getByRole("menuitemcheckbox", { name: "Good session" });
-    expect(good.getAttribute("aria-checked")).toBe("true");
-    await userEvent.click(good);
-    expect(rateSessionMutate).toHaveBeenCalledWith(null);
-    view.unmount();
-    ratingPending = true;
+  it("does not offer session ratings in the header or overflow menu", async () => {
     renderHeader({ state: "ready", epoch: 1 });
+    expect(screen.queryByRole("button", { name: "Good session" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Bad session" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Thread menu" }));
-    expect(screen.getByRole("menuitemcheckbox", { name: "Bad session" }).getAttribute("data-disabled")).not.toBeNull();
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Good session" })).toBeNull();
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Bad session" })).toBeNull();
   });
 
   it("keeps phone pause readiness and failure reporting", async () => {
@@ -887,7 +881,7 @@ describe("SessionHeader — team assistant", () => {
     expect(screen.getByText("repo")).toBeTruthy();
   });
 
-  it("keeps phone copy and ratings available without team admin actions", async () => {
+  it("keeps phone copy available without team admin actions", async () => {
     withTeam("member");
     renderTeamHeader();
     expect(screen.queryByRole("button", { name: /pause/i })).toBeNull();
