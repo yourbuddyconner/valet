@@ -113,3 +113,10 @@ Kubernetes backend for isolated agent execution.
 Deploy an exact committed source snapshot, preserve a database backup before
 migration, and check both `/api/health` and `/api/ready` after rollout. The
 repository root Dockerfile is not the API deployment image.
+
+Railway requires cache-mount IDs to contain a literal service ID. Use
+`node scripts/deploy-railway.mjs PROJECT_UUID SERVICE_UUID production REVISION`.
+This uploads a committed snapshot and changes only the build cache namespace.
+It preserves the shared API Dockerfile and uses Railway's build cache without
+hard-coding a deployment's service ID into the repository. Direct source builds
+must apply the same cache-ID substitution.
