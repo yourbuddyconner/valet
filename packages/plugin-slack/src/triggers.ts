@@ -65,7 +65,7 @@ function makeVerify(eventTypes: readonly string[], botMessages = false): Trigger
     const botId = canonicalBotId(rawEvent);
     if (botMessages) {
       // A missing installation identity fails closed. Reconnect Slack to refresh it.
-      if (rawType !== "message" || subtype !== "bot_message" || !botId || !secrets.botId) return null;
+      if (rawType !== "message" || (subtype !== undefined && subtype !== "bot_message") || !botId || !secrets.botId) return null;
       if (botId === secrets.botId) return null;
       if (secrets.botUserId && str(rawEvent.user) === secrets.botUserId) return null;
     } else {

@@ -61,17 +61,20 @@
  */
 import { createEventReceipt, appendReceiptStage } from "../events/receipts.js";
 import { Hono } from "hono";
+import { credentialSecret } from "@valet/engine";
 import type { ChannelTransport, RawChannelUpdate, TriggerDef, ValetPlugin } from "@valet/engine";
 import type { AppEnv } from "../env.js";
 import type { AppDb } from "../lib/drizzle.js";
 import { resolveOrgId } from "../lib/org.js";
 import { writeDropLog } from "../orchestrator/signals.js";
-import { ingestEvent, logSlackMessageBotNearMiss } from "../events/ingest.js";
+import { ingestEvent, logSlackBotIdentityMissing, logSlackMessageBotNearMiss } from "../events/ingest.js";
 import type { ChannelHost } from "../channels/host.js";
 import type { EngineHost } from "../engine/host.js";
 import { handleFollowedMessage } from "../channels/follow-router.js";
 import { channelMessageNormalizer } from "../events/channel-origin.js";
 import { channelThreadWindowFetcher } from "../events/channel-thread-context.js";
+import { resolveSlackBotIdentity } from "../services/slack-bot-identity.js";
+import type { SlackWorkspaceIdentity } from "../services/slack-connect.js";
 
 /**
  * Slack updates are small JSON; files arrive by reference, never inline. The
@@ -182,6 +185,7 @@ async function logClassifierRejection(deps: FanOutDeps, raw: RawChannelUpdate): 
 interface FanOutDeps {
   botUserId?: string;
   botId?: string;
+  resolveBotIdentity?: () => Promise<SlackWorkspaceIdentity | undefined>;
   db: AppDb;
   plugins: ValetPlugin[];
   transport: ChannelTransport;
@@ -193,6 +197,16 @@ interface FanOutDeps {
   webhookSecret: string;
   headers: Record<string, string>;
   rawBody: Uint8Array;
+}
+
+function botMessageOf(raw: RawChannelUpdate): Record<string, unknown> | undefined {
+  if (!isRecord(raw) || raw.type !== "event_callback" || !isRecord(raw.event)) return undefined;
+  const event = raw.event;
+  if (event.type !== "message" || (event.subtype !== undefined && event.subtype !== "bot_message")) return undefined;
+  const botId = typeof event.bot_id === "string" && event.bot_id
+    ? event.bot_id
+    : isRecord(event.bot_profile) && typeof event.bot_profile.id === "string" ? event.bot_profile.id : undefined;
+  return botId ? { ...event, bot_id: botId } : undefined;
 }
 
 /**
@@ -218,6 +232,14 @@ async function fanOutUpdate(deps: FanOutDeps, raw: RawChannelUpdate, receiptId: 
   let eventPhase = "classification";
   try {
     await appendReceiptStage(deps.db, receiptId, { stage: "classification", outcome: "started", detail: `Checking ${deps.triggerDefs.length} configured Slack trigger classifiers.` });
+    const botMessage = botMessageOf(raw);
+    if (!deps.botId && botMessage && (!deps.botUserId || botMessage.user !== deps.botUserId)) {
+      const identity = await deps.resolveBotIdentity?.();
+      if (identity) {
+        deps.botId = identity.botId;
+        deps.botUserId = identity.botUserId;
+      }
+    }
     let matchedTrigger = false;
     for (const def of deps.triggerDefs) {
       const verified = await def.verify({ headers: deps.headers, rawBody: deps.rawBody }, { webhookSecret: deps.webhookSecret, ...(deps.botId ? { botId: deps.botId } : {}), ...(deps.botUserId ? { botUserId: deps.botUserId } : {}) });
@@ -232,7 +254,7 @@ async function fanOutUpdate(deps: FanOutDeps, raw: RawChannelUpdate, receiptId: 
       // its diagnostic. Only a classifier miss with no named bot subscription
       // should suggest that a slack.message subscription use slack.bot_message.
       if (normalized.key === "slack.bot_message" && ingestResult.skipped && !ingestResult.namedSubscription) {
-        await logSlackMessageBotNearMiss(deps.db, deps.orgId, normalized.payload);
+        await logSlackMessageBotNearMiss(deps, deps.orgId, normalized.payload);
       }
       matchedTrigger = true;
       break;
@@ -240,7 +262,11 @@ async function fanOutUpdate(deps: FanOutDeps, raw: RawChannelUpdate, receiptId: 
     if (!matchedTrigger) {
       await appendReceiptStage(deps.db, receiptId, { stage: "classification", outcome: "rejected", detail: classifierExplanation(deps, raw) });
       await logUnmatchedInteraction(deps.db, deps.orgId, raw);
-      await logClassifierRejection(deps, raw);
+      if (!deps.botId && botMessage && (!deps.botUserId || botMessage.user !== deps.botUserId)) {
+        await logSlackBotIdentityMissing(deps, deps.orgId, botMessage);
+      } else {
+        await logClassifierRejection(deps, raw);
+      }
     }
   } catch (err) {
     await appendReceiptStage(deps.db, receiptId, { stage: "ingestion", outcome: "failed", detail: `Event processing failed during ${eventPhase}. Check server logs using this receipt reference. Exception payloads are not retained.` });
@@ -380,6 +406,7 @@ slackWebhookRouter.post("/webhook", async (c) => {
     return c.json({ error: "signature verification failed" }, 401);
   }
 
+  const accessToken = credentialSecret(credential);
   const deps: FanOutDeps = {
     db,
     plugins,
@@ -388,6 +415,12 @@ slackWebhookRouter.post("/webhook", async (c) => {
     engineHost,
     botUserId: typeof credential?.metadata?.botUserId === "string" ? credential.metadata.botUserId : undefined,
     botId: typeof credential?.metadata?.botId === "string" ? credential.metadata.botId : undefined,
+    resolveBotIdentity: accessToken ? () => resolveSlackBotIdentity(engineCredentials, {
+      orgId,
+      accessToken,
+      teamId: credentialTeamId,
+      botUserId: typeof credential.metadata?.botUserId === "string" ? credential.metadata.botUserId : undefined,
+    }) : undefined,
     triggerDefs: slackTriggerDefs(plugins),
     onIngest: eventDispatcher.nudge,
     orgId,

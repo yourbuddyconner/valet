@@ -10,7 +10,7 @@ import { and, eq } from "drizzle-orm";
 import type { EventCatalogEntry, NormalizedEvent, ValetPlugin } from "@valet/engine";
 import type { AppDb } from "../lib/drizzle.js";
 import { eventDeliveries, events, eventSubscriptions } from "../schema/index.js";
-import { filtersMatch, type SubscriptionFilter, subscriptionNamesKey } from "./match.js";
+import { filtersMatch, type SubscriptionFilter, subscriptionMatchesEvent, subscriptionNamesKey } from "./match.js";
 import { authorizedSlackDiagnosticSubscription, isTeamAssistantRule, subscriptionMatchOutcome } from "./team-slack-gate.js";
 import { writeDropLog } from "../orchestrator/signals.js";
 
@@ -104,13 +104,14 @@ async function logFilterExcludedDrop(
   detail?: string,
   throttleKeySuffix = eventKey,
   throttleClaimed = false,
+  reason = "filter_excluded",
 ): Promise<void> {
   if (!throttleClaimed && !claimDropThrottle(orgId, throttleKeySuffix)) return;
   const message = detail ?? `A ${eventKey} event arrived, but every subscription for it excluded it by filter. Check the filters on your ${eventKey} subscription.`;
   try {
     await writeDropLog(db, {
       orgId,
-      reason: "filter_excluded",
+      reason,
       eventKey,
       eventMetadata: diagnosticMetadata(payload),
       detail: message,
@@ -128,38 +129,40 @@ async function logFilterExcludedDrop(
  * an enabled named key keeps ordinary bot traffic out of the drop log.
  */
 export async function logSlackMessageBotNearMiss(
+  deps: IngestDeps,
+  orgId: string,
+  payload: unknown,
+): Promise<void> {
+  await logSlackBotDiagnostic(deps.db, orgId, payload, "slack.message", "filter_excluded",
+    "A Slack bot message arrived, but `slack.message` accepts only human messages. Subscribe to `slack.bot_message` to receive bot form deliveries.", catalogForService(deps.plugins, "slack"));
+}
+
+/** Keep the fail-closed identity check visible without retaining unsubscribed traffic. */
+export async function logSlackBotIdentityMissing(deps: IngestDeps, orgId: string, payload: unknown): Promise<void> {
+  await logSlackBotDiagnostic(deps.db, orgId, payload, "slack.bot_message", "slack_bot_identity_missing",
+    "A Slack bot message arrived, but Valet could not resolve its installed bot identity. Reconnect Slack in Settings to refresh its identity.", catalogForService(deps.plugins, "slack"));
+}
+
+async function logSlackBotDiagnostic(
   db: AppDb,
   orgId: string,
   payload: unknown,
+  eventKey: string,
+  reason: string,
+  detail: string,
+  catalog: EventCatalogEntry[],
 ): Promise<void> {
   const subs = await db
     .select()
     .from(eventSubscriptions)
     .where(and(eq(eventSubscriptions.orgId, orgId), eq(eventSubscriptions.enabled, true)));
-  const named = subs.filter((sub) => subscriptionNamesKey(sub, "slack.message"));
+  const named = subs.filter((sub) => subscriptionNamesKey(sub, eventKey));
   if (named.length === 0) return;
-  const detail = "A Slack bot message arrived, but `slack.message` accepts only human messages. Subscribe to `slack.bot_message` to receive bot form deliveries.";
-  const throttleKey = "slack.message:bot_near_miss";
-  const nonTeam = named.find((sub) => !isTeamAssistantRule(sub.ownerType, sub.target));
-  if (nonTeam) {
-    await logFilterExcludedDrop(db, orgId, "slack.message", payload, detail, throttleKey);
-    return;
-  }
-  // Slack bot messages normally have no user. Do not treat an absent sender as
-  // an unauthorized team member and do not create an authorization diagnostic.
-  if (!isRecord(payload) || typeof payload.user !== "string") return;
-  // Claim before membership lookups. A bot flood must not create one denial per
-  // message, and only an all-team candidate set reaches this gate.
-  if (!claimDropThrottle(orgId, throttleKey)) return;
-  for (const sub of named) {
-    if (await authorizedSlackDiagnosticSubscription(db, sub, payload, false)) {
-      await logFilterExcludedDrop(db, orgId, "slack.message", payload, detail, throttleKey, true);
-      return;
-    }
-  }
-  // Every named team subscription rejected the sender. Record exactly one
-  // metadata-free authorization diagnostic after the throttle claim.
-  await authorizedSlackDiagnosticSubscription(db, named[0], payload);
+  const throttleKey = `${eventKey}:${reason}:bot_near_miss`;
+  // Both diagnostics describe bot traffic, not a human team mention. Keep
+  // metadata within the filters of a subscription that names the key.
+  const retainMetadata = named.some((sub) => subscriptionMatchesEvent(sub, eventKey, payload, catalog));
+  await logFilterExcludedDrop(db, orgId, eventKey, retainMetadata ? payload : undefined, detail, throttleKey, false, reason);
 }
 
 function failedFilterFields(filters: unknown, key: string, payload: unknown, catalog: EventCatalogEntry[], teamMention: boolean) {

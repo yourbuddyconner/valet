@@ -297,16 +297,9 @@ describe("ThreadDefaultsPage", () => {
     expect(patchMeMutate).toHaveBeenCalledWith({ defaultReasoning: null });
   });
 
-  it("changes the model and thinking behavior for new threads", async () => {
-    const user = userEvent.setup();
+  it("does not offer current-thread inheritance for new conversations", () => {
     render(<ThreadDefaultsPage />);
-    const select = screen.getByLabelText("New thread behavior") as HTMLSelectElement;
-    expect(select.value).toBe("keep_current");
-
-    await user.selectOptions(select, "use_defaults");
-    expect(patchMeMutate).toHaveBeenCalledWith({
-      newThreadBehavior: "use_defaults",
-    });
+    expect(screen.queryByLabelText("New thread behavior")).not.toBeInTheDocument();
   });
 });
 

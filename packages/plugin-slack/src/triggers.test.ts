@@ -128,6 +128,23 @@ describe("slackTriggerDefs verify", () => {
     expect(await trigger.verify(signedRequest(envelope(bot, "Ev-bot-legacy")), { webhookSecret: SECRET })).toBeNull();
   });
 
+  it.each([{ bot_id: "BOTHER" }, { bot_profile: { id: "BOTHER" } }])("normalizes modern bot posts without a subtype: %j", async (identity) => {
+    const trigger = findTrigger("slack.bot_message");
+    const secrets = { webhookSecret: SECRET, botId: "BVALET", botUserId: "UVALET" };
+    const event = { type: "message", channel: "C1", text: "ready", ...identity };
+    const request = signedRequest(envelope(event, "Ev-modern"));
+    const verified = await trigger.verify(request, secrets);
+    expect(verified).not.toBeNull();
+    if (!verified) throw new Error("Expected a verified bot event");
+    expect(trigger.toEvent(verified)).toMatchObject({ key: "slack.bot_message", payload: { bot_id: "BOTHER" } });
+    expect(await findTrigger("slack.message").verify(request, secrets)).toBeNull();
+    expect(await trigger.verify(signedRequest(envelope({ ...event, bot_id: "BVALET" })), secrets)).toBeNull();
+    expect(await trigger.verify(signedRequest(envelope({ ...event, user: "UVALET" })), secrets)).toBeNull();
+    for (const subtype of ["message_changed", "message_deleted", "channel_join"]) {
+      expect(await trigger.verify(signedRequest(envelope({ ...event, subtype })), secrets)).toBeNull();
+    }
+  });
+
   it("canonicalizes bot_profile.id", async () => {
     const trigger = findTrigger("slack.bot_message");
     const event = { type: "message", subtype: "bot_message", bot_profile: { id: "BOTHER", name: "not an identity" } };

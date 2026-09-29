@@ -13,16 +13,14 @@ The model picker also uses a tier name as its closed label. A label such as `Lar
 
 ### New thread behavior
 
-Add a personal `newThreadBehavior` preference with two values:
+The API keeps a personal `newThreadBehavior` preference for explicit source-based continuation requests:
 
-- `keep_current`: Copy the active thread's effective model and reasoning level.
+- `keep_current`: Copy the source thread's effective model and reasoning level.
 - `use_defaults`: Resolve the current assistant, personal or team, host, and built-in model defaults. Resolve organization settings in the reasoning cascade.
 
-The default value is `keep_current`. This value matches the direct manipulation model: after a person changes a thread's model or reasoning, the next thread starts with those settings.
+The default value is `keep_current`. The preference applies to model and reasoning together. The Thread defaults settings page does not expose this API-only continuation preference.
 
-The preference applies to model and reasoning together. The UI does not expose separate controls.
-
-The web client sends the active thread id as `sourceThreadId` when it creates a thread. The API reads the authenticated user's preference and owns the decision:
+The sidebar **New thread** action never sends `sourceThreadId`. It always creates a top-level conversation with current defaults. An explicit API caller that sends `sourceThreadId` gets the following behavior:
 
 1. If the preference is `keep_current` and the source thread exists in the same session, copy its effective model and reasoning.
 2. If `sourceThreadId` is omitted, use the current defaults.
@@ -30,7 +28,7 @@ The web client sends the active thread id as `sourceThreadId` when it creates a 
 
 If `sourceThreadId` is supplied but does not name a thread in the session, the API returns `thread not found`. Existing threads never change.
 
-For `use_defaults`, the host resolves the same current cascade that applies when it first builds the session. It does not use the session's persisted historical model:
+For source-less requests and `use_defaults` source requests, the host resolves the same current cascade that applies when it first builds the session. It does not use the session's persisted historical model:
 
 `assistant default -> personal default -> team default -> host default -> s`
 
@@ -91,12 +89,7 @@ The host exposes a focused new-thread-default resolver. It reuses the existing m
 
 ## Web changes
 
-Add a **New thread behavior** setting to **Settings -> Assistant**. Use a compact select with these labels:
-
-- **Keep current settings**
-- **Use configured defaults**
-
-The thread tree passes its active thread id to `createThread`.
+The thread tree creates a source-less request for sidebar **New thread**. The server resolves current defaults for that top-level conversation.
 
 Centralize selected tier label resolution in `packages/web/src/lib/model-tiers.ts`. Both `ModelPicker` and `ModelCombobox` use the helper.
 
@@ -120,7 +113,7 @@ Add regression coverage for:
 - A missing source falls back to defaults.
 - A source thread from another session is rejected.
 - Existing threads remain unchanged.
-- The web client sends the active thread id.
+- The sidebar creates a source-less request even when another thread is active.
 - Closed chat and settings controls show resolved model names for tier selections.
 - Thinking remains a suffix on the chat trigger.
 - Restricted pickers show all approved models, hide all unapproved models, and omit `show more` for admins and members.

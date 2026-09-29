@@ -100,16 +100,15 @@ describe("ThreadTree — new thread affordance", () => {
     const button = screen.getByRole("button", { name: "New thread" });
     await userEvent.click(button);
 
-    expect(createThreadMutateAsync).toHaveBeenCalledWith({
-      sourceThreadId: "thread-1",
-    });
+    expect(createThreadMutateAsync).toHaveBeenCalledWith();
     expect(navigate).toHaveBeenCalledWith(
       expect.objectContaining({ search: expect.any(Function) }),
     );
     const call = navigate.mock.calls[0][0] as { search: (prev: Record<string, unknown>) => Record<string, unknown> };
-    expect(call.search({ thread: "thread-1" })).toEqual({
+    expect(call.search({ thread: "thread-1", child: "child-1", view: "events" })).toEqual({
       thread: "thread-new",
       child: undefined,
+      view: undefined,
     });
   });
 });

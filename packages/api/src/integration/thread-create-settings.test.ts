@@ -110,9 +110,11 @@ describe("POST /api/sessions/:id/threads settings", () => {
     expect(unchanged).toMatchObject({ model: "claude-opus-4-5", reasoning: "high" });
   }, 30_000);
 
-  it("uses fresh defaults when no source thread is supplied", async () => {
+  it("uses fresh defaults instead of an active thread when no source is supplied", async () => {
     api = await bootTestApi();
     const sessionId = await createSession(api.baseUrl);
+    const source = (await listThreads(api.baseUrl, sessionId)).threads[0]!;
+    await patchThread(api.baseUrl, sessionId, source.id, { model: "m", reasoning: "high" });
     await api.providers.db
       .update(users)
       .set({ defaultModel: "l", defaultReasoning: "medium" })
@@ -120,7 +122,9 @@ describe("POST /api/sessions/:id/threads settings", () => {
 
     const response = await createThread(api.baseUrl, sessionId);
     expect(response.status).toBe(201);
-    expect((await response.json()) as CreateThreadResponse).toMatchObject({
+    const created = (await response.json()) as CreateThreadResponse;
+    expect(created).toMatchObject({ model: "l", reasoning: "medium" });
+    expect(await api.providers.engineStore.getThread(sessionId, created.id)).toMatchObject({
       model: "l",
       reasoning: "medium",
     });

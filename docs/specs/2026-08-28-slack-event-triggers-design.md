@@ -188,16 +188,14 @@ names `slack.message` and a third-party bot form message normalizes to
 `slack.bot_message`, Valet writes the same bounded, throttled diagnostic under
 `slack.message` and tells the administrator to subscribe to `slack.bot_message`.
 The near-miss uses a throttle key separate from ordinary `slack.message` filter
-misses, so either diagnostic cannot suppress the other. For a team-assistant
-subscription, Valet first applies the live Slack sender authorization gate. If a
-non-team subscription names the key, Valet records the near-miss without a team
-gate. Otherwise, it claims the near-miss throttle before it checks a team
-sender. A bot message with no sender skips the team gate and writes no
-diagnostic. An unauthorized sender can cause one throttled,
-metadata-free authorization diagnostic, but cannot cause retention of bot-message
-text or metadata. This diagnostic gate does not change event delivery. Unrelated
-bot messages remain silent. The "last event received" signal covers the ordinary
-no-subscription case instead.
+misses, so either diagnostic cannot suppress the other. Bot traffic does not use
+the human team-sender authorization gate, even when Slack supplies a `user` ID.
+For every subscription owner type, Valet retains metadata only when a named
+subscription's filters match. Otherwise, it records the guidance without message
+metadata.
+These diagnostics do not change event delivery. Unrelated bot messages remain
+silent. The "last event received" signal covers the ordinary no-subscription case
+instead.
 
 ### Slack form diagnostics
 
@@ -406,8 +404,19 @@ a separate one for System A if in-app command routing is wanted.
 
 ## Third-party bot messages
 
-Valet keeps `slack.message` for human messages. It adds `slack.bot_message` for signed Slack `message` events with subtype `bot_message`. The trigger requires a nonempty canonical bot ID. It uses `bot_id`, or `bot_profile.id` when Slack omits `bot_id`. It does not use a display name.
+Valet keeps `slack.message` for human messages. It adds `slack.bot_message` for signed Slack `message` events with subtype `bot_message` or no subtype. Slack uses the latter shape for modern bot posts. The trigger requires a nonempty canonical bot ID. It uses `bot_id`, or `bot_profile.id` when Slack omits `bot_id`. It does not use a display name.
 
-The connect check stores the installed bot ID as credential metadata. The bot trigger rejects that ID and the installed bot user ID. This rule is independent of subscription filters. A legacy credential without the bot ID rejects bot messages. An administrator must reconnect Slack in Settings to refresh the credential metadata. Human messages continue to work.
+The connect check stores the installed bot ID as credential metadata. The bot trigger rejects that ID and the installed bot user ID. This rule is independent of subscription filters. For a legacy credential without the bot ID, the webhook resolves identity through Slack `auth.test` with the saved token. This lookup runs only for eligible bot messages, after signature and workspace verification and outside the acknowledgement path. A valid response must match the stored workspace and any stored bot user ID. The existing subscription then works without a reconnect. Human messages do not require this lookup.
+
+The resolver shares concurrent lookups and caches successful results for ten minutes. Failed lookups have a one-minute retry delay. The cache belongs to the credential-store instance and includes the org, token, workspace, and stored bot user ID in its fingerprint. A credential change invalidates the cached identity. The resolver does not rewrite stored credentials, so it cannot overwrite a concurrent reconnect. If identity remains unknown, bot messages still fail closed. Subscription filters alone do not prove that the sender is a different bot.
+
+For an enabled bot-message subscription, the webhook records `slack_bot_identity_missing` when the installed bot ID is missing and automatic resolution fails. It retains bounded metadata and applies the existing throttle. Team-owned bot subscriptions do not require a linked human sender for this diagnostic, matching bot-event delivery. For all owner types, an event excluded by every named subscription produces a diagnostic without message metadata. When a filter matches, the Problems record includes the channel and bot ID so channel-scoped queries can find it.
 
 Before the catalog exposes this key, startup expands existing `slack.*` subscription rows to the prior explicit Slack keys. Those rows do not begin to match bot messages. The Slack manifest stays unchanged because both classifiers use the existing raw `message` subscription.
+
+
+Accepting subtype-less posts intentionally expands the events delivered to existing `slack.bot_message` subscriptions. An unfiltered subscription receives every eligible third-party bot post. Before rollout, inspect enabled bot subscriptions and add channel or bot ID filters where that broader behavior is unwanted. No subtype compatibility guard is applied: both Slack payload forms represent bot posts. Production subscription rows have not been inspected as part of this change.
+
+### Receipt diagnostics and legacy bot identity
+
+Resolve the saved bot identity before classifying a bot message. Keep classification stages in the event receipt. If identity resolution fails, emit only the subscription-scoped identity diagnostic. Do not add a duplicate generic rejection to the drop log.

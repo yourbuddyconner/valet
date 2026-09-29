@@ -301,9 +301,8 @@ function ThreadTreeInner({ sessionId, showChildren }: { sessionId: string; showC
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   async function createAndNavigate() {
-    const thread = await createThread.mutateAsync(
-      activeThreadId ? { sourceThreadId: activeThreadId } : {},
-    );
+    // A new top-level thread uses current defaults, not the active thread's settings.
+    const thread = await createThread.mutateAsync();
     navigate({ search: (prev) => ({ ...prev, view: undefined, thread: thread.id, child: undefined }) });
     // Land the cursor in the composer — a fresh thread exists to be
     // typed into.
