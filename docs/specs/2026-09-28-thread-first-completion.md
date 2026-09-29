@@ -35,8 +35,9 @@ The acceptance work corrected missing runtime creation for new teams, approval b
 ## Validation
 
 The latest full command was `mise x node@22 -- make e2e E2E_ARGS="--verbose"`.
-The run ended with **27 stages passed, 1 failed, and 9 skipped**.
-The full log is `/tmp/valet-wrapup-e2e.log`.
+The latest run ended with **28 stages passed, 0 failed, and 9 skipped**.
+The full log is `/tmp/linear-admin-scorecard.log`.
+Final Linear security regression tests passed (64 tests), and a forced TypeScript rebuild passed after clean-build narrowing repairs.
 
 | Check | Evidence |
 | --- | --- |
@@ -45,7 +46,7 @@ The full log is `/tmp/valet-wrapup-e2e.log`.
 | Docker | Browser, sandbox, workspace preparation, and prebuild stages passed. Nested execution now probes filesystem execution before selecting fuse-overlayfs. |
 | Kubernetes | Lifecycle, execution, provider, conformance, and real image build stages passed after local disk repair and expansion. The image test requires a successful push. |
 | PostgreSQL | Store and API stages passed using an isolated temporary database and a free loopback port. |
-| Gateway | One WebSocket handshake failed with `socket hang up`. A targeted rerun and 20 subsequent complete gateway runs passed. The intermittent failure remains unexplained. |
+| Gateway | The latest full run passed. An earlier run had one `socket hang up`; its targeted rerun and 20 repeated suites passed. The earlier intermittent cause remains unexplained. |
 | Credential-dependent stages | Nine stages skipped for missing credentials or opt-in. A passing stage can also contain skipped tests; the nested-Docker-specific suite skipped its tests. |
 | Bounded rollback | Four processes exercised old code, current code, old code again, and current verification against one isolated database. See the rollback record. |
 
@@ -71,3 +72,6 @@ The local Kubernetes disk now has free space and reports `DiskPressure=False`.
 The repaired disk has a retained backup. No user containers or volumes were deleted.
 
 Ticket coverage must follow these boundaries. Do not report skipped checks or local fixtures as live-provider acceptance.
+
+Organization Linear app setup now uses encrypted credentials, admin-only controls, and serialized configuration updates.
+The change is pushed to the matching branch in both Turnkey and XORS repositories.
